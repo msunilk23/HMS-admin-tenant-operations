@@ -1,0 +1,18 @@
+from pydantic import BaseModel, EmailStr
+
+
+class TenantCreate(BaseModel):
+    hospital_name: str
+    schema_name: str  # e.g. "shankar" — used as PostgreSQL schema name
+    contact_email: EmailStr
+    admin_email: EmailStr
+    admin_full_name: str
+    admin_password: str
+
+
+class TenantPublic(BaseModel):
+    id: str
+    hospital_name: str
+    schema_name: str
+    contact_email: str
+    is_active: bool

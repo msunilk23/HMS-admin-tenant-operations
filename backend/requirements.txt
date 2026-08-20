@@ -1,0 +1,44 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==3.2.2
+python-multipart==0.0.12
+
+# Config
+pydantic-settings==2.6.1
+pydantic[email]==2.10.3
+
+# Redis / WebSocket
+redis[asyncio]==5.2.1
+
+# Utilities
+python-dateutil==2.9.0
+httpx==0.28.1
+
+# PDF generation
+reportlab==4.2.5
+
+# Notifications (SMS/WhatsApp)
+twilio==9.3.7
+
+# Payments
+razorpay==2.0.1
+
+# File storage
+cloudinary==1.41.0
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1
+aiosqlite==0.20.0
+
