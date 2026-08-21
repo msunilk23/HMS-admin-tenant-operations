@@ -6,8 +6,8 @@
 
 # Test info
 
-- Name: task7.spec.ts >> Task 7 controlled clinical data >> free-text diagnosis requires a reason and is visibly marked
-- Location: e2e\task7.spec.ts:46:3
+- Name: task7.spec.ts >> Task 7 controlled clinical data >> doctor searches distinct medicines, fills multiple rows, and reloads prescription details
+- Location: e2e\task7.spec.ts:60:3
 
 # Error details
 
@@ -16,9 +16,9 @@ Test timeout of 30000ms exceeded.
 ```
 
 ```
-Error: locator.click: Test timeout of 30000ms exceeded.
+Error: locator.fill: Test timeout of 30000ms exceeded.
 Call log:
-  - waiting for locator('form').getByRole('button', { name: /save & write prescription/i })
+  - waiting for getByLabel(/dose/i).first()
 
 ```
 
@@ -57,18 +57,84 @@ Call log:
           - generic [ref=f1e42]:
             - heading "Medicines" [level=2] [ref=f1e43]
             - button "Add Medicine" [ref=f1e44] [cursor=pointer]
-          - paragraph [ref=f1e48]: No medicines added. Click "Add Medicine" to add.
-        - generic [ref=f1e49]:
-          - generic [ref=f1e50]:
-            - heading "Lab Tests" [level=2] [ref=f1e51]
-            - button "Add Test" [ref=f1e52] [cursor=pointer]
-          - paragraph [ref=f1e55]: No lab tests added. Click "Add Test" to add.
-        - generic [ref=f1e56]:
-          - generic [ref=f1e57]: General Instructions
-          - textbox "Diet, rest, follow-up instructions for the patient…" [ref=f1e58]
-        - generic [ref=f1e59]:
-          - button "Back" [ref=f1e60] [cursor=pointer]
-          - button "Save Prescription" [ref=f1e61] [cursor=pointer]
+          - generic [ref=f1e48]:
+            - generic [ref=f1e49]: Medicine 1
+            - generic [ref=f1e51]:
+              - generic [ref=f1e52]:
+                - generic [ref=f1e53]: Drug Name *
+                - textbox "Search generic, brand, strength or form" [ref=f1e55]: E2E Paracetamol (E2E Crocin) 500 mg Tablet
+              - generic [ref=f1e56]:
+                - generic [ref=f1e57]: Dose *
+                - textbox "e.g. 500mg" [ref=f1e58]
+              - generic [ref=f1e59]:
+                - generic [ref=f1e60]: Frequency *
+                - generic [ref=f1e62]:
+                  - generic [ref=f1e63]:
+                    - button "M 1" [ref=f1e64] [cursor=pointer]:
+                      - generic [ref=f1e65]: M
+                      - generic [ref=f1e66]: "1"
+                    - button "A 0" [ref=f1e67] [cursor=pointer]:
+                      - generic [ref=f1e68]: A
+                      - generic [ref=f1e69]: "0"
+                    - button "E 1" [ref=f1e70] [cursor=pointer]:
+                      - generic [ref=f1e71]: E
+                      - generic [ref=f1e72]: "1"
+                    - button "N 0" [ref=f1e73] [cursor=pointer]:
+                      - generic [ref=f1e74]: "N"
+                      - generic [ref=f1e75]: "0"
+                    - generic [ref=f1e76]: 1-0-1-0
+                  - button "Switch to preset" [ref=f1e77] [cursor=pointer]
+              - generic [ref=f1e78]:
+                - generic [ref=f1e79]: Food Instruction
+                - generic [ref=f1e80]:
+                  - generic [ref=f1e81] [cursor=pointer]:
+                    - radio "Before Food" [ref=f1e82]
+                    - generic [ref=f1e83]: Before Food
+                  - generic [ref=f1e84] [cursor=pointer]:
+                    - radio "After Food" [ref=f1e85]
+                    - generic [ref=f1e86]: After Food
+                  - generic [ref=f1e87] [cursor=pointer]:
+                    - radio "With Food" [ref=f1e88]
+                    - generic [ref=f1e89]: With Food
+                  - generic [ref=f1e90] [cursor=pointer]:
+                    - radio "N/A" [checked] [ref=f1e91]
+                    - generic [ref=f1e92]: N/A
+              - generic [ref=f1e93]:
+                - generic [ref=f1e94]: Duration *
+                - combobox [ref=f1e95]:
+                  - option "1 day"
+                  - option "3 days"
+                  - option "5 days" [selected]
+                  - option "7 days"
+                  - option "10 days"
+                  - option "14 days"
+                  - option "1 month"
+                  - option "Ongoing"
+              - generic [ref=f1e96]:
+                - generic [ref=f1e97]: Route
+                - combobox [ref=f1e98]:
+                  - option "oral" [selected]
+                  - option "topical"
+                  - option "IV"
+                  - option "IM"
+                  - option "SC"
+                  - option "sublingual"
+                  - option "inhaled"
+                  - option "rectal"
+              - generic [ref=f1e99]:
+                - generic [ref=f1e100]: Notes
+                - textbox "e.g. Take after food" [ref=f1e101]
+        - generic [ref=f1e102]:
+          - generic [ref=f1e103]:
+            - heading "Lab Tests" [level=2] [ref=f1e104]
+            - button "Add Test" [ref=f1e105] [cursor=pointer]
+          - paragraph [ref=f1e108]: No lab tests added. Click "Add Test" to add.
+        - generic [ref=f1e109]:
+          - generic [ref=f1e110]: General Instructions
+          - textbox "Diet, rest, follow-up instructions for the patient…" [ref=f1e111]
+        - generic [ref=f1e112]:
+          - button "Back" [ref=f1e113] [cursor=pointer]
+          - button "Save Prescription" [ref=f1e114] [cursor=pointer]
 ```
 
 # Test source
@@ -129,8 +195,7 @@ Call log:
   53  |     await expect(page.getByPlaceholder(/reason for using free-text diagnosis/i)).toBeVisible()
   54  |     await page.getByPlaceholder(/reason for using free-text diagnosis/i).fill('No suitable ICD-10 code exists')
   55  |     await expect(page).toHaveURL(/doctor\/consultation/)
-> 56  |     await page.locator('form').getByRole('button', { name: /save & write prescription/i }).click()
-      |                                                                                            ^ Error: locator.click: Test timeout of 30000ms exceeded.
+  56  |     await page.locator('form').getByRole('button', { name: /save & write prescription/i }).click()
   57  |     await expect(page).toHaveURL(/doctor\/prescription/)
   58  |   })
   59  | 
@@ -142,7 +207,8 @@ Call log:
   65  |     await medicineSearch.fill('E2E Paracetamol')
   66  |     await expect(page.getByText(/500 mg.*Tablet/)).toBeVisible()
   67  |     await page.getByRole('button', { name: /E2E Paracetamol.*500 mg.*Tablet/i }).click()
-  68  |     await page.getByLabel(/dose/i).first().fill('1')
+> 68  |     await page.getByLabel(/dose/i).first().fill('1')
+      |                                            ^ Error: locator.fill: Test timeout of 30000ms exceeded.
   69  |     await page.getByLabel(/duration/i).first().selectOption({ label: '5 days' })
   70  |     await page.getByLabel(/quantity/i).first().fill('5')
   71  |     await page.getByRole('button', { name: /add medicine/i }).click()

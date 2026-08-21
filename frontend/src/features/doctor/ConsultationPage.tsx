@@ -49,6 +49,10 @@ const consultSchema = z.object({
     free_text: z.boolean().optional(),
   })).optional(),
   free_text_diagnosis_reason: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.diagnoses?.some(d => d.free_text) && !data.free_text_diagnosis_reason?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['free_text_diagnosis_reason'], message: 'Reason is required for free-text diagnosis' })
+  }
 })
 
 type ConsultForm = z.infer<typeof consultSchema>
@@ -247,7 +251,7 @@ export default function ConsultationPage() {
     await selectVisit(v)
   }
 
-  const { mutate: saveConsultation, isPending } = useMutation({
+  const { mutate: saveConsultation, isPending, error: saveError } = useMutation({
     mutationFn: (data: ConsultForm) => {
       // If diagnoses is present but all entries are empty, treat as null
       let cleanedDiagnoses = data.diagnoses
@@ -457,6 +461,7 @@ export default function ConsultationPage() {
 
             {/* SOAP form */}
             <form onSubmit={handleSubmit(d => saveConsultation(d))} className="space-y-5 bg-white rounded-xl border border-gray-200 p-6">
+              {saveError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">Unable to save consultation. Check the diagnosis selection and free-text reason.</p>}
               <SoapField label="Chief Complaint *" error={errors.chief_complaint?.message}>
                 <textarea {...register('chief_complaint')} rows={2}
                   className={txtCls(!!errors.chief_complaint)}
