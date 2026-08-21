@@ -2,12 +2,17 @@ import apiClient from './apiClient'
 import type { Prescription, Invoice, Doctor, Department, Appointment, AppointmentSlot, CheckInResult } from '@/types/common'
 
 export interface MedicineItemCreate {
-  name: string
+  name?: string
+  medicine_master_id?: string
+  strength?: string
+  dosage_form?: string
   dose: string
   frequency: string
   food_instruction?: string
   duration: string
   route: string
+  quantity?: string
+  timing_relative_to_food?: string
   notes?: string
 }
 

@@ -37,26 +37,35 @@ async def session():
 async def test_record_audit_captures_domain_metadata_and_redacts_secrets(session):
     user_id = uuid.uuid4()
     visit_id = uuid.uuid4()
+    patient_id = uuid.uuid4()
+    from app.services.audit_service import set_audit_request_context, reset_audit_request_context
+    context_tokens = set_audit_request_context("req-1", "203.0.113.10")
     record_audit(
         session,
         current_user={"sub": str(user_id), "role": "billing_officer", "tenant_schema": "tenant_a"},
         action="REFUND",
         resource_type="invoice",
         resource_id=uuid.uuid4(),
+        patient_id=patient_id,
         visit_id=visit_id,
         old_value={"status": "paid"},
-        new_value={"status": "refunded", "password": "must-not-persist"},
+        new_value={"status": "refunded", "password": "must-not-persist", "aadhaar_number": "123456789012"},
         reason="Patient request",
         request_metadata={"request_id": "req-1", "authorization": "secret-token"},
     )
     await session.commit()
+    reset_audit_request_context(context_tokens)
 
     row = (await session.execute(select(AuditLog))).scalar_one()
     assert row.tenant_schema == "tenant_a"
     assert row.role == "billing_officer"
     assert row.visit_id == visit_id
+    assert row.patient_id == patient_id
+    assert row.request_id == "req-1"
+    assert row.source_ip == "203.0.113.10"
     assert row.reason == "Patient request"
     assert row.new_value["password"] == "[REDACTED]"
+    assert row.new_value["aadhaar_number"] == "[REDACTED]"
     assert row.request_metadata["authorization"] == "[REDACTED]"
 
 

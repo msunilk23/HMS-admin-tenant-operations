@@ -14,6 +14,7 @@ class PrescriptionItem(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     prescription_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("prescriptions.id"), nullable=False, index=True)
+    medicine_master_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("medicine_master.id"), nullable=True, index=True)
     medicine: Mapped[str] = mapped_column(String(200), nullable=False)
     strength: Mapped[Optional[str]] = mapped_column(String(100))
     dose: Mapped[Optional[str]] = mapped_column(String(100))
@@ -21,6 +22,8 @@ class PrescriptionItem(Base):
     frequency: Mapped[Optional[str]] = mapped_column(String(50))
     duration: Mapped[Optional[str]] = mapped_column(String(80))
     quantity: Mapped[Optional[str]] = mapped_column(String(50))
+    dosage_form: Mapped[Optional[str]] = mapped_column(String(100))
+    timing_relative_to_food: Mapped[Optional[str]] = mapped_column(String(50))
     instructions: Mapped[Optional[str]] = mapped_column(Text)
 
     prescription: Mapped["Prescription"] = relationship(back_populates="items")

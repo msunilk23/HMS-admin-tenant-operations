@@ -7,7 +7,7 @@
  * Right – Dispatch Queue: prescription_done / dispatched_pharmacy (active)
  *          Completed Today (expandable): dispatched_lab / dispatched_both / billing_pending / closed
  */
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { useForm, useWatch } from 'react-hook-form'
@@ -40,9 +40,45 @@ const vitalsSchema = z.object({
   height: z.coerce.number().min(30).max(250).optional().or(z.literal('')),
   spo2: z.coerce.number().int().min(1).max(100).optional().or(z.literal('')),
   pulse: z.coerce.number().int().min(20).max(300).optional().or(z.literal('')),
+  respiratory_rate: z.coerce.number().int().min(4).max(80).optional().or(z.literal('')),
+  pain_score: z.coerce.number().int().min(0).max(10).optional().or(z.literal('')),
+  blood_glucose: z.coerce.number().min(10).max(800).optional().or(z.literal('')),
+  chief_complaint: z.string().optional(),
+  allergies: z.string().optional(),
+  known_no_allergies: z.boolean().optional(),
+  general_condition: z.string().optional(),
+  level_of_consciousness: z.string().optional(),
+  nurse_notes: z.string().optional(),
 })
 
 type VitalsForm = z.infer<typeof vitalsSchema>
+
+// Fields that must be present to complete pre-vitals and send the patient to
+// the doctor queue — mirrors the server-side mandatory-field validation.
+const MANDATORY_COMPLETION_FIELDS: (keyof VitalsForm)[] = [
+  'bp_systolic', 'bp_diastolic', 'temperature', 'weight', 'height', 'spo2', 'pulse',
+  'respiratory_rate', 'pain_score', 'blood_glucose', 'chief_complaint',
+  'general_condition', 'level_of_consciousness', 'nurse_notes',
+]
+
+function fahrenheitToCelsius(f: number): number {
+  return Math.round(((f - 32) * 5 / 9) * 10) / 10
+}
+
+function celsiusToFahrenheit(c: number): number {
+  return Math.round(((c * 9 / 5) + 32) * 10) / 10
+}
+
+function apiErrorMessage(err: unknown, fallback: string): string {
+  const anyErr = err as any
+  const detail = anyErr?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    // FastAPI/Pydantic validation error array
+    return detail.map((d: any) => d.msg || JSON.stringify(d)).join(' ')
+  }
+  return fallback
+}
 
 export default function NurseVitalsPage() {
   const [selectedVisit, setSelectedVisit] = useState<Visit | null>(null)
@@ -79,11 +115,24 @@ export default function NurseVitalsPage() {
 
   const deptId = myDepts.length === 1 ? myDepts[0].department_id : activeDeptId
 
-  const { data: registeredVisits = [], refetch: refetchRegistered } = useQuery({
-    queryKey: ['visits', 'registered', deptId],
-    queryFn: () => visitService.list({ status: 'registered', department_id: deptId }),
+  // Awaiting Vitals = patients waiting for the nurse OR mid pre-vitals draft
+  // (canonical states: WAITING_FOR_NURSE, IN_PRE_VITAL).
+  const { data: waitingForNurseVisits = [], refetch: refetchWaitingForNurse } = useQuery({
+    queryKey: ['visits', 'WAITING_FOR_NURSE', deptId],
+    queryFn: () => visitService.list({ status: 'WAITING_FOR_NURSE', department_id: deptId }),
     refetchInterval: 30_000,
   })
+  const { data: inPreVitalVisits = [], refetch: refetchInPreVital } = useQuery({
+    queryKey: ['visits', 'IN_PRE_VITAL', deptId],
+    queryFn: () => visitService.list({ status: 'IN_PRE_VITAL', department_id: deptId }),
+    refetchInterval: 30_000,
+  })
+  const registeredVisits = [...waitingForNurseVisits, ...inPreVitalVisits]
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  const refetchRegistered = useCallback(() => {
+    refetchWaitingForNurse()
+    refetchInPreVital()
+  }, [refetchWaitingForNurse, refetchInPreVital])
 
   // ── Dispatch tab queries ─────────────────────────────────────────────────────
   const { data: prescriptionDoneVisits = [], refetch: refetchPrescription } = useQuery({
@@ -168,13 +217,50 @@ export default function NurseVitalsPage() {
   useWebSocket('queue:update', onUpdate)
   useWebSocket('pharmacy:update', onUpdate)
 
-  const { register, handleSubmit, reset, control, formState: { errors } } = useForm<VitalsForm>({
+  const { register, handleSubmit, reset, control, setValue, formState: { errors } } = useForm<VitalsForm>({
     resolver: zodResolver(vitalsSchema),
   })
+
+  // Reopening a draft must load previously saved values — fetch the latest
+  // vitals row (if any) whenever the nurse expands a patient's accordion.
+  const { data: existingVitals } = useQuery({
+    queryKey: ['vitals', selectedVisit?.id],
+    queryFn: () => vitalsService.get(selectedVisit!.id),
+    enabled: !!selectedVisit?.id,
+    retry: false,
+  })
+  const isCompletedAlready = existingVitals?.status === 'completed'
+
+  useEffect(() => {
+    if (!selectedVisit) return
+    if (existingVitals && existingVitals.status === 'draft') {
+      reset({
+        bp_systolic: existingVitals.bp_systolic ?? '',
+        bp_diastolic: existingVitals.bp_diastolic ?? '',
+        temperature: existingVitals.temperature !== undefined && existingVitals.temperature !== null
+          ? celsiusToFahrenheit(existingVitals.temperature) : '',
+        weight: existingVitals.weight ?? '',
+        height: existingVitals.height ?? '',
+        spo2: existingVitals.spo2 ?? '',
+        pulse: existingVitals.pulse ?? '',
+        respiratory_rate: existingVitals.respiratory_rate ?? '',
+        pain_score: existingVitals.pain_score ?? '',
+        blood_glucose: existingVitals.blood_glucose ?? '',
+        chief_complaint: existingVitals.chief_complaint ?? '',
+        allergies: existingVitals.allergies ?? '',
+        known_no_allergies: existingVitals.known_no_allergies ?? false,
+        general_condition: existingVitals.general_condition ?? '',
+        level_of_consciousness: existingVitals.level_of_consciousness ?? '',
+        nurse_notes: existingVitals.nurse_notes ?? '',
+      } as VitalsForm)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVisit?.id, existingVitals])
 
   // Live BMI computation
   const watchWeight = useWatch({ control, name: 'weight' })
   const watchHeight = useWatch({ control, name: 'height' })
+  const watchKna = useWatch({ control, name: 'known_no_allergies' })
   const liveBmi = (() => {
     const w = Number(watchWeight)
     const h = Number(watchHeight)
@@ -188,13 +274,25 @@ export default function NurseVitalsPage() {
     return              { label: 'Obese',          cls: 'bg-red-100 text-red-700 border-red-200' }
   }
 
-  // Save vitals → automatically sends patient to doctor queue (vitals_done)
+  // KNA and a specific allergy text are mutually exclusive.
+  useEffect(() => {
+    if (watchKna) setValue('allergies', '')
+  }, [watchKna, setValue])
+
+  const [pendingSubmitStatus, setPendingSubmitStatus] = useState<'draft' | 'completed'>('draft')
+  const [clientValidationError, setClientValidationError] = useState<string | null>(null)
+
+  // Save vitals — status decides whether the visit stays in IN_PRE_VITAL
+  // (draft) or transitions to WAITING_FOR_DOCTOR (completed).
   const { mutate: submitVitals, isPending, error: vitalsError } = useMutation({
     mutationFn: (data: VitalsCreate) => vitalsService.record(data),
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['visits'] })
-      setSelectedVisit(null)
-      reset()
+      qc.invalidateQueries({ queryKey: ['vitals'] })
+      if (vars.status === 'completed') {
+        setSelectedVisit(null)
+        reset()
+      }
     },
   })
 
@@ -208,6 +306,7 @@ export default function NurseVitalsPage() {
       setPrescriptionVisitId(null)
     },
   })
+
 
   // Close visit or send to billing (optional additional billing checkbox)
   const { mutate: closeVisit, isPending: closing } = useMutation({
@@ -229,19 +328,45 @@ export default function NurseVitalsPage() {
 
   const onSubmit = (values: VitalsForm) => {
     if (!selectedVisit) return
+    setClientValidationError(null)
+
+    if (pendingSubmitStatus === 'completed') {
+      const missing = MANDATORY_COMPLETION_FIELDS.filter(f => {
+        const v = values[f]
+        return v === undefined || v === '' || v === null
+      })
+      const hasAllergyInfo = !!values.known_no_allergies || !!(values.allergies && values.allergies.trim())
+      if (missing.length > 0 || !hasAllergyInfo) {
+        setClientValidationError(
+          missing.length > 0
+            ? 'Please fill in all mandatory clinical fields before sending to the doctor.'
+            : 'Enter the patient\u2019s allergies, or check "Known No Allergies".'
+        )
+        return
+      }
+    }
+
     const clean = (v: number | string | undefined) =>
       v === '' || v === undefined ? undefined : Number(v)
     submitVitals({
       visit_id: selectedVisit.id,
       bp_systolic: clean(values.bp_systolic),
       bp_diastolic: clean(values.bp_diastolic),
-      temperature: clean(values.temperature) !== undefined
-        ? Math.round(((clean(values.temperature)! - 32) * 5 / 9) * 10) / 10
-        : undefined,
+      temperature: clean(values.temperature) !== undefined ? fahrenheitToCelsius(clean(values.temperature)!) : undefined,
       weight: clean(values.weight),
       height: clean(values.height),
       spo2: clean(values.spo2),
       pulse: clean(values.pulse),
+      respiratory_rate: clean(values.respiratory_rate),
+      pain_score: clean(values.pain_score),
+      blood_glucose: clean(values.blood_glucose),
+      chief_complaint: values.chief_complaint || undefined,
+      allergies: values.known_no_allergies ? 'None' : (values.allergies || undefined),
+      known_no_allergies: values.known_no_allergies ?? false,
+      general_condition: values.general_condition || undefined,
+      level_of_consciousness: values.level_of_consciousness || undefined,
+      nurse_notes: values.nurse_notes || undefined,
+      status: pendingSubmitStatus,
     })
   }
 
@@ -294,7 +419,7 @@ export default function NurseVitalsPage() {
               ) : registeredVisits.map(v => (
                 <div key={v.id}>
                   <button
-                    onClick={() => { setSelectedVisit(selectedVisit?.id === v.id ? null : v); reset() }}
+                    onClick={() => { setSelectedVisit(selectedVisit?.id === v.id ? null : v); reset(); setClientValidationError(null) }}
                     className={`w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors ${
                       selectedVisit?.id === v.id ? 'bg-blue-50 border-l-2 border-blue-500' : ''
                     }`}
@@ -328,39 +453,54 @@ export default function NurseVitalsPage() {
                   {selectedVisit?.id === v.id && (
                     <form onSubmit={handleSubmit(onSubmit)} className="px-5 pb-5 pt-3 bg-blue-50 border-t border-blue-100 space-y-4">
                       <ClinicalAlertBanner patientId={v.patient_id} />
+                      {isCompletedAlready && (
+                        <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-700">
+                          Pre-vitals already completed for this visit and sent to the doctor.
+                        </div>
+                      )}
+                      {clientValidationError && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+                          {clientValidationError}
+                        </div>
+                      )}
                       {vitalsError && (
                         <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
-                          Failed to save vitals. Please try again.
+                          {apiErrorMessage(vitalsError, 'Failed to save vitals. Please check the values and try again.')}
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-3">
                         <VitalField label="Systolic BP (mmHg)" error={errors.bp_systolic?.message}>
-                          <input {...register('bp_systolic')} type="number" placeholder="120" className={inputCls(false)} />
+                          <input {...register('bp_systolic')} type="number" placeholder="120" className={inputCls(!!errors.bp_systolic)} disabled={isCompletedAlready} />
                         </VitalField>
                         <VitalField label="Diastolic BP (mmHg)" error={errors.bp_diastolic?.message}>
-                          <input {...register('bp_diastolic')} type="number" placeholder="80" className={inputCls(false)} />
+                          <input {...register('bp_diastolic')} type="number" placeholder="80" className={inputCls(!!errors.bp_diastolic)} disabled={isCompletedAlready} />
                         </VitalField>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <VitalField label="Temperature (°F)" error={errors.temperature?.message}>
-                          <input {...register('temperature')} type="number" step="0.1" placeholder="98.6" className={inputCls(false)} />
+                          <input {...register('temperature')} type="number" step="0.1" placeholder="98.6" className={inputCls(!!errors.temperature)} disabled={isCompletedAlready} />
                         </VitalField>
                         <VitalField label="SpO₂ (%)" error={errors.spo2?.message}>
-                          <input {...register('spo2')} type="number" placeholder="98" className={inputCls(false)} />
+                          <input {...register('spo2')} type="number" placeholder="98" className={inputCls(!!errors.spo2)} disabled={isCompletedAlready} />
                         </VitalField>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <VitalField label="Pulse (bpm)" error={errors.pulse?.message}>
-                          <input {...register('pulse')} type="number" placeholder="72" className={inputCls(false)} />
+                          <input {...register('pulse')} type="number" placeholder="72" className={inputCls(!!errors.pulse)} disabled={isCompletedAlready} />
                         </VitalField>
-                        <VitalField label="Weight (kg)" error={errors.weight?.message}>
-                          <input {...register('weight')} type="number" step="0.1" placeholder="70" className={inputCls(!!errors.weight)} />
+                        <VitalField label="Respiratory Rate (breaths/min)" error={errors.respiratory_rate?.message}>
+                          <input {...register('respiratory_rate')} type="number" placeholder="18" className={inputCls(!!errors.respiratory_rate)} disabled={isCompletedAlready} />
                         </VitalField>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
-                        <VitalField label="Height (cm)" error={errors.height?.message}>
-                          <input {...register('height')} type="number" step="0.1" placeholder="170" className={inputCls(!!errors.height)} />
+                        <VitalField label="Weight (kg)" error={errors.weight?.message}>
+                          <input {...register('weight')} type="number" step="0.1" placeholder="70" className={inputCls(!!errors.weight)} disabled={isCompletedAlready} />
                         </VitalField>
+                        <VitalField label="Height (cm)" error={errors.height?.message}>
+                          <input {...register('height')} type="number" step="0.1" placeholder="170" className={inputCls(!!errors.height)} disabled={isCompletedAlready} />
+                        </VitalField>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-xs font-medium text-gray-600 mb-1">BMI (auto-calculated)</label>
                           {liveBmi !== null ? (
@@ -373,17 +513,73 @@ export default function NurseVitalsPage() {
                               Enter weight &amp; height
                             </div>
                           )}
+                          <p className="text-[11px] text-gray-400 mt-1">Server calculates the authoritative BMI on save.</p>
                         </div>
+                        <VitalField label="Blood Glucose (mg/dL)" error={errors.blood_glucose?.message}>
+                          <input {...register('blood_glucose')} type="number" step="0.1" placeholder="96" className={inputCls(!!errors.blood_glucose)} disabled={isCompletedAlready} />
+                        </VitalField>
                       </div>
+                      <VitalField label="Pain Score (0-10)" error={errors.pain_score?.message}>
+                        <input {...register('pain_score')} type="number" min={0} max={10} placeholder="2" className={inputCls(!!errors.pain_score)} disabled={isCompletedAlready} />
+                      </VitalField>
+                      <VitalField label="Chief Complaint" error={errors.chief_complaint?.message}>
+                        <textarea {...register('chief_complaint')} rows={2} placeholder="e.g. Fever and cough for 2 days"
+                          className={inputCls(!!errors.chief_complaint)} disabled={isCompletedAlready} />
+                      </VitalField>
+                      <div>
+                        <label className="flex items-center gap-2 text-xs font-medium text-gray-600 mb-1">
+                          <input type="checkbox" {...register('known_no_allergies')} disabled={isCompletedAlready} className="rounded" />
+                          Known No Allergies (KNA)
+                        </label>
+                        <VitalField label="Allergies" error={errors.allergies?.message}>
+                          <input {...register('allergies')} type="text" placeholder="e.g. Penicillin"
+                            disabled={isCompletedAlready || !!watchKna}
+                            className={inputCls(!!errors.allergies)} />
+                        </VitalField>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <VitalField label="General Condition" error={errors.general_condition?.message}>
+                          <select {...register('general_condition')} className={inputCls(!!errors.general_condition)} disabled={isCompletedAlready}>
+                            <option value="">Select…</option>
+                            <option value="Stable">Stable</option>
+                            <option value="Fair">Fair</option>
+                            <option value="Distressed">Distressed</option>
+                            <option value="Critical">Critical</option>
+                          </select>
+                        </VitalField>
+                        <VitalField label="Level of Consciousness" error={errors.level_of_consciousness?.message}>
+                          <select {...register('level_of_consciousness')} className={inputCls(!!errors.level_of_consciousness)} disabled={isCompletedAlready}>
+                            <option value="">Select…</option>
+                            <option value="Alert">Alert</option>
+                            <option value="Verbal">Responds to Verbal</option>
+                            <option value="Pain">Responds to Pain</option>
+                            <option value="Unresponsive">Unresponsive</option>
+                          </select>
+                        </VitalField>
+                      </div>
+                      <VitalField label="Nurse Notes" error={errors.nurse_notes?.message}>
+                        <textarea {...register('nurse_notes')} rows={2} placeholder="Additional observations…"
+                          className={inputCls(!!errors.nurse_notes)} disabled={isCompletedAlready} />
+                      </VitalField>
                       <div className="flex gap-3 pt-1">
-                        <button type="button" onClick={() => { setSelectedVisit(null); reset() }}
+                        <button type="button" onClick={() => { setSelectedVisit(null); reset(); setClientValidationError(null) }}
                           className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-white">
                           Cancel
                         </button>
-                        <button type="submit" disabled={isPending}
-                          className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-60">
-                          {isPending ? 'Saving…' : 'Save Vitals'}
-                        </button>
+                        {!isCompletedAlready && (
+                          <>
+                            <button type="submit" disabled={isPending}
+                              onClick={() => setPendingSubmitStatus('draft')}
+                              className="flex-1 border border-primary text-primary py-2 rounded-lg text-sm font-medium hover:bg-white disabled:opacity-60">
+                              {isPending && pendingSubmitStatus === 'draft' ? 'Saving…' : 'Save Draft'}
+                            </button>
+                            <button type="submit" disabled={isPending}
+                              onClick={() => setPendingSubmitStatus('completed')}
+                              className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-60">
+                              {isPending && pendingSubmitStatus === 'completed' ? 'Sending…' : 'Complete & Send to Doctor'}
+                            </button>
+                          </>
+                        )}
                       </div>
                     </form>
                   )}

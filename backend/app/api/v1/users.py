@@ -3,6 +3,7 @@ Users API — list, create, and manage tenant staff users (hospital_admin only).
 Doctors are excluded; use POST /doctors/onboard instead.
 """
 import uuid as _uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,6 +17,7 @@ from app.core.sms import send_doctor_credentials, send_staff_credentials
 from app.core.username import generate_username
 from app.db.engine import get_session
 from app.models.public.user import Tenant, User
+from app.services.audit_service import record_audit
 
 router = APIRouter()
 
@@ -64,6 +66,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=1, max_length=255)
     is_active: Optional[bool] = None
+    role: Optional[str] = None
 
 
 def _row_to_dict(r: User) -> dict:
@@ -149,6 +152,15 @@ async def create_user(
         password_changed_at=None,
     )
     session.add(new_user)
+    await session.flush()
+    record_audit(
+        session,
+        current_user=current_user,
+        action="CREATE",
+        resource_type="user",
+        resource_id=new_user.id,
+        new_value={"role": new_user.role, "is_active": new_user.is_active, "username": new_user.username},
+    )
     await session.commit()
 
     send_staff_credentials(
@@ -191,11 +203,32 @@ async def update_user(
     if user.role == "doctor":
         raise HTTPException(status_code=400, detail="Use /doctors endpoints to manage doctors")
 
+    old_user_value = {"full_name": user.full_name, "is_active": user.is_active, "role": user.role}
     if payload.full_name is not None:
         user.full_name = payload.full_name
     if payload.is_active is not None:
         user.is_active = payload.is_active
+        user.session_version += 1
+        user.tokens_valid_after = datetime.now(timezone.utc)
+    if payload.role is not None:
+        if payload.role not in MANAGEABLE_ROLES:
+            raise HTTPException(status_code=422, detail="Role is not manageable by hospital admin")
+        if payload.role != user.role:
+            user.role = payload.role
+            user.session_version += 1
+            user.tokens_valid_after = datetime.now(timezone.utc)
 
+    record_audit(
+        session,
+        current_user=current_user,
+        action="UPDATE",
+        resource_type="user",
+        resource_id=user.id,
+        old_value=old_user_value,
+        new_value={"full_name": payload.full_name if payload.full_name is not None else user.full_name,
+               "is_active": payload.is_active if payload.is_active is not None else user.is_active,
+               "role": user.role},
+    )
     await session.commit()
     return _row_to_dict(user)
 
@@ -228,6 +261,16 @@ async def reset_user_password(
     user.hashed_password = hash_password(new_password)
     user.must_change_password = True
     user.password_changed_at = None
+    user.session_version += 1
+    user.tokens_valid_after = datetime.now(timezone.utc)
+    record_audit(
+        session,
+        current_user=current_user,
+        action="RESET_PASSWORD",
+        resource_type="user",
+        resource_id=user.id,
+        new_value={"must_change_password": True},
+    )
     await session.commit()
 
     send_staff_credentials(

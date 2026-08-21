@@ -57,6 +57,7 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
             "full_name": user.full_name,
             "features": [],
             "must_change_password": False,
+            "session_version": getattr(user, "session_version", 0),
         }
     else:
         # Fetch the hospital tenant and enforce it must be active.
@@ -74,12 +75,15 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
             "tenant_id": str(user.tenant_id),
             "tenant_schema": tenant.schema_name,
             "hospital_name": tenant.hospital_name,
+            "timezone": getattr(tenant, "timezone", None) or "Asia/Kolkata",
             "logo_url": getattr(tenant, "logo_url", None),
             "primary_color": getattr(tenant, "primary_color", None),
             "secondary_color": getattr(tenant, "secondary_color", None),
             "full_name": user.full_name,
             "features": await _load_enabled_features(user.tenant_id, session),
             "must_change_password": bool(user.must_change_password),
+            "session_version": getattr(user, "session_version", 0),
+            "tenant_session_version": getattr(tenant, "session_version", 0),
         }
 
     access_token = create_access_token(subject=str(user.id), extra_claims=extra_claims)
@@ -107,7 +111,11 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
 
     # Blocklist check — reject logged-out tokens immediately
     jti = token_data.get("jti")
-    if jti and await is_token_blocked(jti):
+    try:
+        blocked = bool(jti and await is_token_blocked(jti))
+    except Exception:
+        blocked = False
+    if blocked:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked")
 
     result = await session.execute(
@@ -116,10 +124,23 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    token_iat = token_data.get("iat")
+    if token_data.get("session_version", 0) != user.session_version:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has been invalidated. Please log in again.")
+    if user.tokens_valid_after and token_iat is not None and token_iat < user.tokens_valid_after.timestamp():
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has been invalidated. Please log in again.")
 
     # Forced-logout check — reject refresh tokens issued before a feature-toggle event
     if user.role != "super_admin" and user.tenant_id:
-        forced_logout_time = await get_tenant_forced_logout_time(str(user.tenant_id))
+        tenant_check = await session.get(Tenant, user.tenant_id)
+        if not tenant_check or not tenant_check.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Hospital account is inactive")
+        if token_data.get("tenant_session_version", 0) != tenant_check.session_version:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has been invalidated. Please log in again.")
+        try:
+            forced_logout_time = await get_tenant_forced_logout_time(str(user.tenant_id))
+        except Exception:
+            forced_logout_time = None
         if forced_logout_time is not None:
             token_iat = token_data.get("iat")
             if token_iat is not None and token_iat < forced_logout_time:
@@ -136,6 +157,7 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
             "full_name": user.full_name,
             "features": [],
             "must_change_password": False,
+            "session_version": getattr(user, "session_version", 0),
         }
     else:
         tenant_result = await session.execute(select(Tenant).where(Tenant.id == user.tenant_id))
@@ -147,12 +169,15 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
             "tenant_id": str(user.tenant_id),
             "tenant_schema": tenant.schema_name,
             "hospital_name": tenant.hospital_name,
+            "timezone": getattr(tenant, "timezone", None) or "Asia/Kolkata",
             "logo_url": getattr(tenant, "logo_url", None),
             "primary_color": getattr(tenant, "primary_color", None),
             "secondary_color": getattr(tenant, "secondary_color", None),
             "full_name": user.full_name,
             "features": await _load_enabled_features(user.tenant_id, session),
             "must_change_password": bool(user.must_change_password),
+            "session_version": getattr(user, "session_version", 0),
+            "tenant_session_version": getattr(tenant, "session_version", 0),
         }
 
     access_token = create_access_token(subject=str(user.id), extra_claims=extra_claims)
@@ -191,7 +216,19 @@ async def logout(payload: LogoutRequest):
     if jti and exp:
         remaining = int(exp - datetime.now(timezone.utc).timestamp())
         if remaining > 0:
-            await block_token(jti, remaining)
+            try:
+                await block_token(jti, remaining)
+            except Exception:
+                pass
+
+    if token_data.get("sub"):
+        from app.db.engine import AsyncSessionLocal
+        async with AsyncSessionLocal() as session:
+            user = await session.get(User, token_data["sub"])
+            if user:
+                user.session_version += 1
+                user.tokens_valid_after = datetime.now(timezone.utc)
+                await session.commit()
 
 
 @router.post("/change-password", response_model=TokenResponse)
@@ -213,6 +250,8 @@ async def change_password(
     user.hashed_password = hash_password(payload.new_password)
     user.must_change_password = False
     user.password_changed_at = datetime.now(timezone.utc)
+    user.session_version = getattr(user, "session_version", 0) + 1
+    user.tokens_valid_after = datetime.now(timezone.utc)
     await session.commit()
 
     if user.role == "super_admin":
@@ -223,6 +262,7 @@ async def change_password(
             "full_name": user.full_name,
             "features": [],
             "must_change_password": False,
+            "session_version": getattr(user, "session_version", 0),
         }
     else:
         tenant = (await session.execute(select(Tenant).where(Tenant.id == user.tenant_id))).scalar_one_or_none()
@@ -233,12 +273,15 @@ async def change_password(
             "tenant_id": str(user.tenant_id),
             "tenant_schema": tenant.schema_name,
             "hospital_name": tenant.hospital_name,
+            "timezone": getattr(tenant, "timezone", None) or "Asia/Kolkata",
             "logo_url": getattr(tenant, "logo_url", None),
             "primary_color": getattr(tenant, "primary_color", None),
             "secondary_color": getattr(tenant, "secondary_color", None),
             "full_name": user.full_name,
             "features": await _load_enabled_features(user.tenant_id, session),
             "must_change_password": False,
+            "session_version": getattr(user, "session_version", 0),
+            "tenant_session_version": getattr(tenant, "session_version", 0),
         }
 
     access_token = create_access_token(subject=str(user.id), extra_claims=extra_claims)

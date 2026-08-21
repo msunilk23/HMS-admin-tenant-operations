@@ -6,12 +6,14 @@
  * then saves → visit moves to prescription_done → billing queue
  */
 import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { visitService } from '@/services/visitService'
 import { prescriptionService } from '@/services/clinicalService'
+import { masterDataService, type MedicineMaster } from '@/services/masterDataService'
 
 const PRESET_FREQUENCIES: { value: string; label: string }[] = [
   { value: 'OD',  label: 'OD — Once Daily' },
@@ -80,7 +82,10 @@ const DURATIONS = ['1 day', '3 days', '5 days', '7 days', '10 days', '14 days', 
 const FOOD_INSTRUCTIONS = ['Before Food', 'After Food', 'With Food', 'N/A'] as const
 
 const medicineSchema = z.object({
-  name: z.string().min(1, 'Drug name required'),
+  name: z.string().min(1, 'Select a medicine'),
+  medicine_master_id: z.string().min(1, 'Select a medicine'),
+  strength: z.string().optional(),
+  dosage_form: z.string().optional(),
   dose: z.string().min(1, 'Dose required'),
   frequency: z.string().min(1, 'Frequency required'),
   food_instruction: z.enum(FOOD_INSTRUCTIONS).default('N/A'),
@@ -88,6 +93,17 @@ const medicineSchema = z.object({
   route: z.string().default('oral'),
   notes: z.string().optional(),
 })
+
+function MedicineSelector({ index, value, setValue }: { index: number; value: string; setValue: (name: `medicines.${number}.${'name' | 'medicine_master_id' | 'strength' | 'dosage_form'}`, value: string) => void }) {
+  const [query, setQuery] = useState(value ?? '')
+  const { data = [] } = useQuery({
+    queryKey: ['medicine-search', query],
+    queryFn: () => masterDataService.searchMedicines(query),
+    enabled: query.trim().length >= 2,
+    staleTime: 30_000,
+  })
+  return <div className="relative"><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search generic, brand, strength or form" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />{data.length > 0 && <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-auto">{data.map((item: MedicineMaster) => <button type="button" key={item.id} className="block w-full text-left px-3 py-2 hover:bg-blue-50 text-sm" onClick={() => { setQuery(`${item.generic_name}${item.brand_name ? ` (${item.brand_name})` : ''} ${item.strength ?? ''} ${item.dosage_form ?? ''}`); setValue(`medicines.${index}.name`, item.brand_name || item.generic_name); setValue(`medicines.${index}.medicine_master_id`, item.id); setValue(`medicines.${index}.strength`, item.strength ?? ''); setValue(`medicines.${index}.dosage_form`, item.dosage_form ?? '') }}><strong>{item.generic_name}</strong>{item.brand_name ? ` · ${item.brand_name}` : ''} · {item.strength || 'unspecified'} · {item.dosage_form || 'form unspecified'}</button>)}</div>}</div>
+}
 
 const labTestSchema = z.object({
   test_name: z.string().min(1, 'Test name required'),
@@ -127,6 +143,8 @@ export default function PrescriptionPage() {
     register,
     handleSubmit,
     control,
+    reset,
+    setValue,
     formState: { errors },
   } = useForm<RxForm>({
     resolver: zodResolver(rxSchema),
@@ -136,10 +154,39 @@ export default function PrescriptionPage() {
   const { fields, append, remove } = useFieldArray({ control, name: 'medicines' })
   const { fields: labFields, append: appendLab, remove: removeLab } = useFieldArray({ control, name: 'lab_tests' })
 
+  const { data: existingPrescription } = useQuery({
+    queryKey: ['prescription', visitId],
+    queryFn: () => prescriptionService.get(visitId!),
+    enabled: !!visitId,
+  })
+
+  useEffect(() => {
+    if (!existingPrescription) return
+    reset({
+      medicines: (existingPrescription.items ?? []).map(item => ({
+        name: item.name,
+        medicine_master_id: item.medicine_master_id ?? '',
+        strength: item.strength ?? '',
+        dosage_form: item.dosage_form ?? '',
+        dose: item.dose ?? '',
+        frequency: item.frequency ?? '1-0-1-0',
+        food_instruction: (item.timing_relative_to_food ?? 'N/A') as typeof FOOD_INSTRUCTIONS[number],
+        duration: item.duration ?? '',
+        route: item.route ?? 'oral',
+        notes: item.instructions ?? '',
+      })),
+      instructions: existingPrescription.instructions ?? '',
+      lab_tests: existingPrescription.lab_tests ?? [],
+    })
+  }, [existingPrescription, reset])
+
   const { mutate: savePrescription, isPending } = useMutation({
     mutationFn: (data: RxForm) => prescriptionService.create({
       visit_id: visitId!,
-      medicines: data.medicines,
+      medicines: data.medicines.map(item => ({
+        ...item,
+        timing_relative_to_food: item.food_instruction,
+      })),
       instructions: data.instructions,
       lab_tests: data.lab_tests?.length ? data.lab_tests : undefined,
     }),
@@ -177,7 +224,7 @@ export default function PrescriptionPage() {
             <h2 className="text-sm font-semibold text-gray-700">Medicines</h2>
             <button
               type="button"
-              onClick={() => append({ name: '', dose: '', frequency: '1-0-1-0', food_instruction: 'N/A', duration: '5 days', route: 'oral' })}
+              onClick={() => append({ name: '', medicine_master_id: '', strength: '', dosage_form: '', dose: '', frequency: '1-0-1-0', food_instruction: 'N/A', duration: '5 days', route: 'oral' })}
               className="text-xs text-primary hover:underline font-medium flex items-center gap-1"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -210,11 +257,10 @@ export default function PrescriptionPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="col-span-2">
                     <label className="block text-xs font-medium text-gray-600 mb-1">Drug Name *</label>
-                    <input
-                      {...register(`medicines.${i}.name`)}
-                      placeholder="e.g. Paracetamol 500mg"
-                      className={rx_input(!!errors.medicines?.[i]?.name)}
-                    />
+                    <Controller control={control} name={`medicines.${i}.name`} render={({ field }) => <MedicineSelector index={i} value={field.value} setValue={(name, value) => setValue(name, value)} />} />
+                    <input type="hidden" {...register(`medicines.${i}.medicine_master_id`)} />
+                    <input type="hidden" {...register(`medicines.${i}.strength`)} />
+                    <input type="hidden" {...register(`medicines.${i}.dosage_form`)} />
                     {errors.medicines?.[i]?.name && (
                       <p className="text-xs text-red-600 mt-0.5">{errors.medicines[i]?.name?.message}</p>
                     )}

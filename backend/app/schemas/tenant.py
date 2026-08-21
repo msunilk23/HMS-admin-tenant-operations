@@ -16,3 +16,8 @@ class TenantPublic(BaseModel):
     schema_name: str
     contact_email: str
     is_active: bool
+
+
+class DisplayTokenRead(BaseModel):
+    display_token: str
+    display_url_path: str  # frontend route: /display/{schema_name}/{display_token}

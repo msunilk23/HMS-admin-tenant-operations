@@ -13,7 +13,7 @@ from datetime import date, datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import ensure_feature_enabled, get_current_user, require_role, require_feature
@@ -30,6 +30,7 @@ from app.schemas.queue import CancelTokenRequest, QueueTokenCreate, QueueTokenRe
 from app.schemas.queue_summary import QueueStageSummary, QueueSummaryRead
 from app.services.audit_service import record_audit
 from app.services.queue_sla import queue_stage_summary
+from app.services.token_allocation import TokenAllocationConflict, allocate_and_create_token
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
 
@@ -52,25 +53,6 @@ def _user_uuid(user_id: object) -> uuid.UUID | None:
         return None
 
 
-async def _next_token_no(
-    session: AsyncSession,
-    queue_type: str,
-    department_id: Optional[uuid.UUID] = None,
-) -> int:
-    """Daily sequential token number, scoped per department when provided."""
-    today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
-    filters = [QueueToken.issued_at >= today_start]
-    if department_id:
-        filters.append(QueueToken.department_id == department_id)
-    else:
-        filters.append(QueueToken.queue_type == queue_type)
-    result = await session.execute(
-        select(func.max(QueueToken.token_no)).where(and_(*filters))
-    )
-    max_no = result.scalar()
-    return (max_no or 0) + 1
-
-
 @router.post("", response_model=QueueTokenRead, status_code=status.HTTP_201_CREATED)
 async def issue_token(
     payload: QueueTokenCreate,
@@ -81,25 +63,42 @@ async def issue_token(
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
 
-    token_no = await _next_token_no(session, payload.queue_type, payload.department_id)
     now = datetime.now(timezone.utc)
-    token = QueueToken(
-        id=uuid.uuid4(),
-        patient_id=payload.patient_id,
-        uhid=patient.uhid,
-        appointment_id=payload.appointment_id,
-        department_id=payload.department_id,
-        doctor_id=payload.doctor_id,
-        token_no=token_no,
-        queue_type=payload.queue_type,
-        priority=payload.priority,
-        priority_reason=payload.priority_reason,
-        priority_assigned_by=_user_uuid(current_user.get("sub")),
-        priority_assigned_at=now,
-        status="checked_in",
-        called_at=now,
-    )
-    session.add(token)
+
+    def _build_token(token_no: int, token_scope: str, token_date) -> QueueToken:
+        return QueueToken(
+            id=uuid.uuid4(),
+            patient_id=payload.patient_id,
+            uhid=patient.uhid,
+            appointment_id=payload.appointment_id,
+            department_id=payload.department_id,
+            doctor_id=payload.doctor_id,
+            token_no=token_no,
+            token_scope=token_scope,
+            token_date=token_date,
+            queue_type=payload.queue_type,
+            priority=payload.priority,
+            priority_reason=payload.priority_reason,
+            priority_assigned_by=_user_uuid(current_user.get("sub")),
+            priority_assigned_at=now,
+            status="checked_in",
+            called_at=now,
+        )
+
+    try:
+        token = await allocate_and_create_token(
+            session,
+            _build_token,
+            payload.queue_type,
+            payload.department_id,
+            current_user.get("timezone"),
+        )
+    except TokenAllocationConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not allocate a unique token number right now; please retry.",
+        ) from exc
+
     if payload.priority != "normal" or payload.priority_reason:
         record_audit(
             session,
@@ -226,10 +225,16 @@ async def issue_token(
         "event": "token_issued",
         "queue_type": token.queue_type,
         "department_id": str(token.department_id) if token.department_id else None,
+        "department_name": (await session.get(Department, token.department_id)).name if token.department_id else None,
+        "doctor_name": doctor.full_name if doctor else None,
         "token_no": token.token_no,
-        "priority": token.priority,
-        "patient_id": str(token.patient_id),
-        "patient_name": f"{patient.first_name} {patient.last_name}",
+        # Neutral priority flag only (no clinical reason) — the public display
+        # must never render this as "Emergency"/clinical status, only as a
+        # generic priority-handling indicator.
+        "is_priority": token.priority != "normal",
+        # No patient_name/patient_id/uhid/phone here — this channel is readable
+        # by the unauthenticated public display board (see websocket/router.py).
+        # Staff screens refresh full details from the authenticated REST API.
     })
     await ws_manager.broadcast(tenant, "visit:update", {
         "event": "visit_registered",
@@ -357,6 +362,7 @@ async def edit_token(
                 action="UPDATE",
                 resource_type="queue_priority",
                 resource_id=token.id,
+                patient_id=token.patient_id,
                 old_value={"priority": previous_priority},
                 new_value={"priority": payload.priority, "reason": payload.priority_reason},
             )

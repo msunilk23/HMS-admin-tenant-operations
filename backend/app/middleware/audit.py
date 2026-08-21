@@ -36,6 +36,7 @@ async def _write_audit_entry(
         from sqlalchemy import text
         from app.db.engine import AsyncSessionLocal
         from app.models.public.audit_log import AuditLog
+        from app.services.audit_service import sanitize_audit_value
 
         uid = uuid.UUID(user_id) if user_id else None
 
@@ -51,7 +52,7 @@ async def _write_audit_entry(
                 path=path,
                 status_code=status_code,
                 ip_address=ip_address,
-                request_metadata=request_metadata,
+                request_metadata=sanitize_audit_value(request_metadata),
             ))
             await session.commit()
     except Exception:
@@ -62,7 +63,14 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
     _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        response = await call_next(request)
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        ip_address = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        from app.services.audit_service import set_audit_request_context, reset_audit_request_context
+        context_tokens = set_audit_request_context(request_id, ip_address)
+        try:
+            response = await call_next(request)
+        finally:
+            reset_audit_request_context(context_tokens)
 
         if request.method not in self._MUTATING_METHODS or response.status_code >= 500:
             return response
@@ -85,8 +93,6 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         tenant_schema = tenant_schema_var.get()
 
         # Client IP — respect X-Forwarded-For set by nginx
-        ip_address = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request_metadata = {
             "query": request.url.query,
             "user_agent": request.headers.get("User-Agent"),

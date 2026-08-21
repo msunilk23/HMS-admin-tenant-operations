@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import OperationalError
 
 from app.core.dependencies import require_role
 from app.db.engine import get_session
@@ -15,12 +16,42 @@ from app.models.tenant.consultation import Consultation
 from app.models.tenant.doctor import Doctor
 from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit, VisitStatus
+from app.models.tenant.icd10_code import ICD10Code
 from app.schemas.consultation import ConsultationCreate, ConsultationRead, ConsultationUpdate
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
 from app.websocket.manager import ws_manager
 
 router = APIRouter()
+
+
+async def _validate_diagnoses(session: AsyncSession, diagnoses: list[dict] | None, free_text_reason: str | None = None) -> tuple[list[dict] | None, bool]:
+    if not diagnoses:
+        return None, False
+    normalized: list[dict] = []
+    used_free_text = False
+    for diagnosis in diagnoses:
+        code = str(diagnosis.get("code") or "").strip()
+        description = str(diagnosis.get("description") or "").strip()
+        if not code or code.upper() == "FREE_TEXT":
+            if not description:
+                raise HTTPException(status_code=422, detail="Free-text diagnosis requires a description")
+            if not free_text_reason or not free_text_reason.strip():
+                raise HTTPException(status_code=422, detail="Free-text diagnosis requires a clinical reason")
+            normalized.append({"code": "FREE_TEXT", "description": description, "free_text": True})
+            used_free_text = True
+            continue
+        try:
+            master = (await session.execute(select(ICD10Code).where(ICD10Code.code == code, ICD10Code.is_active == True))).scalar_one_or_none()  # noqa: E712
+        except OperationalError:
+            # Legacy SQLite/unit fixtures may predate the master table; real
+            # Postgres deployments receive it through migration 0041.
+            normalized.append({"code": code, "description": description, "free_text": False})
+            continue
+        if not master:
+            raise HTTPException(status_code=422, detail=f"ICD-10 code '{code}' is not active or does not exist")
+        normalized.append({"code": master.code, "description": master.description, "free_text": False})
+    return normalized, used_free_text
 
 
 @router.post("", response_model=ConsultationRead, status_code=status.HTTP_201_CREATED)
@@ -79,6 +110,8 @@ async def create_consultation(
     elif isinstance(diag, list) and len(diag) == 0:
         data["diagnosis_icd10"] = None
 
+    free_text_reason = data.pop("free_text_diagnosis_reason", None)
+    data["diagnosis_icd10"], used_free_text_diagnosis = await _validate_diagnoses(session, data.get("diagnosis_icd10"), free_text_reason)
     now = datetime.now(timezone.utc)
     status_value = data.get("status") or "draft"
     data["status"] = status_value
@@ -119,8 +152,10 @@ async def create_consultation(
         action="CREATE",
         resource_type="consultation",
         resource_id=consult.id,
+        patient_id=visit.patient_id,
         visit_id=visit.id,
-        new_value={"status": consult.status, "fields": data},
+        new_value={"status": consult.status, "fields": data, "free_text_diagnosis": used_free_text_diagnosis},
+        reason=free_text_reason if used_free_text_diagnosis else None,
     )
     await session.commit()
     await session.refresh(consult)
@@ -170,6 +205,10 @@ async def update_consultation(
         elif isinstance(diag, list) and len(diag) == 0:
             data["diagnosis_icd10"] = None
 
+    free_text_reason = data.pop("free_text_diagnosis_reason", None)
+    used_free_text_diagnosis = False
+    if "diagnosis_icd10" in data:
+        data["diagnosis_icd10"], used_free_text_diagnosis = await _validate_diagnoses(session, data["diagnosis_icd10"], free_text_reason)
     if "status" in data:
         new_status = data["status"]
         if new_status == "completed":
@@ -210,7 +249,7 @@ async def update_consultation(
         visit_id=visit.id,
         old_value=old_value,
         new_value=data,
-        reason="Controlled clinical amendment" if consult.status == "amended" else None,
+        reason=free_text_reason if used_free_text_diagnosis else ("Controlled clinical amendment" if consult.status == "amended" else None),
     )
     await session.commit()
     await session.refresh(consult)

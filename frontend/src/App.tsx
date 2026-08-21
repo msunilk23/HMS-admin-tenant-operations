@@ -93,7 +93,7 @@ export default function App() {
       <Routes>
         {/* Public routes */}
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/display/:tenantSchema" element={<TokenDisplayPage />} />
+        <Route path="/display/:tenantSchema/:displayToken" element={<TokenDisplayPage />} />
         <Route path="/pos/:tenantSchema" element={<PosScreen />} />
 
         {/* Protected routes — all inside the app shell */}

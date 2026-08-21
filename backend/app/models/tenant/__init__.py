@@ -17,6 +17,9 @@ from app.models.tenant.doctor_schedule import DoctorSchedule
 from app.models.tenant.doctor_schedule_exception import DoctorScheduleException
 from app.models.tenant.clinical_alert import ClinicalAlert
 from app.models.tenant.audit_log import AuditLog
+from app.models.tenant.token_counter import TokenCounter
+from app.models.tenant.icd10_code import ICD10Code
+from app.models.tenant.medicine_master import MedicineMaster
 
 __all__ = [
     "Department",
@@ -41,4 +44,7 @@ __all__ = [
     "DoctorScheduleException",
     "ClinicalAlert",
     "AuditLog",
+    "TokenCounter",
+    "ICD10Code",
+    "MedicineMaster",
 ]

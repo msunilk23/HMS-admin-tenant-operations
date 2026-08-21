@@ -61,6 +61,7 @@ async def create_clinical_alert(
         action="CREATE",
         resource_type="clinical_alert",
         resource_id=alert.id,
+        patient_id=alert.patient_id,
         new_value=payload.model_dump(mode="json"),
     )
     await session.commit()

@@ -1,10 +1,11 @@
 """Public schema models — shared across all tenants."""
+import secrets
 import uuid
 from datetime import datetime
 
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -24,6 +25,14 @@ class Tenant(Base, TimestampMixin):
     secondary_color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
     plan: Mapped[str] = mapped_column(String(50), default="enterprise", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata", nullable=False)
+    # Revocable credential for unauthenticated public queue-display boards
+    # (see /ws/{tenant_schema}/queue:update and app.api.v1.tenants). It grants
+    # read-only WebSocket access to the PII-free public queue channel only —
+    # never API access.
+    display_token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, default=lambda: secrets.token_urlsafe(24))
+    session_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tokens_valid_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     users: Mapped[list["User"]] = relationship("User", back_populates="tenant")
 
@@ -47,6 +56,8 @@ class User(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     password_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    session_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tokens_valid_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="users")
 

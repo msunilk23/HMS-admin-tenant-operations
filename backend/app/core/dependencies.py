@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decode_token
 from app.db.engine import get_session
 from app.core.redis_client import get_cached_features, set_cached_features, get_tenant_forced_logout_time
+from app.models.public.user import Tenant, User
 
 bearer_scheme = HTTPBearer()
 logger = logging.getLogger(__name__)
@@ -36,10 +37,30 @@ async def get_current_user(
         if user_id is None:
             raise credentials_exception
 
+        token_iat = payload.get("iat")
+        user = await session.get(User, user_id)
+        if payload.get("role") != "super_admin":
+            if not user or not user.is_active:
+                raise session_invalidated_exception
+            if payload.get("session_version", 0) != getattr(user, "session_version", 0):
+                raise session_invalidated_exception
+            if user.tokens_valid_after and token_iat is not None and token_iat < user.tokens_valid_after.timestamp():
+                raise session_invalidated_exception
+
         # Check forced-logout for tenant users — super_admin is never forced out
         tenant_id_str = payload.get("tenant_id")
         if tenant_id_str:
-            forced_logout_time = await get_tenant_forced_logout_time(tenant_id_str)
+            tenant = await session.get(Tenant, tenant_id_str)
+            if not tenant or not tenant.is_active:
+                raise session_invalidated_exception
+            if payload.get("tenant_session_version", 0) != tenant.session_version:
+                raise session_invalidated_exception
+            if tenant.tokens_valid_after and token_iat is not None and token_iat < tenant.tokens_valid_after.timestamp():
+                raise session_invalidated_exception
+            try:
+                forced_logout_time = await get_tenant_forced_logout_time(tenant_id_str)
+            except Exception:
+                forced_logout_time = None
             if forced_logout_time is not None:
                 token_iat = payload.get("iat")
                 if token_iat is not None and token_iat < forced_logout_time:

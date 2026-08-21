@@ -102,6 +102,7 @@ async def _record_patient_audit(
         action=action,
         resource_type="patient",
         resource_id=patient_id,
+        patient_id=patient_id,
         old_value=old_value,
         new_value=new_value,
     )

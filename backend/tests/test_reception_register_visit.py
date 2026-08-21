@@ -31,6 +31,7 @@ from app.models.tenant.doctor import Doctor
 from app.models.tenant.invoice import Invoice
 from app.models.tenant.patient import Patient
 from app.models.tenant.queue_token import QueueToken
+from app.models.tenant.token_counter import TokenCounter
 from app.models.tenant.visit import Visit, VisitStatus
 from app.schemas.appointment import CheckInBody
 from app.schemas.queue import QueueTokenCreate
@@ -43,6 +44,7 @@ _TABLES = [
     Appointment.__table__,
     Visit.__table__,
     QueueToken.__table__,
+    TokenCounter.__table__,
     Invoice.__table__,
     AuditLog.__table__,
 ]

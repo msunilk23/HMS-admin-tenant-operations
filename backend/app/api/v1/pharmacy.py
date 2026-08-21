@@ -94,12 +94,14 @@ async def update_pharmacy_status(
         pq.notes = payload.notes
 
     rx = await session.get(Prescription, pq.prescription_id)
+    visit = await session.get(Visit, rx.visit_id) if rx else None
     record_audit(
         session,
         current_user=current_user,
         action="UPDATE",
         resource_type="pharmacy_dispense",
         resource_id=pq.id,
+        patient_id=visit.patient_id if visit else None,
         visit_id=rx.visit_id if rx else None,
         old_value={"status": old_status},
         new_value={"status": pq.status, "notes": pq.notes},

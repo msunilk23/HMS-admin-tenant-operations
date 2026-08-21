@@ -1,8 +1,8 @@
 from typing import Optional
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -10,6 +10,9 @@ from app.db.base import Base
 
 class QueueToken(Base):
     __tablename__ = "queue_tokens"
+    __table_args__ = (
+        UniqueConstraint("token_scope", "token_date", "token_no", name="uq_queue_tokens_scope_date_token_no"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
@@ -19,6 +22,10 @@ class QueueToken(Base):
     department_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("departments.id"), index=True)
     doctor_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("doctors.id"), index=True)
     token_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Allocation scope this token_no is unique within — 'dept:<uuid>' or 'queue:<queue_type>'.
+    token_scope: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Tenant-local calendar date the token was issued (daily sequence resets here).
+    token_date: Mapped[date] = mapped_column(Date, nullable=False)
     queue_type: Mapped[str] = mapped_column(String(20), nullable=False)
     # queue_type: registration | vitals | consultation | pharmacy | billing
     priority: Mapped[str] = mapped_column(String(30), nullable=False, default="normal")

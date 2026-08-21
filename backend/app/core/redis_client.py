@@ -102,3 +102,41 @@ async def get_tenant_forced_logout_time(tenant_id: uuid.UUID | str) -> float | N
     redis = get_redis()
     val = await redis.get(f"{_FORCED_LOGOUT_PREFIX}{tenant_id}")
     return float(val) if val is not None else None
+
+
+# ── Tenant status cache (schema validity + active flag) ───────────────────────
+# Used by TenantMiddleware to confirm the JWT tenant_id/tenant_schema pair still
+# refers to a real, active tenant without hitting PostgreSQL on every request.
+# TTL is short so a super_admin suspending a tenant takes effect quickly; the
+# cache entry is also explicitly invalidated the moment a tenant is updated.
+
+_TENANT_STATUS_PREFIX = "tenant:status:"
+_TENANT_STATUS_TTL = 30  # seconds
+
+
+def _tenant_status_key(tenant_id: uuid.UUID | str) -> str:
+    return f"{_TENANT_STATUS_PREFIX}{tenant_id}"
+
+
+async def get_cached_tenant_status(tenant_id: uuid.UUID | str) -> dict | None:
+    """Return {"schema_name": str, "is_active": bool} from cache, or None if absent/expired."""
+    redis = get_redis()
+    raw = await redis.get(_tenant_status_key(tenant_id))
+    if raw is None:
+        return None
+    return json.loads(raw)
+
+
+async def set_cached_tenant_status(tenant_id: uuid.UUID | str, schema_name: str, is_active: bool) -> None:
+    redis = get_redis()
+    await redis.setex(
+        _tenant_status_key(tenant_id),
+        _TENANT_STATUS_TTL,
+        json.dumps({"schema_name": schema_name, "is_active": is_active}),
+    )
+
+
+async def invalidate_tenant_status_cache(tenant_id: uuid.UUID | str) -> None:
+    """Force the next request to re-read tenant status from PostgreSQL immediately."""
+    redis = get_redis()
+    await redis.delete(_tenant_status_key(tenant_id))

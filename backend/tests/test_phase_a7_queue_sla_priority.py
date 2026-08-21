@@ -102,6 +102,7 @@ async def test_priority_edit_persists_reason_assignment_and_audit(session):
     )
     token = QueueToken(
         id=uuid.uuid4(), patient_id=patient.id, uhid=patient.uhid, token_no=1,
+        token_scope="queue:consultation", token_date=now.date(),
         queue_type="consultation", priority="normal", status="checked_in",
     )
     session.add_all([patient, token])

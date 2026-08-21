@@ -170,17 +170,32 @@ export interface Vitals {
   temperature?: number
   weight?: number
   height?: number
+  bmi?: number
   spo2?: number
   pulse?: number
+  respiratory_rate?: number
+  pain_score?: number
+  blood_glucose?: number
+  chief_complaint?: string
+  allergies?: string
+  known_no_allergies?: boolean
+  general_condition?: string
+  level_of_consciousness?: string
+  nurse_notes?: string
+  status?: 'draft' | 'completed'
   recorded_at: string
 }
 
 export interface MedicineItem {
   name: string
+  medicine_master_id?: string
+  strength?: string
+  dosage_form?: string
   dose: string
   frequency: string
   duration: string
   route: string
+  timing_relative_to_food?: string
   instructions?: string
 }
 
@@ -200,6 +215,7 @@ export interface Prescription {
   id: UUID
   visit_id: UUID
   medicines: MedicineItem[]
+  items?: Array<MedicineItem & { id: UUID }>
   lab_tests?: { test_name: string; notes?: string }[]
   instructions?: string
   diagnosis?: string

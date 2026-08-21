@@ -1,8 +1,11 @@
 /**
  * Token Display Board — public TV screen for the waiting area.
- * Route: /display/:tenantSchema  (no auth required)
+ * Route: /display/:tenantSchema/:displayToken  (no auth — revocable per-tenant credential)
  *
  * Connects to WebSocket to receive real-time queue updates.
+ * Never renders patient-identifying information (name, UHID, phone) or
+ * clinical/emergency labels — see backend app/api/v1/queue.py token_issued
+ * broadcast, which intentionally omits PII from this channel's payload.
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
@@ -10,8 +13,9 @@ import { useParams } from 'react-router-dom'
 interface TokenEntry {
   token_no: number
   queue_type: string
-  priority: string
-  patient_name?: string
+  department_name?: string
+  doctor_name?: string
+  is_priority?: boolean
   status: string
   issued_at: string
 }
@@ -25,7 +29,7 @@ const QUEUE_LABEL: Record<string, string> = {
 }
 
 export default function TokenDisplayPage() {
-  const { tenantSchema } = useParams<{ tenantSchema: string }>()
+  const { tenantSchema, displayToken } = useParams<{ tenantSchema: string; displayToken: string }>()
   const [calledTokens, setCalledTokens] = useState<TokenEntry[]>([])
   const [currentTime, setCurrentTime] = useState(new Date())
   const wsRef = useRef<WebSocket | null>(null)
@@ -36,13 +40,11 @@ export default function TokenDisplayPage() {
     return () => clearInterval(id)
   }, [])
 
-  // WebSocket connection (no auth — public display)
+  // WebSocket connection (no auth — public display, revocable per-tenant credential)
   const connect = useCallback(() => {
-    if (!tenantSchema) return
-    // For public display boards, we allow a read-only token-less connection
-    // via a dedicated public WebSocket path
+    if (!tenantSchema || !displayToken) return
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${protocol}://${window.location.host}/ws/${tenantSchema}/queue:update?token=display`
+    const url = `${protocol}://${window.location.host}/ws/${tenantSchema}/queue:update?token=${encodeURIComponent(displayToken)}`
 
     const ws = new WebSocket(url)
     wsRef.current = ws
@@ -56,8 +58,9 @@ export default function TokenDisplayPage() {
               const next: TokenEntry = {
                 token_no: data.token_no,
                 queue_type: data.queue_type,
-                priority: data.priority ?? 'normal',
-                patient_name: data.patient_name,
+                department_name: data.department_name,
+                doctor_name: data.doctor_name,
+                is_priority: !!data.is_priority,
                 status: data.status ?? 'waiting',
                 issued_at: new Date().toISOString(),
               }
@@ -75,7 +78,7 @@ export default function TokenDisplayPage() {
     ws.onclose = (event) => {
       if (event.code !== 1000) setTimeout(connect, 3000)
     }
-  }, [tenantSchema])
+  }, [tenantSchema, displayToken])
 
   useEffect(() => {
     connect()
@@ -134,17 +137,19 @@ export default function TokenDisplayPage() {
                       : 'border-gray-700 bg-gray-900'
                   }`}
                 >
-                  {t.priority === 'emergency' && (
-                    <span className="inline-block bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded-full mb-2">
-                      EMERGENCY
+                  {t.is_priority && (
+                    <span className="inline-block bg-amber-600 text-white text-xs font-bold px-2 py-0.5 rounded-full mb-2">
+                      PRIORITY
                     </span>
                   )}
                   <p className={`font-mono font-black ${i === 0 ? 'text-8xl text-blue-400' : 'text-5xl text-gray-300'}`}>
                     {t.token_no}
                   </p>
                   <p className="text-sm text-gray-400 mt-2">{QUEUE_LABEL[t.queue_type] ?? t.queue_type}</p>
-                  {t.patient_name && (
-                    <p className="text-xs text-gray-500 mt-1">{t.patient_name}</p>
+                  {(t.department_name || t.doctor_name) && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      {[t.department_name, t.doctor_name].filter(Boolean).join(' · ')}
+                    </p>
                   )}
                 </div>
               ))}
@@ -168,10 +173,8 @@ export default function TokenDisplayPage() {
                   </span>
                   <div>
                     <p className="text-sm text-gray-400">{QUEUE_LABEL[t.queue_type] ?? t.queue_type}</p>
-                    {t.priority !== 'normal' && (
-                      <span className={`text-xs ${t.priority === 'emergency' ? 'text-red-400' : 'text-yellow-400'}`}>
-                        {t.priority.replace('_', ' ')}
-                      </span>
+                    {t.is_priority && (
+                      <span className="text-xs text-amber-400">priority</span>
                     )}
                   </div>
                 </div>

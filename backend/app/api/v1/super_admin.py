@@ -9,6 +9,7 @@ import asyncio
 import re
 import sys
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -18,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user, require_role
 from app.core.features import ALL_FEATURES, PLAN_FEATURES
-from app.core.redis_client import invalidate_feature_cache
+from app.core.redis_client import invalidate_feature_cache, invalidate_tenant_status_cache
 from app.core.security import hash_password
 from app.db.engine import get_session
 from app.models.public.tenant_feature import TenantFeature
@@ -288,6 +289,8 @@ async def update_tenant(
 
     if body.is_active is not None:
         tenant.is_active = body.is_active
+        tenant.session_version += 1
+        tenant.tokens_valid_after = datetime.now(timezone.utc)
 
     if body.logo_url is not None:
         tenant.logo_url = body.logo_url.strip() or None
@@ -298,6 +301,13 @@ async def update_tenant(
 
     await session.commit()
     await session.refresh(tenant)
+
+    if body.is_active is not None:
+        # Deactivating (or reactivating) a tenant must take effect immediately —
+        # invalidate the tenant-status cache used by TenantMiddleware and force
+        # all existing sessions for this tenant to re-authenticate.
+        await invalidate_tenant_status_cache(tenant.id)
+        await invalidate_feature_cache(tenant.id)
 
     feature_map = await _get_feature_map(tenant.id, session)
     return TenantDetail(

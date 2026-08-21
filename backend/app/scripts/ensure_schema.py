@@ -73,7 +73,10 @@ TENANT_COLUMNS: dict = {
     "audit_logs": [
         ("tenant_schema",      "VARCHAR(100)"),
         ("role",               "VARCHAR(50)"),
+        ("patient_id",        "UUID"),
         ("visit_id",           "UUID"),
+        ("request_id",         "VARCHAR(100)"),
+        ("source_ip",          "VARCHAR(45)"),
         ("reason",             "TEXT"),
         ("request_metadata",   "JSONB"),
     ],

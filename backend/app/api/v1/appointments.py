@@ -37,6 +37,7 @@ from app.schemas.appointment import (
 from app.core.razorpay_service import create_razorpay_order
 from app.core.sms import send_appointment_confirmation
 from app.models.public.user import Tenant
+from app.services.token_allocation import TokenAllocationConflict, allocate_and_create_token
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
 
@@ -548,24 +549,40 @@ async def checkin_appointment(
         )
         session.add(invoice)
 
-    # Create QueueToken — numbered per department when available
-    from app.api.v1.queue import _next_token_no
-    token_no = await _next_token_no(session, "consultation", department_id)
-    token = QueueToken(
-        id=uuid.uuid4(),
-        patient_id=appt.patient_id,
-        uhid=patient.uhid if patient else None,
-        appointment_id=appt_id,
-        visit_id=visit.id,
-        department_id=department_id,
-        doctor_id=appt.doctor_id,
-        token_no=token_no,
-        queue_type="consultation",
-        priority=priority,
-        status="checked_in",
-        issued_at=now,
-    )
-    session.add(token)
+    # Create QueueToken — numbered per department when available, via the
+    # shared concurrency-safe allocation service (same one used by walk-ins).
+    def _build_token(token_no: int, token_scope: str, token_date) -> QueueToken:
+        return QueueToken(
+            id=uuid.uuid4(),
+            patient_id=appt.patient_id,
+            uhid=patient.uhid if patient else None,
+            appointment_id=appt_id,
+            visit_id=visit.id,
+            department_id=department_id,
+            doctor_id=appt.doctor_id,
+            token_no=token_no,
+            token_scope=token_scope,
+            token_date=token_date,
+            queue_type="consultation",
+            priority=priority,
+            status="checked_in",
+            issued_at=now,
+        )
+
+    try:
+        token = await allocate_and_create_token(
+            session,
+            _build_token,
+            "consultation",
+            department_id,
+            current_user.get("timezone"),
+        )
+    except TokenAllocationConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not allocate a unique token number right now; please retry.",
+        ) from exc
+    token_no = token.token_no
 
     # Mark appointment checked_in
     appt.status = "checked_in"

@@ -14,6 +14,7 @@ from app.models.tenant.lab_order import LabOrder
 from app.models.tenant.patient import Patient
 from app.models.tenant.prescription import Prescription, PrescriptionItem
 from app.models.tenant.visit import Visit, VisitStatus
+from app.models.tenant.medicine_master import MedicineMaster
 from app.schemas.prescription import PrescriptionCreate, PrescriptionRead, PrescriptionUpdate
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
@@ -36,7 +37,18 @@ async def create_prescription(
     uhid = patient.uhid if patient else None
 
     item_source = payload.items if payload.items is not None else payload.medicines
-    medicines_data = [m.model_dump() for m in item_source] if item_source else None
+    medicines_data = []
+    for item in item_source or []:
+        data = item.model_dump(mode="json")
+        if item.medicine_master_id:
+            master = await session.get(MedicineMaster, item.medicine_master_id)
+            if not master or not master.is_active:
+                raise HTTPException(status_code=422, detail="Selected medicine is missing or inactive")
+            data["medicine"] = master.generic_name
+            data["name_snapshot"] = master.brand_name or master.generic_name
+            data["strength"] = item.strength or master.strength
+            data["dosage_form"] = item.dosage_form or master.dosage_form
+        medicines_data.append(data)
 
     # Upsert — each visit has at most one prescription
     existing_rx = (await session.execute(
@@ -52,7 +64,8 @@ async def create_prescription(
         existing_rx.items = [
             PrescriptionItem(
                 id=uuid.uuid4(),
-                medicine=item.medicine,
+                medicine_master_id=item.medicine_master_id,
+                medicine=medicines_data[i].get("medicine", item.medicine),
                 strength=item.strength,
                 dose=item.dose,
                 route=item.route,
@@ -60,8 +73,10 @@ async def create_prescription(
                 duration=item.duration,
                 quantity=item.quantity,
                 instructions=item.instructions,
+                dosage_form=item.dosage_form,
+                timing_relative_to_food=item.timing_relative_to_food,
             )
-            for item in item_source or []
+            for i, item in enumerate(item_source or [])
         ]
         prescription = existing_rx
     else:
@@ -78,7 +93,8 @@ async def create_prescription(
         prescription.items = [
             PrescriptionItem(
                 id=uuid.uuid4(),
-                medicine=item.medicine,
+                medicine_master_id=item.medicine_master_id,
+                medicine=medicines_data[i].get("medicine", item.medicine),
                 strength=item.strength,
                 dose=item.dose,
                 route=item.route,
@@ -86,8 +102,10 @@ async def create_prescription(
                 duration=item.duration,
                 quantity=item.quantity,
                 instructions=item.instructions,
+                dosage_form=item.dosage_form,
+                timing_relative_to_food=item.timing_relative_to_food,
             )
-            for item in item_source or []
+            for i, item in enumerate(item_source or [])
         ]
         session.add(prescription)
 
@@ -128,6 +146,7 @@ async def create_prescription(
         action="UPDATE" if existing_rx else "CREATE",
         resource_type="prescription",
         resource_id=prescription.id,
+        patient_id=visit.patient_id,
         visit_id=visit.id,
         new_value={"status": prescription.status, "medicines": medicines_data, "has_lab_tests": bool(payload.lab_tests)},
     )
@@ -170,11 +189,24 @@ async def update_prescription(
 
     item_source = payload.items if payload.items is not None else payload.medicines
     if item_source is not None:
-        rx.medicines = [m.model_dump() for m in item_source]
+        normalized_items = []
+        for item in item_source:
+            item_data = item.model_dump(mode="json")
+            if item.medicine_master_id:
+                master = await session.get(MedicineMaster, item.medicine_master_id)
+                if not master or not master.is_active:
+                    raise HTTPException(status_code=422, detail="Selected medicine is missing or inactive")
+                item_data["medicine"] = master.generic_name
+                item_data["name_snapshot"] = master.brand_name or master.generic_name
+                item_data["strength"] = item.strength or master.strength
+                item_data["dosage_form"] = item.dosage_form or master.dosage_form
+            normalized_items.append(item_data)
+        rx.medicines = normalized_items
         rx.items = [
             PrescriptionItem(
                 id=uuid.uuid4(),
-                medicine=item.medicine,
+                medicine=normalized_items[i].get("medicine", item.medicine),
+                medicine_master_id=item.medicine_master_id,
                 strength=item.strength,
                 dose=item.dose,
                 route=item.route,
@@ -182,8 +214,10 @@ async def update_prescription(
                 duration=item.duration,
                 quantity=item.quantity,
                 instructions=item.instructions,
+                dosage_form=item.dosage_form,
+                timing_relative_to_food=item.timing_relative_to_food,
             )
-            for item in item_source
+            for i, item in enumerate(item_source)
         ]
     if payload.consultation_id is not None:
         rx.consultation_id = payload.consultation_id

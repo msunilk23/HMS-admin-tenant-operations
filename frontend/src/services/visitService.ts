@@ -10,13 +10,23 @@ export interface VisitCreate {
 
 export interface VitalsCreate {
   visit_id: string
+  temperature?: number
+  pulse?: number
+  respiratory_rate?: number
   bp_systolic?: number
   bp_diastolic?: number
-  temperature?: number
-  weight?: number
-  height?: number
   spo2?: number
-  pulse?: number
+  pain_score?: number
+  height?: number
+  weight?: number
+  blood_glucose?: number
+  chief_complaint?: string
+  allergies?: string
+  known_no_allergies?: boolean
+  general_condition?: string
+  level_of_consciousness?: string
+  nurse_notes?: string
+  status?: 'draft' | 'completed'
 }
 
 export interface ConsultationCreate {

@@ -101,6 +101,8 @@ def _make_token(patient: Patient, visit, token_no: int, issued_at: datetime, **o
         uhid=patient.uhid,
         visit_id=visit.id if visit else None,
         token_no=token_no,
+        token_scope="queue:consultation",
+        token_date=issued_at.date(),
         queue_type="consultation",
         priority="normal",
         status="checked_in",

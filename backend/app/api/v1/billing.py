@@ -104,6 +104,7 @@ async def _record_payment(
         gateway="razorpay" if payload.payment_method == "razorpay" else None,
         paid_at=datetime.now(timezone.utc),
     )
+    visit = await session.get(Visit, invoice.visit_id)
     session.add(payment)
     invoice.paid_amount = float(invoice.paid_amount) + amount
     invoice.payment_method = payload.payment_method
@@ -118,6 +119,7 @@ async def _record_payment(
         action="CREATE",
         resource_type="payment",
         resource_id=payment.id,
+        patient_id=visit.patient_id if visit else None,
         visit_id=invoice.visit_id,
         new_value={
             "invoice_id": invoice.id,

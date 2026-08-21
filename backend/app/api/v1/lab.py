@@ -58,6 +58,7 @@ async def create_lab_order(
         action="CREATE",
         resource_type="lab_order",
         resource_id=order.id,
+        patient_id=visit.patient_id,
         visit_id=order.visit_id,
         new_value={"status": order.status, "tests": order.tests},
     )
@@ -124,6 +125,7 @@ async def update_lab_order_status(
         action="UPDATE",
         resource_type="lab_order",
         resource_id=order.id,
+        patient_id=(await session.get(Visit, order.visit_id)).patient_id,
         visit_id=order.visit_id,
         old_value={"status": old_status},
         new_value={"status": new_status},

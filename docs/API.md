@@ -19,6 +19,7 @@ Authenticated tenant APIs use `Authorization: Bearer <access-token>`. Tenant ide
 | Pre-vitals | `/api/v1/vitals` | Visit |
 | Consultation | `/api/v1/consultations` | Visit |
 | Prescriptions | `/api/v1/prescriptions` | Visit and consultation |
+| Master data | `/api/v1/master-data/icd10`, `/api/v1/master-data/medicines` | Active controlled ICD-10 and medicine records |
 | Lab | `/api/v1/lab` | Visit and independent lab status |
 | Pharmacy | `/api/v1/pharmacy` | Prescription and visit |
 | Billing | `/api/v1/billing` | Visit, invoice, payment, refund |
@@ -44,6 +45,25 @@ Queue priorities are `normal`, `senior_citizen`, `pregnant`, `disabled`, `urgent
 - Razorpay webhook: `POST /api/v1/billing/razorpay/webhook`; raw-body HMAC verification and tenant resolution are mandatory.
 - WebSocket: `/ws/{tenant_schema}/{channel}`; JWT tenant must equal the URL tenant for private channels.
 - Public channels are limited to queue display and payment kiosk use cases.
+
+## Controlled Clinical Master Data
+
+Doctors search active ICD-10 records by code or description through
+`GET /api/v1/master-data/icd10`. Prescription medicine search is provided by
+`GET /api/v1/master-data/medicines` and matches generic name, brand, strength,
+and dosage form. Hospital administrators import approved master data through
+the corresponding `/import` endpoints. Prescription items store the selected
+master ID and immutable name/strength/dosage-form snapshots. Free-text
+diagnoses must use the explicit `FREE_TEXT` marker and include a clinical
+reason; such use is audited.
+
+## Session Invalidation
+
+Access and refresh tokens are checked against database-backed user and tenant
+session versions and `tokens_valid_after` timestamps. User deactivation,
+role changes, password changes/resets, logout, and tenant deactivation
+invalidate earlier sessions. Redis blocklists remain an acceleration layer;
+database state is authoritative when Redis is unavailable.
 
 ## Error conventions
 

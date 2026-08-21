@@ -7,8 +7,9 @@
  * Row 4: Today's OPD summary + Appointments breakdown
  */
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import apiClient from '@/services/apiClient'
+import { tenantService } from '@/services/tenantService'
 
 interface StaffRole { role: string; count: number }
 interface DeptStat { name: string; total: number; completed: number; in_progress: number }
@@ -97,6 +98,70 @@ function KPICard({
 
 function SkeletonCard({ h = 'h-32' }: { h?: string }) {
   return <div className={`${h} bg-gray-100 rounded-xl animate-pulse`} />
+}
+
+function DisplayBoardCard() {
+  const qc = useQueryClient()
+  const [copied, setCopied] = useState(false)
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['display-token'],
+    queryFn: () => tenantService.getDisplayToken(),
+  })
+
+  const { mutate: rotate, isPending: rotating } = useMutation({
+    mutationFn: () => tenantService.rotateDisplayToken(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['display-token'] }),
+  })
+
+  const fullUrl = data ? `${window.location.origin}${data.display_url_path}` : ''
+
+  const copyUrl = async () => {
+    if (!fullUrl) return
+    await navigator.clipboard.writeText(fullUrl)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-semibold text-gray-700">Waiting-Room Display Board</span>
+        <span className="text-xs text-gray-400">No patient details are ever shown on this screen</span>
+      </div>
+      {isLoading || !data ? (
+        <div className="h-10 bg-gray-100 rounded-lg animate-pulse" />
+      ) : (
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+          <input
+            readOnly
+            value={fullUrl}
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-600 bg-gray-50"
+          />
+          <div className="flex gap-2 shrink-0">
+            <button
+              onClick={copyUrl}
+              className="px-3 py-2 rounded-lg border border-gray-300 text-xs font-medium text-gray-700 hover:bg-gray-50"
+            >
+              {copied ? 'Copied!' : 'Copy URL'}
+            </button>
+            <button
+              onClick={() => {
+                if (confirm('Rotating will immediately disconnect any TV boards using the current URL. Continue?')) rotate()
+              }}
+              disabled={rotating}
+              className="px-3 py-2 rounded-lg border border-red-200 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+            >
+              {rotating ? 'Rotating…' : 'Revoke & Rotate'}
+            </button>
+          </div>
+        </div>
+      )}
+      <p className="text-xs text-gray-400 mt-2">
+        Open this URL on the waiting-area TV/display board. Rotating immediately revokes the old link.
+      </p>
+    </div>
+  )
 }
 
 export default function AdminDashboard() {
@@ -491,6 +556,9 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
+
+      {/* Row 6: Public display board credential */}
+      <DisplayBoardCard />
     </div>
   )
 }

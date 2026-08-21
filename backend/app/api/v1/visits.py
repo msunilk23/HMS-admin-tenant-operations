@@ -107,6 +107,14 @@ async def list_visits(
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role(*ALLOWED_ROLES)),
 ):
+    # Normalize so case/legacy-alias differences between frontend and backend
+    # (e.g. "registered" vs "REGISTERED") never silently return an empty list.
+    if status_filter:
+        try:
+            status_filter = VisitStatus.normalize(status_filter).value
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Unknown visit status '{status_filter}'.")
+
     stmt = select(Visit)
     if patient_id:
         stmt = stmt.where(Visit.patient_id == patient_id)

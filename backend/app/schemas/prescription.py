@@ -6,13 +6,16 @@ from pydantic import BaseModel, Field
 
 
 class MedicineItem(BaseModel):
-    medicine: str
+    medicine: str = ""
+    medicine_master_id: Optional[uuid.UUID] = None
     strength: Optional[str] = None
     dose: Optional[str] = None
     route: str = "oral"
     frequency: Optional[str] = None
     duration: Optional[str] = None
     quantity: Optional[str] = None
+    dosage_form: Optional[str] = None
+    timing_relative_to_food: Optional[str] = None
     instructions: Optional[str] = None
 
 
@@ -25,6 +28,7 @@ class PrescriptionItemRead(BaseModel):
     id: uuid.UUID
     prescription_id: uuid.UUID
     medicine: str
+    medicine_master_id: Optional[uuid.UUID] = None
     strength: Optional[str] = None
     dose: Optional[str] = None
     route: Optional[str] = "oral"
@@ -32,6 +36,8 @@ class PrescriptionItemRead(BaseModel):
     duration: Optional[str] = None
     quantity: Optional[str] = None
     instructions: Optional[str] = None
+    dosage_form: Optional[str] = None
+    timing_relative_to_food: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

@@ -19,7 +19,10 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(20), nullable=False)  # CREATE | UPDATE | DELETE | READ
     resource_type: Mapped[str] = mapped_column(String(100), nullable=False)
     resource_id: Mapped[Optional[str]] = mapped_column(String(100))
+    patient_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     visit_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    source_ip: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
     old_value: Mapped[Optional[dict]] = mapped_column(JSONB)
     new_value: Mapped[Optional[dict]] = mapped_column(JSONB)
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

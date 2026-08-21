@@ -16,6 +16,7 @@ import { labService } from '@/services/labService'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import type { Visit, Vitals, PatientHistoryItem, Consultation } from '@/types/common'
 import ClinicalAlertBanner from '@/components/shared/ClinicalAlertBanner'
+import { masterDataService, type ICD10Code } from '@/services/masterDataService'
 
 function PriorityBadge({ priority }: { priority?: string }) {
   if (!priority || priority === 'normal') return null
@@ -44,10 +45,43 @@ const consultSchema = z.object({
   diagnoses: z.array(z.object({
     code: z.string(),
     description: z.string(),
+    master_id: z.string().optional(),
+    free_text: z.boolean().optional(),
   })).optional(),
+  free_text_diagnosis_reason: z.string().optional(),
 })
 
 type ConsultForm = z.infer<typeof consultSchema>
+
+function DiagnosisSelector({ index, value, setValue }: { index: number; value: string; setValue: (name: `diagnoses.${number}.${'code' | 'description' | 'master_id' | 'free_text'}`, value: string | boolean) => void }) {
+  const [query, setQuery] = useState(value ?? '')
+  const [freeText, setFreeText] = useState(false)
+  const { data = [] } = useQuery({
+    queryKey: ['icd10-search', query],
+    queryFn: () => masterDataService.searchIcd10(query),
+    enabled: query.trim().length >= 2 && !freeText,
+    staleTime: 30_000,
+  })
+  return (
+    <div className="flex-1 relative">
+      <input
+        value={query}
+        onChange={e => { setQuery(e.target.value); setValue(`diagnoses.${index}.description`, e.target.value); setValue(`diagnoses.${index}.free_text`, freeText) }}
+        placeholder={freeText ? 'Free-text diagnosis' : 'Search ICD-10 code or description'}
+        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+      />
+      <div className="flex gap-2 mt-1">
+        <button type="button" className="text-xs text-primary hover:underline" onClick={() => { setFreeText(false); setValue(`diagnoses.${index}.free_text`, false) }}>Controlled ICD-10</button>
+        <button type="button" className="text-xs text-amber-700 hover:underline" onClick={() => { setFreeText(true); setQuery(''); setValue(`diagnoses.${index}.code`, 'FREE_TEXT'); setValue(`diagnoses.${index}.description`, ''); setValue(`diagnoses.${index}.free_text`, true) }}>Free-text diagnosis</button>
+      </div>
+      {!freeText && data.length > 0 && (
+        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-auto">
+          {data.map((item: ICD10Code) => <button type="button" key={item.id} className="block w-full text-left px-3 py-2 hover:bg-blue-50 text-sm" onClick={() => { setQuery(`${item.code} — ${item.description}`); setValue(`diagnoses.${index}.code`, item.code); setValue(`diagnoses.${index}.description`, item.description); setValue(`diagnoses.${index}.master_id`, item.id); setValue(`diagnoses.${index}.free_text`, false) }}><strong>{item.code}</strong> — {item.description}</button>)}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function ReportButton({ orderId }: { orderId: string }) {
   const [loading, setLoading] = useState(false)
@@ -138,6 +172,8 @@ export default function ConsultationPage() {
     handleSubmit,
     control,
     reset,
+    setValue,
+    watch,
     formState: { errors },
   } = useForm<ConsultForm>({ resolver: zodResolver(consultSchema) })
 
@@ -177,6 +213,7 @@ export default function ConsultationPage() {
         notes: consult?.notes ?? '',
         follow_up_date: consult?.follow_up_date ?? '',
         diagnoses: (consult?.diagnosis_icd10 as { code: string; description: string }[]) ?? [],
+        free_text_diagnosis_reason: '',
       })
     } catch {
       setVitals(null)
@@ -226,6 +263,7 @@ export default function ConsultationPage() {
         notes: data.notes,
         follow_up_date: data.follow_up_date || undefined,
         diagnosis_icd10: cleanedDiagnoses,
+        free_text_diagnosis_reason: data.free_text_diagnosis_reason,
       }
       // Use PATCH if consultation already exists (editing), POST if new
       return existingConsultation
@@ -449,12 +487,10 @@ export default function ConsultationPage() {
                 <div className="space-y-2">
                   {diagFields.map((field, i) => (
                     <div key={field.id} className="flex gap-2 items-start">
-                      <input {...register(`diagnoses.${i}.code`)}
-                        placeholder="ICD code (e.g. J06.9)"
-                        className="w-36 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
-                      <input {...register(`diagnoses.${i}.description`)}
-                        placeholder="Description"
-                        className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                      <input type="hidden" {...register(`diagnoses.${i}.code`)} />
+                      <input type="hidden" {...register(`diagnoses.${i}.master_id`)} />
+                      <input type="hidden" {...register(`diagnoses.${i}.free_text`)} />
+                      <DiagnosisSelector index={i} value={[watch(`diagnoses.${i}.code`), watch(`diagnoses.${i}.description`)].filter(Boolean).join(' — ')} setValue={setValue} />
                       <button type="button" onClick={() => removeDiag(i)}
                         className="text-gray-400 hover:text-red-500 mt-2">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -464,6 +500,9 @@ export default function ConsultationPage() {
                     </div>
                   ))}
                 </div>
+                {diagFields.some((_, i) => watch(`diagnoses.${i}.free_text`)) && (
+                  <textarea {...register('free_text_diagnosis_reason')} rows={2} placeholder="Reason for using free-text diagnosis (required)" className="mt-2 w-full border border-amber-300 rounded-lg px-3 py-2 text-sm bg-amber-50" />
+                )}
               </div>
 
               <SoapField label="Clinical Notes / Instructions">

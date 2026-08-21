@@ -13,6 +13,7 @@ class ConsultationCreate(BaseModel):
     examination: Optional[str] = None
     # e.g. [{"code": "J06.9", "description": "Acute upper respiratory infection"}]
     diagnosis_icd10: Optional[List[Dict[str, Any]]] = None
+    free_text_diagnosis_reason: Optional[str] = None
 
     @validator("diagnosis_icd10", pre=True)
     def empty_icd_to_none(cls, v):
@@ -42,6 +43,7 @@ class ConsultationUpdate(BaseModel):
     history: Optional[str] = None
     examination: Optional[str] = None
     diagnosis_icd10: Optional[List[Dict[str, Any]]] = None
+    free_text_diagnosis_reason: Optional[str] = None
 
     @validator("diagnosis_icd10", pre=True)
     def empty_icd_to_none(cls, v):
@@ -73,6 +75,7 @@ class ConsultationRead(BaseModel):
     history: Optional[str] = None
     examination: Optional[str] = None
     diagnosis_icd10: Optional[List[Dict[str, Any]]] = None
+    free_text_diagnosis_reason: Optional[str] = None
     notes: Optional[str] = None
     follow_up_date: Optional[date] = None
     started_at: Optional[datetime] = None
