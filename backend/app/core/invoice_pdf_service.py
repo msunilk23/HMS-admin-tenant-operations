@@ -1,15 +1,10 @@
-import hashlib
 import io
-import json
 from datetime import timezone
-from pathlib import Path
 
+"""Invoice PDF rendering — presentation only, no persistence/versioning here.
 
-def _resolve_uploads_root() -> Path:
-    container_path = Path("/app/uploads")
-    if container_path.exists():
-        return container_path
-    return Path(__file__).resolve().parents[3] / "uploads"
+Persistence/versioning is handled generically by `app.services.document_service`.
+"""
 
 
 def canonical_invoice_snapshot(invoice: dict) -> dict:
@@ -43,11 +38,6 @@ def canonical_invoice_snapshot(invoice: dict) -> dict:
             "department_id": str(invoice["department_id"]) if invoice.get("department_id") else None,
         },
     }
-
-
-def snapshot_digest(snapshot: dict) -> str:
-    payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
 
 
 def build_invoice_pdf(snapshot: dict) -> bytes:
@@ -109,16 +99,3 @@ def build_invoice_pdf(snapshot: dict) -> bytes:
     story.append(table)
     doc.build(story)
     return buf.getvalue()
-
-
-def persist_invoice_pdf(*, invoice_id: str, version: int, pdf_bytes: bytes) -> tuple[str, int]:
-    root = _resolve_uploads_root() / "invoices" / invoice_id
-    root.mkdir(parents=True, exist_ok=True)
-    rel_path = Path("invoices") / invoice_id / f"v{version}.pdf"
-    abs_path = _resolve_uploads_root() / rel_path
-    abs_path.write_bytes(pdf_bytes)
-    return str(rel_path).replace("\\", "/"), len(pdf_bytes)
-
-
-def resolve_invoice_pdf_path(storage_path: str) -> Path:
-    return _resolve_uploads_root() / storage_path

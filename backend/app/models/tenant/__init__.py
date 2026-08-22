@@ -10,7 +10,7 @@ from app.models.tenant.prescription import Prescription, PrescriptionItem
 from app.models.tenant.lab_order import LabOrder, LabResult
 from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.invoice import Invoice, Payment, Refund
-from app.models.tenant.invoice_document import InvoiceDocumentVersion
+from app.models.tenant.document import DocumentVersion, DocumentVersionCounter
 from app.models.tenant.feedback import Feedback
 from app.models.tenant.nurse_roster import NurseRoster
 from app.models.tenant.nurse_department import NurseDepartment
@@ -37,7 +37,8 @@ __all__ = [
     "LabResult",
     "PharmacyQueue",
     "Invoice",
-    "InvoiceDocumentVersion",
+    "DocumentVersion",
+    "DocumentVersionCounter",
     "Payment",
     "Refund",
     "Feedback",
