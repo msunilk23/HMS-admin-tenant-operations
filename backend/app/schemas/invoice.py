@@ -61,6 +61,19 @@ class PaymentRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class InvoiceDocumentVersionRead(BaseModel):
+    id: uuid.UUID
+    invoice_id: uuid.UUID
+    version: int
+    checksum_sha256: str
+    storage_path: str
+    file_size_bytes: int
+    created_by_user_id: Optional[uuid.UUID] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class RefundCreate(BaseModel):
     amount: Optional[float] = None
     reason: str

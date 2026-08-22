@@ -8,18 +8,27 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_role, require_feature
 from app.core.config import settings
+from app.core.invoice_pdf_service import (
+    build_invoice_pdf,
+    canonical_invoice_snapshot,
+    persist_invoice_pdf,
+    resolve_invoice_pdf_path,
+    snapshot_digest,
+)
 from app.core.razorpay_service import create_razorpay_order, fetch_order_payments, verify_webhook_signature
 from app.db.engine import AsyncSessionLocal, get_session, tenant_schema_var
+from app.models.tenant.invoice_document import InvoiceDocumentVersion
 from app.models.tenant.invoice import Invoice, Payment, Refund, invoice_status_for_payment
 from app.models.tenant.patient import Patient
 from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.visit import Visit, VisitStatus
-from app.schemas.invoice import InvoiceCreate, InvoicePayment, InvoiceRead, PaymentRead, RefundCreate
+from app.schemas.invoice import InvoiceCreate, InvoiceDocumentVersionRead, InvoicePayment, InvoiceRead, PaymentRead, RefundCreate
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
 from app.websocket.manager import ws_manager
@@ -85,6 +94,34 @@ def _compute_totals(line_items: list | None, discount: float, tax: float) -> flo
         raise HTTPException(status_code=400, detail="Discount cannot exceed subtotal")
     total = subtotal - discount + tax
     return subtotal, max(total, 0.0)
+
+
+def _invoice_to_snapshot(invoice: Invoice, visit: Visit | None, patient: Patient | None) -> dict:
+    return canonical_invoice_snapshot(
+        {
+            "id": invoice.id,
+            "visit_id": invoice.visit_id,
+            "uhid": invoice.uhid,
+            "line_items": invoice.line_items,
+            "subtotal": invoice.subtotal,
+            "discount": invoice.discount,
+            "tax": invoice.tax,
+            "total": invoice.total,
+            "paid_amount": invoice.paid_amount,
+            "status": invoice.status,
+            "payment_method": invoice.payment_method,
+            "receipt_number": invoice.receipt_number,
+            "source": invoice.source,
+            "pharmacy_queue_id": invoice.pharmacy_queue_id,
+            "created_at": invoice.created_at,
+            "paid_at": invoice.paid_at,
+            "patient_id": patient.id if patient else None,
+            "patient_name": f"{patient.first_name} {patient.last_name}" if patient else None,
+            "patient_phone": patient.phone if patient else None,
+            "doctor_id": visit.doctor_id if visit else None,
+            "department_id": visit.department_id if visit else None,
+        }
+    )
 
 
 async def _record_payment(
@@ -286,6 +323,137 @@ async def get_invoice_receipt(
     if invoice.status not in ("paid", "refunded"):
         raise HTTPException(status_code=400, detail="Receipt is available after full payment")
     return invoice
+
+
+@router.post("/{invoice_id}/documents/finalize", response_model=InvoiceDocumentVersionRead, status_code=status.HTTP_201_CREATED)
+async def finalize_invoice_document(
+    invoice_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("receptionist", "billing_officer", "hospital_admin")),
+):
+    invoice = await session.get(Invoice, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status not in ("paid", "refunded"):
+        raise HTTPException(status_code=400, detail="Invoice document can be finalized only after payment")
+
+    visit = await session.get(Visit, invoice.visit_id)
+    patient = await session.get(Patient, visit.patient_id) if visit else None
+    snapshot = _invoice_to_snapshot(invoice, visit, patient)
+    checksum = snapshot_digest(snapshot)
+
+    existing = (
+        await session.execute(
+            select(InvoiceDocumentVersion).where(
+                InvoiceDocumentVersion.invoice_id == invoice.id,
+                InvoiceDocumentVersion.checksum_sha256 == checksum,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return existing
+
+    latest = (
+        await session.execute(
+            select(InvoiceDocumentVersion)
+            .where(InvoiceDocumentVersion.invoice_id == invoice.id)
+            .order_by(InvoiceDocumentVersion.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    next_version = (latest.version + 1) if latest else 1
+
+    pdf_bytes = build_invoice_pdf(snapshot)
+    storage_path, file_size = persist_invoice_pdf(
+        invoice_id=str(invoice.id),
+        version=next_version,
+        pdf_bytes=pdf_bytes,
+    )
+
+    created_by_user_id = None
+    sub = current_user.get("sub")
+    if sub:
+        try:
+            created_by_user_id = uuid.UUID(str(sub))
+        except ValueError:
+            created_by_user_id = None
+
+    document = InvoiceDocumentVersion(
+        id=uuid.uuid4(),
+        invoice_id=invoice.id,
+        version=next_version,
+        checksum_sha256=checksum,
+        storage_path=storage_path,
+        file_size_bytes=file_size,
+        snapshot_json=snapshot,
+        created_by_user_id=created_by_user_id,
+    )
+    session.add(document)
+    record_audit(
+        session,
+        current_user=current_user,
+        action="CREATE",
+        resource_type="invoice_document",
+        resource_id=document.id,
+        patient_id=visit.patient_id if visit else None,
+        visit_id=invoice.visit_id,
+        new_value={
+            "invoice_id": str(invoice.id),
+            "version": next_version,
+            "checksum_sha256": checksum,
+            "storage_path": storage_path,
+        },
+    )
+    await session.commit()
+    await session.refresh(document)
+    return document
+
+
+@router.get("/{invoice_id}/documents", response_model=List[InvoiceDocumentVersionRead])
+async def list_invoice_documents(
+    invoice_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_role("receptionist", "billing_officer", "nurse", "doctor", "hospital_admin")),
+):
+    if not await session.get(Invoice, invoice_id):
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    rows = (
+        await session.execute(
+            select(InvoiceDocumentVersion)
+            .where(InvoiceDocumentVersion.invoice_id == invoice_id)
+            .order_by(InvoiceDocumentVersion.version.asc())
+        )
+    ).scalars().all()
+    return rows
+
+
+@router.get("/{invoice_id}/documents/{version}/download")
+async def download_invoice_document(
+    invoice_id: uuid.UUID,
+    version: int,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_role("receptionist", "billing_officer", "nurse", "doctor", "hospital_admin")),
+):
+    document = (
+        await session.execute(
+            select(InvoiceDocumentVersion).where(
+                InvoiceDocumentVersion.invoice_id == invoice_id,
+                InvoiceDocumentVersion.version == version,
+            )
+        )
+    ).scalar_one_or_none()
+    if not document:
+        raise HTTPException(status_code=404, detail="Invoice document version not found")
+
+    file_path = resolve_invoice_pdf_path(document.storage_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Stored invoice document file is missing")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/pdf",
+        filename=f"invoice-{invoice_id}-v{version}.pdf",
+    )
 
 
 @router.post("/{invoice_id}/refund", response_model=InvoiceRead)
