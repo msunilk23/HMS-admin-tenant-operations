@@ -16,6 +16,18 @@ from app.schemas.auth import LoginRequest, TokenResponse, RefreshRequest, Change
 router = APIRouter()
 
 
+def _refresh_token_claims(extra_claims: dict) -> dict:
+    """
+    Subset of the access-token claims that a refresh token must also carry so
+    that refresh rotation and session/tenant invalidation can be enforced
+    without trusting anything the client supplies. Values always come from
+    the database-derived extra_claims dict built for the access token in the
+    same request — never from request headers or client input.
+    """
+    keys = ("role", "tenant_id", "tenant_schema", "session_version", "tenant_session_version")
+    return {k: extra_claims[k] for k in keys if k in extra_claims}
+
+
 async def _load_enabled_features(tenant_id, session: AsyncSession) -> list[str]:
     """
     Return the list of feature keys that are enabled for this tenant.
@@ -87,7 +99,7 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
         }
 
     access_token = create_access_token(subject=str(user.id), extra_claims=extra_claims)
-    refresh_token = create_refresh_token(subject=str(user.id))
+    refresh_token = create_refresh_token(subject=str(user.id), extra_claims=_refresh_token_claims(extra_claims))
 
     return TokenResponse(
         access_token=access_token,
@@ -127,7 +139,7 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
     token_iat = token_data.get("iat")
     if token_data.get("session_version", 0) != user.session_version:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has been invalidated. Please log in again.")
-    if user.tokens_valid_after and token_iat is not None and token_iat < user.tokens_valid_after.timestamp():
+    if user.tokens_valid_after and token_iat is not None and token_iat < int(user.tokens_valid_after.timestamp()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has been invalidated. Please log in again.")
 
     # Forced-logout check — reject refresh tokens issued before a feature-toggle event
@@ -136,6 +148,8 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
         if not tenant_check or not tenant_check.is_active:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Hospital account is inactive")
         if token_data.get("tenant_session_version", 0) != tenant_check.session_version:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has been invalidated. Please log in again.")
+        if tenant_check.tokens_valid_after and token_iat is not None and token_iat < int(tenant_check.tokens_valid_after.timestamp()):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your session has been invalidated. Please log in again.")
         try:
             forced_logout_time = await get_tenant_forced_logout_time(str(user.tenant_id))
@@ -181,7 +195,7 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
         }
 
     access_token = create_access_token(subject=str(user.id), extra_claims=extra_claims)
-    new_refresh = create_refresh_token(subject=str(user.id))
+    new_refresh = create_refresh_token(subject=str(user.id), extra_claims=_refresh_token_claims(extra_claims))
     return TokenResponse(
         access_token=access_token,
         refresh_token=new_refresh,
@@ -285,5 +299,5 @@ async def change_password(
         }
 
     access_token = create_access_token(subject=str(user.id), extra_claims=extra_claims)
-    refresh_token = create_refresh_token(subject=str(user.id))
+    refresh_token = create_refresh_token(subject=str(user.id), extra_claims=_refresh_token_claims(extra_claims))
     return TokenResponse(access_token=access_token, refresh_token=refresh_token, must_change_password=False)

@@ -30,6 +30,10 @@ from app.db.engine import tenant_schema_var
 from app.core.security import decode_token
 from app.core.redis_client import get_cached_tenant_status, set_cached_tenant_status
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 _PUBLIC_PATHS = {
     "/health",
@@ -47,8 +51,21 @@ def _is_valid_schema_name(schema: str) -> bool:
 
 
 async def _load_tenant_status(tenant_id: str) -> dict | None:
-    """Return {"schema_name", "is_active"} for tenant_id, using Redis then PostgreSQL."""
-    cached = await get_cached_tenant_status(tenant_id)
+    """
+    Return {"schema_name", "is_active"} for tenant_id, using Redis then PostgreSQL.
+
+    Redis is a cache, never a source of truth: if it is unreachable/times out we
+    silently fall back to PostgreSQL instead of failing the request. A tenant is
+    only ever treated as active/valid based on a real PostgreSQL row (or a cache
+    entry that was itself populated from PostgreSQL) — never assumed active just
+    because the cache could not be reached. If PostgreSQL is also unavailable we
+    return None (caller rejects the request) rather than leak internal errors.
+    """
+    cached = None
+    try:
+        cached = await get_cached_tenant_status(tenant_id)
+    except Exception:
+        logger.warning("tenant_status_cache_read_failed", extra={"tenant_id": str(tenant_id)})
     if cached is not None:
         return cached
 
@@ -63,19 +80,27 @@ async def _load_tenant_status(tenant_id: str) -> dict | None:
     except (TypeError, ValueError):
         return None
 
-    async with AsyncSessionLocal() as session:
-        row = (
-            await session.execute(
-                select(Tenant.schema_name, Tenant.is_active).where(Tenant.id == tenant_uuid)
-            )
-        ).first()
+    try:
+        async with AsyncSessionLocal() as session:
+            row = (
+                await session.execute(
+                    select(Tenant.schema_name, Tenant.is_active).where(Tenant.id == tenant_uuid)
+                )
+            ).first()
+    except Exception:
+        logger.warning("tenant_status_db_lookup_failed", extra={"tenant_id": str(tenant_id)})
+        return None
 
     if row is None:
         return None
 
     status_dict = {"schema_name": row[0], "is_active": bool(row[1])}
-    await set_cached_tenant_status(tenant_id, row[0], bool(row[1]))
+    try:
+        await set_cached_tenant_status(tenant_id, row[0], bool(row[1]))
+    except Exception:
+        logger.warning("tenant_status_cache_write_failed", extra={"tenant_id": str(tenant_id)})
     return status_dict
+
 
 
 class TenantMiddleware(BaseHTTPMiddleware):

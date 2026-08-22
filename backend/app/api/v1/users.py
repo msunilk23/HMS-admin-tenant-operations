@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_role
-from app.core.security import hash_password
+from app.core.security import hash_password, generate_temp_password
 from app.core.sms import send_doctor_credentials, send_staff_credentials
 from app.core.username import generate_username
 from app.db.engine import get_session
@@ -132,7 +132,7 @@ async def create_user(
     if payload.email and (await session.execute(select(User).where(User.email == payload.email))).scalar_one_or_none():
         raise HTTPException(status_code=409, detail="A user with this email already exists")
 
-    temp_password = payload.password or "Password@123"
+    temp_password = payload.password or generate_temp_password()
     username = payload.username or await generate_username(payload.full_name, session)
     if payload.username:
         if (await session.execute(select(User).where(User.username == username))).scalar_one_or_none():
@@ -176,7 +176,6 @@ async def create_user(
     )
 
     result = _row_to_dict(new_user)
-    result["temp_password"] = temp_password
     return result
 
 
@@ -257,7 +256,7 @@ async def reset_user_password(
     if not user.phone:
         raise HTTPException(status_code=400, detail="User has no phone number — cannot send SMS")
 
-    new_password = "Password@123"
+    new_password = generate_temp_password()
     user.hashed_password = hash_password(new_password)
     user.must_change_password = True
     user.password_changed_at = None

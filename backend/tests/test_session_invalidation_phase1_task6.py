@@ -75,15 +75,19 @@ def _access(user, tenant, role=None):
 
 
 def _refresh(user, tenant):
-    token = create_refresh_token(str(user.id))
-    from jose import jwt
-    from app.core.config import settings
-    payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    payload.update({
-        "role": user.role, "tenant_id": str(tenant.id), "tenant_schema": tenant.schema_name,
-        "tenant_session_version": tenant.session_version, "session_version": user.session_version,
-    })
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    """
+    Build a refresh token exactly the way production issuance does (auth.py
+    passes role/tenant_id/tenant_schema/session_version/tenant_session_version
+    into create_refresh_token's extra_claims) — no post-hoc decode+re-sign.
+    """
+    claims = {"role": user.role, "session_version": user.session_version}
+    if getattr(user, "tenant_id", None):
+        claims.update({
+            "tenant_id": str(tenant.id),
+            "tenant_schema": tenant.schema_name,
+            "tenant_session_version": tenant.session_version,
+        })
+    return create_refresh_token(str(user.id), extra_claims=claims)
 
 
 @pytest.mark.asyncio
@@ -205,3 +209,107 @@ async def test_new_token_after_invalidation_works_normally():
     with pytest.raises(HTTPException):
         await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=old), AuthSession(user, tenant))
     assert await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=new), AuthSession(user, tenant))
+
+
+# ── Task C: super_admin must NOT bypass user-level security checks ────────────
+# Only tenant-specific revocation is an intentional exemption for super_admin.
+
+@pytest.mark.asyncio
+async def test_deactivated_super_admin_access_token_rejected():
+    user, tenant = _state(role="super_admin")
+    token = create_access_token(str(user.id), {"role": "super_admin", "tenant_schema": "", "session_version": 0})
+    user.is_active = False
+    with pytest.raises(HTTPException) as exc:
+        await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=token), AuthSession(user, tenant))
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_super_admin_session_version_increment_invalidates_earlier_token():
+    user, tenant = _state(role="super_admin")
+    token = create_access_token(str(user.id), {"role": "super_admin", "tenant_schema": "", "session_version": 0})
+    user.session_version += 1
+    with pytest.raises(HTTPException) as exc:
+        await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=token), AuthSession(user, tenant))
+    assert exc.value.status_code == 401
+    new_token = create_access_token(str(user.id), {"role": "super_admin", "tenant_schema": "", "session_version": user.session_version})
+    result = await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=new_token), AuthSession(user, tenant))
+    assert result["role"] == "super_admin"
+
+
+@pytest.mark.asyncio
+async def test_super_admin_password_change_invalidates_earlier_token():
+    user, tenant = _state(role="super_admin")
+    token = create_access_token(str(user.id), {"role": "super_admin", "tenant_schema": "", "session_version": 0})
+    # Simulates the same session_version bump + tokens_valid_after stamp that
+    # /change-password performs for every role, including super_admin.
+    user.session_version += 1
+    user.tokens_valid_after = datetime.now(timezone.utc) - timedelta(seconds=1)
+    with pytest.raises(HTTPException):
+        await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=token), AuthSession(user, tenant))
+
+
+@pytest.mark.asyncio
+async def test_active_super_admin_independent_of_unrelated_tenant_invalidation():
+    user, tenant = _state(role="super_admin")
+    token = create_access_token(str(user.id), {"role": "super_admin", "tenant_schema": "", "session_version": 0})
+    # An unrelated hospital tenant is suspended/invalidated — super_admin carries
+    # no tenant_id claim at all, so this must never affect it.
+    tenant.is_active = False
+    tenant.session_version += 5
+    result = await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=token), AuthSession(user, tenant))
+    assert result["role"] == "super_admin"
+
+
+@pytest.mark.asyncio
+async def test_super_admin_forged_tenant_claim_cannot_impersonate_tenant_user():
+    """
+    A super_admin JWT never legitimately carries a tenant_id claim. Even if one
+    were present (which requires forging a validly-signed JWT — impossible
+    without SECRET_KEY), it must still be checked against a real, active tenant
+    the same way a tenant-user token would be.
+    """
+    user, tenant = _state(role="super_admin")
+    token = create_access_token(str(user.id), {
+        "role": "super_admin", "tenant_schema": tenant.schema_name,
+        "tenant_id": str(uuid.uuid4()),  # tenant_id that does not resolve via AuthSession
+        "tenant_session_version": 0, "session_version": 0,
+    })
+    with pytest.raises(HTTPException):
+        await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=token), AuthSession(user, tenant))
+
+
+# ── Task A: token `type` must be enforced ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_refresh_token_rejected_when_used_as_access_token():
+    user, tenant = _state()
+    refresh_token = _refresh(user, tenant)
+    with pytest.raises(HTTPException) as exc:
+        await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=refresh_token), AuthSession(user, tenant))
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_malformed_token_rejected():
+    user, tenant = _state()
+    with pytest.raises(HTTPException) as exc:
+        await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials="not-a-jwt"), AuthSession(user, tenant))
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_expired_token_rejected():
+    from jose import jwt
+    from app.core.config import settings
+    user, tenant = _state()
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user.id), "iat": int((now - timedelta(hours=2)).timestamp()),
+        "exp": now - timedelta(hours=1), "type": "access",
+        "role": user.role, "session_version": user.session_version,
+    }
+    expired = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    with pytest.raises(HTTPException) as exc:
+        await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=expired), AuthSession(user, tenant))
+    assert exc.value.status_code == 401

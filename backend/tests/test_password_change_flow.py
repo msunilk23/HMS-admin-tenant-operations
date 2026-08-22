@@ -56,7 +56,7 @@ async def test_login_returns_force_change_flag_for_new_staff(monkeypatch):
 
     monkeypatch.setattr("app.api.v1.auth.verify_password", lambda *args, **kwargs: True)
     monkeypatch.setattr("app.api.v1.auth.create_access_token", lambda subject, extra_claims=None: "access-token")
-    monkeypatch.setattr("app.api.v1.auth.create_refresh_token", lambda subject: "refresh-token")
+    monkeypatch.setattr("app.api.v1.auth.create_refresh_token", lambda subject, extra_claims=None: "refresh-token")
 
     async def fake_load_features(*args, **kwargs):
         return []
@@ -95,7 +95,7 @@ async def test_change_password_resets_force_flag_and_updates_timestamp(monkeypat
     monkeypatch.setattr("app.api.v1.auth.verify_password", lambda *args, **kwargs: True)
     monkeypatch.setattr("app.api.v1.auth.hash_password", lambda password: f"hashed:{password}")
     monkeypatch.setattr("app.api.v1.auth.create_access_token", lambda subject, extra_claims=None: "new-access-token")
-    monkeypatch.setattr("app.api.v1.auth.create_refresh_token", lambda subject: "new-refresh-token")
+    monkeypatch.setattr("app.api.v1.auth.create_refresh_token", lambda subject, extra_claims=None: "new-refresh-token")
 
     async def fake_load_features(*args, **kwargs):
         return []
