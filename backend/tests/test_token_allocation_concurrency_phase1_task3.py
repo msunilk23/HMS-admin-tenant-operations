@@ -82,7 +82,7 @@ async def pg(monkeypatch_module):
             Patient.__table__, Visit.__table__, QueueToken.__table__,
             TokenCounter.__table__, AuditLog.__table__,
         ]
-        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables, checkfirst=False))
 
     maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 

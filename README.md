@@ -59,6 +59,24 @@ npm install
 npm run dev
 ```
 
+### 6. Run Task 7 browser verification
+
+The controlled ICD-10 and medicine workflow uses an isolated PostgreSQL
+tenant fixture and the real backend master-data APIs. It does not depend on
+development seed records.
+
+```bash
+cd frontend
+npm ci
+npx playwright install chromium
+npm run e2e
+```
+
+The fixture is created by `backend/tests/e2e_seed_task7.py` and cleaned up by
+Playwright global teardown. The focused CI workflow is
+.github/workflows/task7-e2e.yml.
+```
+
 ---
 
 ## Project Structure

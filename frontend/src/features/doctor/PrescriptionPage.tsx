@@ -90,6 +90,7 @@ const medicineSchema = z.object({
   frequency: z.string().min(1, 'Frequency required'),
   food_instruction: z.enum(FOOD_INSTRUCTIONS).default('N/A'),
   duration: z.string().min(1, 'Duration required'),
+  quantity: z.string().min(1, 'Quantity required'),
   route: z.string().default('oral'),
   notes: z.string().optional(),
 })
@@ -164,7 +165,7 @@ export default function PrescriptionPage() {
     if (!existingPrescription) return
     reset({
       medicines: (existingPrescription.items ?? []).map(item => ({
-        name: item.name,
+        name: (item as typeof item & { medicine?: string }).medicine ?? item.name,
         medicine_master_id: item.medicine_master_id ?? '',
         strength: item.strength ?? '',
         dosage_form: item.dosage_form ?? '',
@@ -173,6 +174,7 @@ export default function PrescriptionPage() {
         food_instruction: (item.timing_relative_to_food ?? 'N/A') as typeof FOOD_INSTRUCTIONS[number],
         duration: item.duration ?? '',
         route: item.route ?? 'oral',
+        quantity: item.quantity ?? '',
         notes: item.instructions ?? '',
       })),
       instructions: existingPrescription.instructions ?? '',
@@ -184,7 +186,16 @@ export default function PrescriptionPage() {
     mutationFn: (data: RxForm) => prescriptionService.create({
       visit_id: visitId!,
       medicines: data.medicines.map(item => ({
-        ...item,
+        medicine: item.name,
+        medicine_master_id: item.medicine_master_id,
+        strength: item.strength,
+        dosage_form: item.dosage_form,
+        dose: item.dose,
+        frequency: item.frequency,
+        duration: item.duration,
+        route: item.route,
+        quantity: item.quantity,
+        instructions: item.notes,
         timing_relative_to_food: item.food_instruction,
       })),
       instructions: data.instructions,
@@ -224,7 +235,7 @@ export default function PrescriptionPage() {
             <h2 className="text-sm font-semibold text-gray-700">Medicines</h2>
             <button
               type="button"
-              onClick={() => append({ name: '', medicine_master_id: '', strength: '', dosage_form: '', dose: '', frequency: '1-0-1-0', food_instruction: 'N/A', duration: '5 days', route: 'oral' })}
+              onClick={() => append({ name: '', medicine_master_id: '', strength: '', dosage_form: '', dose: '', frequency: '1-0-1-0', food_instruction: 'N/A', duration: '5 days', quantity: '', route: 'oral' })}
               className="text-xs text-primary hover:underline font-medium flex items-center gap-1"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -304,6 +315,11 @@ export default function PrescriptionPage() {
                     <select {...register(`medicines.${i}.duration`)} className={rx_input(false)}>
                       {DURATIONS.map(d => <option key={d} value={d}>{d}</option>)}
                     </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Quantity *</label>
+                    <input {...register(`medicines.${i}.quantity`)} placeholder="e.g. 10" className={rx_input(!!errors.medicines?.[i]?.quantity)} />
                   </div>
 
                   <div>

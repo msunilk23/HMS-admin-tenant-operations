@@ -196,6 +196,7 @@ export interface MedicineItem {
   duration: string
   route: string
   timing_relative_to_food?: string
+  quantity?: string
   instructions?: string
 }
 

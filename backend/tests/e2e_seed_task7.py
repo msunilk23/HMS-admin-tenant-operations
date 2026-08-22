@@ -19,8 +19,12 @@ SCHEMA = "e2e_task7"
 DOCTOR_USERNAME = "e2e_doctor_task7"
 DOCTOR_EMAIL = "e2e-doctor-task7@example.test"
 DOCTOR_PASSWORD = "E2eDoctor@123"
+RECEPTIONIST_USERNAME = "e2e_receptionist_task7"
+RECEPTIONIST_EMAIL = "e2e-receptionist-task7@example.test"
+RECEPTIONIST_PASSWORD = "E2eReception@123"
 TENANT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-tenant")
 DOCTOR_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor")
+RECEPTIONIST_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-receptionist")
 DOCTOR_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-profile")
 DEPARTMENT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-department")
 PATIENT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-patient")
@@ -42,14 +46,15 @@ async def seed():
         await conn.execute(text(f'CREATE SCHEMA "{SCHEMA}"'))
         await conn.execute(text(f'SET search_path TO "{SCHEMA}", public'))
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_tables(), checkfirst=False))
-        await conn.execute(text('DELETE FROM public.users WHERE id = :id OR username = :username'), {"id": DOCTOR_USER_ID, "username": DOCTOR_USERNAME})
+        await conn.execute(text('DELETE FROM public.users WHERE id IN (:doctor_id, :receptionist_id) OR username IN (:doctor_username, :receptionist_username)'), {"doctor_id": DOCTOR_USER_ID, "receptionist_id": RECEPTIONIST_USER_ID, "doctor_username": DOCTOR_USERNAME, "receptionist_username": RECEPTIONIST_USERNAME})
         await conn.execute(text('DELETE FROM public.tenants WHERE id = :id OR schema_name = :schema'), {"id": TENANT_ID, "schema": SCHEMA})
     maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
     async with maker() as session:
         await session.execute(text('SET search_path TO public'))
         tenant = Tenant(id=TENANT_ID, schema_name=SCHEMA, hospital_name="E2E Task 7 Hospital", contact_email="e2e-task7@example.test", display_token=f"e2e-{uuid.uuid4().hex}")
         user = User(id=DOCTOR_USER_ID, tenant_id=TENANT_ID, tenant_name=SCHEMA, email=DOCTOR_EMAIL, username=DOCTOR_USERNAME, hashed_password=hash_password(DOCTOR_PASSWORD), full_name="E2E Doctor", role="doctor", is_active=True, must_change_password=False)
-        session.add_all([tenant, user])
+        receptionist = User(id=RECEPTIONIST_USER_ID, tenant_id=TENANT_ID, tenant_name=SCHEMA, email=RECEPTIONIST_EMAIL, username=RECEPTIONIST_USERNAME, hashed_password=hash_password(RECEPTIONIST_PASSWORD), full_name="E2E Receptionist", role="receptionist", is_active=True, must_change_password=False)
+        session.add_all([tenant, user, receptionist])
         await session.commit()
         await session.execute(text(f'SET search_path TO "{SCHEMA}", public'))
         department = Department(id=DEPARTMENT_ID, name="E2E General Medicine", is_active=True)
@@ -81,7 +86,7 @@ async def cleanup():
         await conn.execute(text('DELETE FROM public.visits WHERE id = :id OR doctor_id = :doctor_id'), {"id": VISIT_ID, "doctor_id": DOCTOR_ID})
         await conn.execute(text('DELETE FROM public.doctors WHERE id = :id OR department_id = :department_id'), {"id": DOCTOR_ID, "department_id": DEPARTMENT_ID})
         await conn.execute(text('DELETE FROM public.departments WHERE id = :id'), {"id": DEPARTMENT_ID})
-        await conn.execute(delete(User).where(User.id == DOCTOR_USER_ID))
+        await conn.execute(delete(User).where(User.id.in_([DOCTOR_USER_ID, RECEPTIONIST_USER_ID])))
         await conn.execute(delete(Tenant).where(Tenant.id == TENANT_ID))
     await engine.dispose()
 

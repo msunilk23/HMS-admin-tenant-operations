@@ -99,6 +99,13 @@ async def app_client(monkeypatch_module):
     user_b_id = uuid.uuid4()
 
     async with engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM public.patients WHERE phone = ANY(:phones) OR aadhar_number = ANY(:aadhars)"),
+            {
+                "phones": ["9000000001", "9000000002", "9000000003", "9000000004"],
+                "aadhars": ["111122223333", "222233334444", "333344445555", "444455556666"],
+            },
+        )
         for schema in (HOSPITAL_A_SCHEMA, HOSPITAL_B_SCHEMA):
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -164,7 +171,7 @@ async def app_client(monkeypatch_module):
     for schema in (HOSPITAL_A_SCHEMA, HOSPITAL_B_SCHEMA):
         async with engine.begin() as conn:
             await conn.execute(text(f'SET search_path TO "{schema}", public'))
-            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tenant_tables))
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tenant_tables, checkfirst=False))
 
     await engine.dispose()
 
@@ -183,6 +190,13 @@ async def app_client(monkeypatch_module):
     async with cleanup_engine.begin() as conn:
         for schema in (HOSPITAL_A_SCHEMA, HOSPITAL_B_SCHEMA):
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await conn.execute(
+            text("DELETE FROM public.patients WHERE phone = ANY(:phones) OR aadhar_number = ANY(:aadhars)"),
+            {
+                "phones": ["9000000001", "9000000002", "9000000003", "9000000004"],
+                "aadhars": ["111122223333", "222233334444", "333344445555", "444455556666"],
+            },
+        )
         await conn.execute(text("DELETE FROM public.users WHERE id = ANY(:ids)"), {"ids": [user_a_id, user_b_id]})
         await conn.execute(text("DELETE FROM public.tenants WHERE id = ANY(:ids)"), {"ids": [tenant_a_id, tenant_b_id]})
     await cleanup_engine.dispose()

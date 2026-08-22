@@ -1,0 +1,79 @@
+name: Task 7 controlled clinical data E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'infra/**'
+
+jobs:
+  task7-e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: hospital_user
+          POSTGRES_PASSWORD: hospital_pass
+          POSTGRES_DB: hospital
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd="pg_isready -U hospital_user -d hospital"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+    env:
+      DATABASE_URL: postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital
+      SECRET_KEY: task7-ci-secret
+      REDIS_URL: redis://localhost:6379
+      E2E_DATABASE_URL: postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital
+      E2E_BASE_URL: http://localhost:5173
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Upgrade database
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Start backend
+        working-directory: backend
+        run: uvicorn app.main:app --host 0.0.0.0 --port 8000 > ../backend-e2e.log 2>&1 &
+      - name: Start frontend
+        working-directory: frontend
+        run: npm run dev -- --host 0.0.0.0 > ../frontend-e2e.log 2>&1 &
+      - name: Wait for services
+        run: |
+          python - <<'PY'
+          import time, urllib.request
+          for url in ('http://localhost:8000/health', 'http://localhost:5173/login'):
+              for _ in range(60):
+                  try:
+                      urllib.request.urlopen(url, timeout=2)
+                      break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  raise SystemExit(f'Service did not start: {url}')
+          PY
+      - name: Run Task 7 browser suite
+        working-directory: frontend
+        run: npm run e2e -- --reporter=line
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task7-playwright-report
+          path: frontend/playwright-report/

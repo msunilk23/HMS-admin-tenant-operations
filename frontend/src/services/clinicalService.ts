@@ -2,7 +2,7 @@ import apiClient from './apiClient'
 import type { Prescription, Invoice, Doctor, Department, Appointment, AppointmentSlot, CheckInResult } from '@/types/common'
 
 export interface MedicineItemCreate {
-  name?: string
+  medicine?: string
   medicine_master_id?: string
   strength?: string
   dosage_form?: string

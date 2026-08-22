@@ -21,6 +21,12 @@ async function authRequest(request: APIRequestContext) {
   return { Authorization: `Bearer ${token}` }
 }
 
+async function loginAs(request: APIRequestContext, username: string, password: string) {
+  const response = await request.post('/api/v1/auth/login', { data: { login_id: username, password } })
+  expect(response.ok()).toBeTruthy()
+  return { Authorization: `Bearer ${(await response.json()).access_token}` }
+}
+
 test.describe.serial('Task 7 controlled clinical data', () => {
   test('doctor searches ICD-10 by code and description, selects, saves, and reloads diagnosis', async ({ page }) => {
     await login(page)
@@ -65,17 +71,17 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     await medicineSearch.fill('E2E Paracetamol')
     await expect(page.getByText(/500 mg.*Tablet/)).toBeVisible()
     await page.getByRole('button', { name: /E2E Paracetamol.*500 mg.*Tablet/i }).click()
-    await page.getByLabel(/dose/i).first().fill('1')
-    await page.getByLabel(/duration/i).first().selectOption({ label: '5 days' })
-    await page.getByLabel(/quantity/i).first().fill('5')
+    await page.getByPlaceholder(/e\.g\. 500mg/i).first().fill('1')
+    await page.locator('select').nth(0).selectOption({ label: '5 days' })
+    await page.getByPlaceholder(/e\.g\. 10/i).first().fill('5')
     await page.getByRole('button', { name: /add medicine/i }).click()
     const secondSearch = page.getByPlaceholder(/search generic, brand, strength or form/i).nth(1)
     await secondSearch.fill('E2E Crocin')
     await expect(page.getByText(/650 mg.*Capsule/)).toBeVisible()
     await page.getByRole('button', { name: /E2E Paracetamol.*650 mg.*Capsule/i }).click()
-    await page.getByLabel(/dose/i).nth(1).fill('1')
-    await page.getByLabel(/duration/i).nth(1).selectOption({ label: '3 days' })
-    await page.getByLabel(/quantity/i).nth(1).fill('3')
+    await page.getByPlaceholder(/e\.g\. 500mg/i).nth(1).fill('1')
+    await page.locator('select').nth(2).selectOption({ label: '3 days' })
+    await page.getByPlaceholder(/e\.g\. 10/i).nth(1).fill('3')
     await page.getByRole('button', { name: /save prescription|complete/i }).click()
     await expect(page).toHaveURL(/doctor\/consultation/)
 
@@ -90,10 +96,35 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     expect(medicines.ok()).toBeTruthy()
     expect(await medicines.json()).toEqual([])
 
+    const receptionistHeaders = await loginAs(request, 'e2e_receptionist_task7', 'E2eReception@123')
     const consultation = await request.post('/api/v1/consultations', {
-      headers: { Authorization: headers.Authorization },
+      headers: receptionistHeaders,
       data: { visit_id: doctor.visitId, chief_complaint: 'authorization check' },
     })
-    expect([200, 201, 409]).toContain(consultation.status())
+    expect(consultation.status()).toBe(403)
+  })
+
+  test('invalid session and forged tenant header cannot access controlled data', async ({ page, request }) => {
+    await login(page)
+    const headers = await authRequest(request)
+    const invalid = await request.get('/api/v1/master-data/icd10?q=E2E', { headers: { Authorization: 'Bearer malformed.token.value' } })
+    expect(invalid.status()).toBe(401)
+    const forged = await request.get('/api/v1/master-data/medicines?q=E2E', {
+      headers: { ...headers, 'X-Tenant-Schema': 'hospital_b' },
+    })
+    expect(forged.ok()).toBeTruthy()
+    const body = await forged.json()
+    expect(body.every((item: { generic_name: string }) => item.generic_name.startsWith('E2E'))).toBeTruthy()
+    expect(JSON.stringify(body)).not.toContain('Hospital B')
+
+    const changed = await request.post('/api/v1/auth/change-password', {
+      headers,
+      data: { current_password: doctor.password, new_password: 'E2eDoctor@456' },
+    })
+    expect(changed.ok()).toBeTruthy()
+    const oldSession = await request.get('/api/v1/master-data/icd10?q=E2E', { headers })
+    expect(oldSession.status()).toBe(401)
+    await page.reload()
+    await expect(page).toHaveURL(/login/)
   })
 })

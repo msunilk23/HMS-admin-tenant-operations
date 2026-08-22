@@ -44,6 +44,7 @@ async def create_prescription(
             master = await session.get(MedicineMaster, item.medicine_master_id)
             if not master or not master.is_active:
                 raise HTTPException(status_code=422, detail="Selected medicine is missing or inactive")
+            data["medicine_master_id"] = str(item.medicine_master_id)
             data["medicine"] = master.generic_name
             data["name_snapshot"] = master.brand_name or master.generic_name
             data["strength"] = item.strength or master.strength
@@ -196,6 +197,7 @@ async def update_prescription(
                 master = await session.get(MedicineMaster, item.medicine_master_id)
                 if not master or not master.is_active:
                     raise HTTPException(status_code=422, detail="Selected medicine is missing or inactive")
+                item_data["medicine_master_id"] = str(item.medicine_master_id)
                 item_data["medicine"] = master.generic_name
                 item_data["name_snapshot"] = master.brand_name or master.generic_name
                 item_data["strength"] = item.strength or master.strength
