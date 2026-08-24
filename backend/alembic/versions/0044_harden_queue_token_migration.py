@@ -42,6 +42,59 @@ def upgrade() -> None:
     bind = op.get_bind()
     current_schema = bind.execute(text("SELECT current_schema()")).scalar()
     if current_schema == "public":
+        # The application startup migration historically supplied these
+        # columns, but backend tests and fresh deployments run before startup.
+        # Keep Alembic itself authoritative for the public user contract.
+        bind.execute(text("""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'username'
+                ) THEN
+                    ALTER TABLE public.users ADD COLUMN username VARCHAR(50);
+                    UPDATE public.users
+                                             SET username = COALESCE(NULLIF(LOWER(SPLIT_PART(COALESCE(email, ''), '@', 1)), ''), 'user')
+                                                                     || LPAD(row_numbered.rn::text, 4, '0')
+                                            FROM (
+                                                    SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn
+                                                        FROM public.users
+                                            ) AS row_numbered
+                                         WHERE public.users.id = row_numbered.id AND public.users.username IS NULL;
+                    ALTER TABLE public.users ALTER COLUMN username SET NOT NULL;
+                    CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON public.users (username);
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'phone'
+                ) THEN
+                    ALTER TABLE public.users ADD COLUMN phone VARCHAR(20);
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'tenant_name'
+                ) THEN
+                    ALTER TABLE public.users ADD COLUMN tenant_name VARCHAR(63);
+                    UPDATE public.users u
+                       SET tenant_name = t.schema_name
+                      FROM public.tenants t
+                     WHERE t.id = u.tenant_id;
+                    ALTER TABLE public.users ALTER COLUMN tenant_name SET NOT NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'must_change_password'
+                ) THEN
+                    ALTER TABLE public.users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT TRUE;
+                    UPDATE public.users SET must_change_password = FALSE;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'password_changed_at'
+                ) THEN
+                    ALTER TABLE public.users ADD COLUMN password_changed_at TIMESTAMP NULL;
+                END IF;
+            END $$;
+        """))
         return
 
     inspector = sa.inspect(bind)
