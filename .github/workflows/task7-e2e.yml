@@ -30,6 +30,7 @@ jobs:
       REDIS_URL: redis://localhost:6379
       E2E_DATABASE_URL: postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital
       E2E_BASE_URL: http://localhost:5173
+      PYTHONPATH: ${{ github.workspace }}/backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
