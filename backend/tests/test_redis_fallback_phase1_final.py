@@ -29,6 +29,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 PG_URL = os.environ["DATABASE_URL"]
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 
 def _postgres_reachable() -> bool:
@@ -65,10 +66,13 @@ async def _reset_engine_for_this_loop():
     singleton bound to whichever loop first touched it, so it must be
     disposed before every test to attach cleanly to the current loop.
     """
+    import app.core.redis_client as redis_client_module
+    redis_client_module._client = None
     from app.db.engine import engine as app_engine
     await app_engine.dispose()
     yield
     await app_engine.dispose()
+    redis_client_module._client = None
 
 
 @pytest_asyncio.fixture
@@ -187,6 +191,7 @@ async def test_redis_and_postgres_both_unavailable_fails_securely(monkeypatch, t
 @pytest.mark.asyncio
 async def test_recovery_after_redis_becomes_available_again(monkeypatch, tenant_rows):
     from app.middleware import tenant as tenant_mw
+    from redis.asyncio import Redis
 
     monkeypatch.setattr(tenant_mw, "get_cached_tenant_status", _RedisDown())
     monkeypatch.setattr(tenant_mw, "set_cached_tenant_status", _RedisDown())
@@ -198,10 +203,12 @@ async def test_recovery_after_redis_becomes_available_again(monkeypatch, tenant_
     # left over from the earlier outage.
     monkeypatch.undo()
     from app.core.redis_client import invalidate_tenant_status_cache
-    try:
-        await invalidate_tenant_status_cache(str(tenant_rows["active_id"]))
-    except Exception:
-        pytest.skip("Redis not reachable in this environment for the recovery leg")
+    import app.core.redis_client as redis_client_module
+    redis_client_module._client = None
+    redis = Redis.from_url(REDIS_URL)
+    assert await redis.ping() is True
+    await redis.aclose()
+    await invalidate_tenant_status_cache(str(tenant_rows["active_id"]))
 
     second = await tenant_mw._load_tenant_status(str(tenant_rows["active_id"]))
     assert second is not None
