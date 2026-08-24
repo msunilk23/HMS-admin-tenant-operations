@@ -59,3 +59,10 @@ Run migration and deployment checks against disposable PostgreSQL/Redis services
 ## Operational safety
 
 PostgreSQL is authoritative. Back up PostgreSQL before migrations, retain Redis as disposable supporting infrastructure, monitor backend logs, and verify that tenant-scoped audit, billing, lab, feedback, and roster records remain in the correct schema.
+
+For tenant administrator recovery, apply the latest Alembic migration before
+using the Super Admin reset action. The temporary password is displayed only
+in the successful administrative response and must be handed to the tenant
+administrator through the approved operational channel. It is not present in
+logs, audit metadata, URLs, or browser storage. Confirm that the old session
+is rejected and that the first login requires a permanent password change.

@@ -65,6 +65,20 @@ role changes, password changes/resets, logout, and tenant deactivation
 invalidate earlier sessions. Redis blocklists remain an acceleration layer;
 database state is authoritative when Redis is unavailable.
 
+## Super Admin Tenant Administrator Recovery
+
+`POST /api/v1/super/tenants/{tenant_id}/admin/reset-password` is restricted to
+an active `super_admin`. The JSON body must contain a trimmed `reason` between
+5 and 500 characters. The selected tenant must be active and have exactly one
+active `hospital_admin`; otherwise the API returns `404` or `409`.
+
+The response contains a cryptographically generated temporary password exactly
+once. It is never logged, audited, or retrievable from another endpoint. The
+administrator's old access and refresh tokens are invalidated by the database
+session version and `tokens_valid_after`, and `must_change_password` is set to
+`true`. Redis rate limiting and cache cleanup are best-effort and cannot weaken
+database-backed invalidation. Repeated resets return `429`.
+
 ## Error conventions
 
 - `401`: missing or invalid authentication
