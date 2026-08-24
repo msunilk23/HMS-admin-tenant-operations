@@ -12,16 +12,21 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete as sa_delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user, require_role
 from app.core.features import ALL_FEATURES, PLAN_FEATURES
-from app.core.redis_client import invalidate_feature_cache, invalidate_tenant_status_cache
+from app.core.redis_client import (
+    allow_tenant_admin_password_reset,
+    invalidate_feature_cache,
+    invalidate_tenant_status_cache,
+)
 from app.core.security import hash_password, generate_temp_password
 from app.db.engine import get_session
+from app.models.public.platform_audit_log import PlatformAuditLog
 from app.models.public.tenant_feature import TenantFeature
 from app.models.public.user import Tenant, User
 
@@ -59,6 +64,8 @@ class TenantDetail(BaseModel):
     plan: str
     is_active: bool
     features: dict[str, bool]   # {feature_key: enabled}
+    admin_username: str | None = None
+    admin_email: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -80,6 +87,28 @@ class FeatureBulkSet(BaseModel):
 
 class FeatureToggle(BaseModel):
     enabled: bool
+
+
+class TenantAdminPasswordResetRequest(BaseModel):
+    reason: str = Field(..., min_length=5, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not 5 <= len(value) <= 500:
+            raise ValueError("reason must be between 5 and 500 characters")
+        return value
+
+
+class TenantAdminPasswordResetResponse(BaseModel):
+    message: str
+    tenant_id: uuid.UUID
+    user_id: uuid.UUID
+    username: str
+    email: str | None
+    temporary_password: str
+    must_change_password: bool
 
 
 class CreateTenantRequest(BaseModel):
@@ -240,6 +269,14 @@ async def get_tenant(
     """Get a single tenant with all feature toggle states."""
     tenant = await _get_tenant_or_404(tenant_id, session)
     feature_map = await _get_feature_map(tenant.id, session)
+    admins = (await session.execute(
+        select(User.username, User.email).where(
+            User.tenant_id == tenant.id,
+            User.role == "hospital_admin",
+            User.is_active == True,  # noqa: E712
+        )
+    )).all()
+    admin_username, admin_email = admins[0] if len(admins) == 1 else (None, None)
     return TenantDetail(
         id=tenant.id,
         hospital_name=tenant.hospital_name,
@@ -252,6 +289,81 @@ async def get_tenant(
         plan=tenant.plan,
         is_active=tenant.is_active,
         features=feature_map,
+        admin_username=admin_username,
+        admin_email=admin_email,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/admin/reset-password",
+    response_model=TenantAdminPasswordResetResponse,
+)
+async def reset_tenant_admin_password(
+    tenant_id: uuid.UUID,
+    body: TenantAdminPasswordResetRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("super_admin")),
+) -> TenantAdminPasswordResetResponse:
+    """Reset exactly one active tenant hospital_admin and return its secret once."""
+    tenant = await session.get(Tenant, tenant_id)
+    if not tenant or not tenant.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active tenant not found")
+
+    try:
+        allowed = await allow_tenant_admin_password_reset(current_user["sub"], tenant_id)
+    except Exception:
+        # Redis is not part of the durable security boundary; DB versioning below
+        # still revokes every existing access and refresh token.
+        allowed = True
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Password reset rate limit exceeded")
+
+    admins = (await session.execute(
+        select(User)
+        .where(User.tenant_id == tenant_id, User.role == "hospital_admin", User.is_active == True)  # noqa: E712
+        .with_for_update()
+    )).scalars().all()
+    if not admins:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active tenant administrator not found")
+    if len(admins) != 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant has multiple active administrators")
+
+    admin = admins[0]
+    temporary_password = generate_temp_password()
+    admin.hashed_password = hash_password(temporary_password)
+    admin.must_change_password = True
+    admin.password_changed_at = None
+    admin.session_version = getattr(admin, "session_version", 0) + 1
+    admin.tokens_valid_after = datetime.now(timezone.utc)
+
+    from app.services.audit_service import get_audit_request_context
+    request_id, source_ip = get_audit_request_context()
+    session.add(PlatformAuditLog(
+        actor_user_id=uuid.UUID(current_user["sub"]),
+        actor_role="super_admin",
+        tenant_id=tenant.id,
+        target_user_id=admin.id,
+        action="TENANT_ADMIN_PASSWORD_RESET",
+        reason=body.reason,
+        request_id=request_id,
+        source_ip=source_ip or (request.client.host if request.client else None),
+    ))
+    await session.commit()
+
+    try:
+        await invalidate_tenant_status_cache(tenant.id)
+    except Exception:
+        pass
+
+    return TenantAdminPasswordResetResponse(
+        message="Tenant administrator password reset successfully",
+        tenant_id=tenant.id,
+        user_id=admin.id,
+        username=admin.username,
+        email=admin.email,
+        temporary_password=temporary_password,
+        must_change_password=True,
     )
 
 

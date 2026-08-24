@@ -31,7 +31,7 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 revision = "0044"
-down_revision = "0043"
+down_revision = "0043_shared_documents"
 branch_labels = None
 depends_on = None
 

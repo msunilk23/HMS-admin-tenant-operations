@@ -29,6 +29,7 @@ from app.db.base import Base  # noqa: E402
 import app.models.public.user  # noqa: F401, E402
 import app.models.public.tenant_feature  # noqa: F401, E402
 import app.models.public.audit_log  # noqa: F401, E402
+import app.models.public.platform_audit_log  # noqa: F401, E402
 import app.models.tenant  # noqa: F401, E402
 
 config = context.config
