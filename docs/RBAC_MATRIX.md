@@ -18,6 +18,11 @@ Backend dependencies are authoritative. Frontend route and navigation guards are
 | User/role management | No | No | No | No | No | No | Manage tenant staff | Manage platform users/tenants |
 | Audit records | No direct access | No direct access | No direct access | No direct access | No direct access | No direct access | Tenant administration scope | Platform scope |
 
+The Super Admin platform scope includes resetting the password of exactly one
+active `hospital_admin` for an active selected tenant. It does not permit
+resetting super admins or other tenant roles, and every reset requires a
+reason and creates a secret-free platform audit record.
+
 ## Enforcement rules
 
 - Every tenant route is protected by tenant context and role dependencies.

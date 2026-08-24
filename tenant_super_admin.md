@@ -168,6 +168,21 @@ raise HTTPException(
 
 ## Frontend Architecture
 
+### Tenant administrator password recovery
+
+From the tenant detail panel, an active Super Admin can reset the single active
+tenant `hospital_admin`. The action requires a reason and terminates the
+administrator's existing sessions. The generated temporary password is shown
+once in memory with a copy action; closing the panel clears it. The
+administrator must change it immediately after login.
+
+The API is `POST /api/v1/super/tenants/{tenant_id}/admin/reset-password`.
+It rejects inactive tenants, missing or ambiguous administrators, all other
+roles, and repeated requests over the Redis-backed limit. PostgreSQL user
+session versioning and `tokens_valid_after` remain authoritative if Redis is
+unavailable. Platform audit records contain actor, tenant, target, reason,
+request ID, and source IP, but never a password, hash, JWT, or Redis value.
+
 ### Phase F — authStore: expose features
 
 **File:** `frontend/src/features/auth/authStore.ts`

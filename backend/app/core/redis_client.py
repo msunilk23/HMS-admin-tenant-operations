@@ -113,6 +113,12 @@ async def get_tenant_forced_logout_time(tenant_id: uuid.UUID | str) -> float | N
 _TENANT_STATUS_PREFIX = "tenant:status:"
 _TENANT_STATUS_TTL = 30  # seconds
 
+# Password reset attempts are short-lived and scoped to actor and tenant.
+# PostgreSQL remains authoritative for session invalidation.
+_PASSWORD_RESET_PREFIX = "security:tenant-admin-password-reset:"
+_PASSWORD_RESET_WINDOW = 15 * 60
+_PASSWORD_RESET_LIMIT = 3
+
 
 def _tenant_status_key(tenant_id: uuid.UUID | str) -> str:
     return f"{_TENANT_STATUS_PREFIX}{tenant_id}"
@@ -140,3 +146,13 @@ async def invalidate_tenant_status_cache(tenant_id: uuid.UUID | str) -> None:
     """Force the next request to re-read tenant status from PostgreSQL immediately."""
     redis = get_redis()
     await redis.delete(_tenant_status_key(tenant_id))
+
+
+async def allow_tenant_admin_password_reset(actor_id: uuid.UUID | str, tenant_id: uuid.UUID | str) -> bool:
+    """Allow a bounded number of resets; Redis errors are handled by the caller."""
+    redis = get_redis()
+    key = f"{_PASSWORD_RESET_PREFIX}{actor_id}:{tenant_id}"
+    count = await redis.incr(key)
+    if count == 1:
+        await redis.expire(key, _PASSWORD_RESET_WINDOW)
+    return count <= _PASSWORD_RESET_LIMIT

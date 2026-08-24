@@ -24,6 +24,10 @@ def reset_audit_request_context(tokens) -> None:
     _SOURCE_IP.reset(tokens[1])
 
 
+def get_audit_request_context() -> tuple[str | None, str | None]:
+    return _REQUEST_ID.get(), _SOURCE_IP.get()
+
+
 def _is_sensitive_key(key: object) -> bool:
     normalized = str(key).lower().replace("-", "_")
     return any(term in normalized for term in (

@@ -25,6 +25,8 @@ interface TenantListItem {
 
 interface TenantDetail extends Omit<TenantListItem, 'enabled_features' | 'feature_count'> {
   features: Record<string, boolean>
+  admin_username: string | null
+  admin_email: string | null
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -84,6 +86,16 @@ interface CreateTenantResponse {
   default_password: string
 }
 
+interface TenantAdminPasswordResetResponse {
+  message: string
+  tenant_id: string
+  user_id: string
+  username: string
+  email: string | null
+  temporary_password: string
+  must_change_password: boolean
+}
+
 const superApi = {
   listTenants: () => apiClient.get<TenantListItem[]>('/super/hospitals').then((r) => r.data),
   getTenant: (id: string) => apiClient.get<TenantDetail>(`/super/hospitals/${id}`).then((r) => r.data),
@@ -97,6 +109,8 @@ const superApi = {
     apiClient.post<CreateTenantResponse>('/super/hospitals', body).then((r) => r.data),
   deleteTenant: (id: string) =>
     apiClient.delete(`/super/hospitals/${id}`),
+  resetTenantAdminPassword: (id: string, reason: string) =>
+    apiClient.post<TenantAdminPasswordResetResponse>(`/super/tenants/${id}/admin/reset-password`, { reason }).then((r) => r.data),
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
@@ -502,6 +516,9 @@ function TenantDetailPanel({
 }) {
   const qc = useQueryClient()
   const [confirmSuspend, setConfirmSuspend] = useState(false)
+  const [showReset, setShowReset] = useState(false)
+  const [resetReason, setResetReason] = useState('')
+  const [resetResult, setResetResult] = useState<TenantAdminPasswordResetResponse | null>(null)
 
   const { data: tenant, isLoading } = useQuery({
     queryKey: ['super-tenant', tenantId],
@@ -545,6 +562,15 @@ function TenantDetailPanel({
     onError: () => { setConfirmSuspend(false); onToast('Action failed', 'error') },
   })
 
+  const resetAdmin = useMutation({
+    mutationFn: () => superApi.resetTenantAdminPassword(tenantId, resetReason.trim()),
+    onSuccess: (data) => {
+      setResetResult(data)
+      setShowReset(false)
+      setResetReason('')
+    },
+  })
+
   return (
     <>
       {/* Backdrop */}
@@ -573,6 +599,77 @@ function TenantDetailPanel({
             <div className="text-sm text-gray-600 space-y-1">
               <p><span className="font-medium text-gray-800">Schema:</span> {tenant.schema_name}</p>
               <p><span className="font-medium text-gray-800">Email:</span> {tenant.contact_email}</p>
+            </div>
+
+            <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Tenant Administrator</h3>
+                {tenant.admin_username ? (
+                  <p className="text-sm text-gray-700 mt-1">
+                    {tenant.admin_username} · {tenant.admin_email ?? 'No email registered'}
+                  </p>
+                ) : (
+                  <p className="text-sm text-amber-800 mt-1">No single active hospital administrator found.</p>
+                )}
+              </div>
+              {resetResult ? (
+                <div className="bg-white border border-amber-200 rounded-lg p-3 space-y-3">
+                  <p className="text-sm font-medium text-gray-900">Temporary password generated</p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 bg-gray-100 rounded px-2 py-1.5 text-sm font-mono select-all">{resetResult.temporary_password}</code>
+                    <button
+                      type="button"
+                      onClick={() => void navigator.clipboard.writeText(resetResult.temporary_password)}
+                      className="px-3 py-1.5 bg-gray-900 text-white rounded text-xs font-medium hover:bg-gray-700"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <p className="text-xs text-amber-800">Existing sessions were terminated. The administrator must change this password at next login.</p>
+                  <button
+                    type="button"
+                    onClick={() => setResetResult(null)}
+                    className="text-xs text-gray-600 hover:text-gray-900"
+                  >
+                    Clear temporary password
+                  </button>
+                </div>
+              ) : showReset ? (
+                <div className="bg-white border border-amber-200 rounded-lg p-3 space-y-3">
+                  <p className="text-xs text-gray-700">Existing sessions will be terminated and the tenant administrator must change the password at next login.</p>
+                  <textarea
+                    value={resetReason}
+                    onChange={(e) => setResetReason(e.target.value)}
+                    maxLength={500}
+                    rows={3}
+                    placeholder="Reason for this reset (required)"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                  />
+                  {resetAdmin.isError && (
+                    <p className="text-xs text-red-600">{(resetAdmin.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Password reset failed.'}</p>
+                  )}
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => { setShowReset(false); setResetReason(''); resetAdmin.reset() }} className="flex-1 border border-gray-300 text-gray-700 text-sm py-2 rounded-lg">Cancel</button>
+                    <button
+                      type="button"
+                      onClick={() => resetAdmin.mutate()}
+                      disabled={resetReason.trim().length < 5 || resetAdmin.isPending}
+                      className="flex-1 bg-amber-600 text-white text-sm py-2 rounded-lg font-medium hover:bg-amber-700 disabled:opacity-50"
+                    >
+                      {resetAdmin.isPending ? 'Resetting…' : 'Confirm Reset'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowReset(true)}
+                  disabled={!tenant.is_active || !tenant.admin_username}
+                  className="w-full border border-amber-500 text-amber-800 text-sm py-2 rounded-lg font-medium hover:bg-amber-100 disabled:opacity-50"
+                >
+                  Reset Tenant Admin Password
+                </button>
+              )}
             </div>
 
             {/* Plan selector */}

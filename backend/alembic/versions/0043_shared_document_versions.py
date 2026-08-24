@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 
-revision = "0043"
+revision = "0043_shared_documents"
 down_revision = "0042"
 branch_labels = None
 depends_on = None

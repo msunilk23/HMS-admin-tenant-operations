@@ -45,11 +45,9 @@ alembic upgrade head
 python -m app.scripts.seed
 ```
 
-Default credentials after seed:
-- **Hospital Admin**: `admin@shankar-hospital.in` / `ChangeMe@123`
-- **Super Admin**: `superadmin@smarthosp.in` / `SuperAdmin@123`
-
-> ⚠️ Change these passwords immediately after first login.
+The seed command generates unique temporary passwords for the Hospital Admin
+and Super Admin and prints them exactly once. Store them securely and change
+them immediately after the first login; fixed seed passwords are not supported.
 
 ### 5. Install frontend dependencies (local dev)
 
