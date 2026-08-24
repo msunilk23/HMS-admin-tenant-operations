@@ -61,17 +61,19 @@ async def _provision_schema(engine, schema: str):
     from app.db.base import Base
     from app.models.tenant.appointment import Appointment
     from app.models.tenant.audit_log import AuditLog
+    from app.models.tenant.consultation import Consultation
     from app.models.tenant.department import Department
     from app.models.tenant.doctor import Doctor
     from app.models.tenant.document import DocumentVersion, DocumentVersionCounter
     from app.models.tenant.invoice import Invoice
+    from app.models.tenant.medicine_master import MedicineMaster
     from app.models.tenant.patient import Patient
     from app.models.tenant.prescription import Prescription, PrescriptionItem
     from app.models.tenant.visit import Visit
 
     tables = [
         Department.__table__, Doctor.__table__, Appointment.__table__,
-        Patient.__table__, Visit.__table__, Invoice.__table__,
+        Patient.__table__, Visit.__table__, Consultation.__table__, MedicineMaster.__table__, Invoice.__table__,
         Prescription.__table__, PrescriptionItem.__table__,
         DocumentVersion.__table__, DocumentVersionCounter.__table__,
         AuditLog.__table__,

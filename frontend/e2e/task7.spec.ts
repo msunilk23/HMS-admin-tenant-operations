@@ -154,6 +154,7 @@ test.describe.serial('Task 7 controlled clinical data', () => {
 
   test('doctor searches distinct medicines, fills multiple rows, and reloads prescription details', async ({ page }) => {
     const before = fixtureSnapshot()
+    const doctorUserId = before.tenants.hospital_a.doctor_user_id
 
     await login(page)
     await page.goto(`/doctor/prescription/${doctor.visitId}`)
@@ -228,7 +229,7 @@ test.describe.serial('Task 7 controlled clinical data', () => {
 
     for (const entry of audits) {
       expect(entry.tenant_schema).toBeTruthy()
-      expect(entry.user_id ?? doctor.visitId).toBeTruthy()
+      expect(entry.user_id).toBe(doctorUserId)
       expect(entry.role).toBeTruthy()
       expect(entry.visit_id).toBe(doctor.visitId)
       expect(entry.request_id).toBeTruthy()
@@ -332,6 +333,63 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     expect(consultation.status()).toBe(403)
   })
 
+  test('inactive ICD-10 is absent and invoice/prescription documents are immutable and tenant-isolated', async ({ request }) => {
+    const fixture = fixtureSnapshot()
+    const hospitalA = fixture.tenants.hospital_a
+    const hospitalB = fixture.tenants.hospital_b
+    const doctorHeaders = await authRequest(request)
+    const receptionistHeaders = await loginAs(request, 'e2e_receptionist_task7', 'E2eReception@123')
+
+    const inactiveIcd = await request.get('/api/v1/master-data/icd10?q=inactive', { headers: doctorHeaders })
+    expect(inactiveIcd.ok()).toBeTruthy()
+    expect(await inactiveIcd.json()).toEqual([])
+
+    const invoice = await request.post('/api/v1/billing', {
+      headers: receptionistHeaders,
+      data: { visit_id: hospitalA.visit_id, line_items: [{ description: 'E2E consultation', amount: 100 }] },
+    })
+    expect(invoice.status()).toBe(201)
+    const invoiceBody = await invoice.json() as { id: string }
+
+    const paid = await request.post(`/api/v1/billing/${invoiceBody.id}/pay`, {
+      headers: receptionistHeaders,
+      data: { payment_method: 'cash' },
+    })
+    expect(paid.ok()).toBeTruthy()
+
+    const invoiceFinalize = await request.post(`/api/v1/billing/${invoiceBody.id}/documents/finalize`, { headers: receptionistHeaders })
+    expect(invoiceFinalize.status()).toBe(201)
+    const invoiceDocument = await invoiceFinalize.json() as { version: number; checksum_sha256: string }
+    expect(invoiceDocument.version).toBe(1)
+    expect(invoiceDocument.checksum_sha256).toMatch(/^[a-f0-9]{64}$/)
+
+    const prescriptionFinalize = await request.post(`/api/v1/prescriptions/${hospitalA.visit_id}/documents/finalize`, { headers: doctorHeaders })
+    expect(prescriptionFinalize.status()).toBe(201)
+    const prescriptionDocument = await prescriptionFinalize.json() as { version: number; checksum_sha256: string }
+    expect(prescriptionDocument.version).toBe(1)
+    expect(prescriptionDocument.checksum_sha256).toMatch(/^[a-f0-9]{64}$/)
+
+    const invoiceDownload = await request.get(`/api/v1/billing/${invoiceBody.id}/documents/1/download`, { headers: receptionistHeaders })
+    expect(invoiceDownload.status()).toBe(200)
+    expect(invoiceDownload.headers()['content-type']).toContain('application/pdf')
+    expect((await invoiceDownload.body()).subarray(0, 4).toString()).toBe('%PDF')
+
+    const prescriptionDownload = await request.get(`/api/v1/prescriptions/${hospitalA.visit_id}/documents/1/download`, { headers: doctorHeaders })
+    expect(prescriptionDownload.status()).toBe(200)
+    expect(prescriptionDownload.headers()['content-type']).toContain('application/pdf')
+    expect((await prescriptionDownload.body()).subarray(0, 4).toString()).toBe('%PDF')
+
+    const invoiceHistory = await request.get(`/api/v1/billing/${invoiceBody.id}/documents`, { headers: receptionistHeaders })
+    expect(invoiceHistory.ok()).toBeTruthy()
+    expect((await invoiceHistory.json()).map((document: { version: number }) => document.version)).toEqual([1])
+
+    const crossTenant = await request.get(`/api/v1/billing/${invoiceBody.id}/documents/1/download`, {
+      headers: await loginAs(request, 'e2e_doctor_task7_b', 'E2eDoctorB@123'),
+    })
+    expect([403, 404]).toContain(crossTenant.status())
+    expect(hospitalB.tenant_id).not.toBe(hospitalA.tenant_id)
+  })
+
   test('invalid session and forged tenant header cannot access controlled data', async ({ page, request }) => {
     await login(page)
     const headers = await authRequest(request)
@@ -353,6 +411,20 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     const oldSession = await request.get('/api/v1/master-data/icd10?q=E2E', { headers })
     expect(oldSession.status()).toBe(401)
     await page.reload()
+    await expect(page).toHaveURL(/login/)
+  })
+
+  test('expired access token redirects a protected browser route to login', async ({ page }) => {
+    const now = Math.floor(Date.now() / 1000)
+    const expiredAccessToken = `${btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }))}.${btoa(JSON.stringify({ sub: 'expired', exp: now - 60, role: 'doctor' }))}.invalid`
+    await page.goto('/login')
+    await page.evaluate((accessToken) => {
+      localStorage.setItem('hospital-auth', JSON.stringify({
+        state: { accessToken, refreshToken: 'invalid-refresh', user: null, sessionExpired: false, features: null },
+        version: 0,
+      }))
+    }, expiredAccessToken)
+    await page.goto('/doctor/consultation')
     await expect(page).toHaveURL(/login/)
   })
 })

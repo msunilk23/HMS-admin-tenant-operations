@@ -157,7 +157,7 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
             forced_logout_time = None
         if forced_logout_time is not None:
             token_iat = token_data.get("iat")
-            if token_iat is not None and token_iat < forced_logout_time:
+            if token_iat is not None and token_iat < int(forced_logout_time):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Your session has been invalidated. Please log in again.",

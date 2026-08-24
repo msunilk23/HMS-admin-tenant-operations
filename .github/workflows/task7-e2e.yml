@@ -1,15 +1,14 @@
-name: Task 7 controlled clinical data E2E
+name: Phase 1 stabilization gate
 
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - 'infra/**'
+    branches: [phase1-stabilization]
+  push:
+    branches: [phase1-stabilization, phase1-final-release-fixes]
 
 jobs:
-  task7-e2e:
+  stabilization:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -42,9 +41,37 @@ jobs:
       - name: Upgrade database
         working-directory: backend
         run: alembic upgrade head
+      - name: Verify migration downgrade and re-upgrade
+        working-directory: backend
+        run: |
+          alembic downgrade -2
+          alembic upgrade head
+          test "$(alembic heads | grep -c '(head)')" -eq 1
+      - name: Run backend regression suite
+        working-directory: backend
+        run: pytest tests/ -q
+      - name: Run critical PostgreSQL tests with zero skips
+        working-directory: backend
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest tests/test_document_integrity_phase1_taskEF.py tests/test_migrations_phase1_taskG.py -q | tee critical-pytest.txt
+          ! grep -Eq '[0-9]+ skipped' critical-pytest.txt
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+      - name: Frontend type-check
+        working-directory: frontend
+        run: npm run type-check
+      - name: Frontend lint
+        working-directory: frontend
+        run: npm run lint
+      - name: Frontend unit tests
+        working-directory: frontend
+        run: npm run test:unit
+      - name: Frontend production build
+        working-directory: frontend
+        run: npm run build
       - name: Install Playwright Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
@@ -68,12 +95,15 @@ jobs:
               else:
                   raise SystemExit(f'Service did not start: {url}')
           PY
-      - name: Run Task 7 browser suite
+      - name: Run Phase 1 browser suite
         working-directory: frontend
         run: npm run e2e -- --reporter=line
-      - name: Upload Playwright report
-        if: always()
+      - name: Upload Playwright artifacts on failure
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: task7-playwright-report
-          path: frontend/playwright-report/
+          name: phase1-playwright-failure-artifacts
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          if-no-files-found: ignore
