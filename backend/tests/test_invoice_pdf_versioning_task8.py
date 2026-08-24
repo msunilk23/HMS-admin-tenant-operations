@@ -26,7 +26,7 @@ from app.models.tenant.appointment import Appointment
 from app.models.tenant.department import Department
 from app.models.tenant.doctor import Doctor
 from app.models.tenant.invoice import Invoice
-from app.models.tenant.invoice_document import InvoiceDocumentVersion
+from app.models.tenant.document import DOCUMENT_TYPE_INVOICE, DocumentVersion, DocumentVersionCounter
 from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit
 
@@ -44,7 +44,8 @@ _TABLES = [
     Appointment.__table__,
     Visit.__table__,
     Invoice.__table__,
-    InvoiceDocumentVersion.__table__,
+    DocumentVersion.__table__,
+    DocumentVersionCounter.__table__,
     AuditLog.__table__,
 ]
 
@@ -116,7 +117,9 @@ async def test_finalize_invoice_document_is_idempotent_for_unchanged_invoice(ses
     assert first.version == 1
 
     rows = (await session.execute(
-        select(InvoiceDocumentVersion).where(InvoiceDocumentVersion.invoice_id == invoice.id)
+        select(DocumentVersion).where(
+            DocumentVersion.document_type == DOCUMENT_TYPE_INVOICE, DocumentVersion.parent_id == invoice.id
+        )
     )).scalars().all()
     assert len(rows) == 1
 
@@ -147,4 +150,5 @@ async def test_download_invoice_document_returns_pdf_response(session: AsyncSess
 
     response = await download_invoice_document(invoice.id, doc.version, session=session, _=CURRENT_USER)
     assert response.media_type == "application/pdf"
-    assert response.filename.endswith(".pdf")
+    assert response.headers["content-disposition"].endswith('.pdf"')
+    assert bytes(response.body).startswith(b"%PDF")

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user, require_role
 from app.core.features import ALL_FEATURES, PLAN_FEATURES
 from app.core.redis_client import invalidate_feature_cache, invalidate_tenant_status_cache
-from app.core.security import hash_password
+from app.core.security import hash_password, generate_temp_password
 from app.db.engine import get_session
 from app.models.public.tenant_feature import TenantFeature
 from app.models.public.user import Tenant, User
@@ -425,7 +425,7 @@ async def create_tenant(
     2. Create PostgreSQL schema
     3. Seed plan features
     4. Run alembic upgrade head (provisions schema tables)
-    5. Create default hospital_admin user (username=hospitalAdmin, password=Admin@123)
+    5. Create default hospital_admin user (username=hospitalAdmin, password=securely generated, must change on first login)
     """
     _validate_schema_name(body.schema_name)
 
@@ -495,7 +495,10 @@ async def create_tenant(
 
     # 5. Create default hospital_admin user
     username = await _generate_admin_username(session)
-    default_password = "Admin@123"
+    # Unique, cryptographically random per tenant creation — never a fixed/predictable
+    # value. Returned exactly once in this super_admin-only response as the approved
+    # one-time credential handoff; the account must change it on first login.
+    default_password = generate_temp_password()
     admin = User(
         id=uuid.uuid4(),
         tenant_id=tenant.id,

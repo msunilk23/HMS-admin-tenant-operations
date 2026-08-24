@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -67,7 +68,9 @@ from app.websocket.router import ws_router  # noqa: E402
 app.include_router(ws_router)
 
 # Serve uploaded lab reports (and any future uploads)
-_uploads_dir = Path("/app/uploads")
+_uploads_dir = Path(os.getenv("UPLOADS_DIR", "/app/uploads"))
+if not _uploads_dir.parent.exists() or not os.access(_uploads_dir.parent, os.W_OK):
+    _uploads_dir = Path(__file__).resolve().parents[2] / "uploads"
 _uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(_uploads_dir)), name="uploads")
 

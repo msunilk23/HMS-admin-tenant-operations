@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,23 +17,32 @@ from app.core.config import settings
 from app.core.invoice_pdf_service import (
     build_invoice_pdf,
     canonical_invoice_snapshot,
-    persist_invoice_pdf,
-    resolve_invoice_pdf_path,
-    snapshot_digest,
 )
 from app.core.razorpay_service import create_razorpay_order, fetch_order_payments, verify_webhook_signature
 from app.db.engine import AsyncSessionLocal, get_session, tenant_schema_var
-from app.models.tenant.invoice_document import InvoiceDocumentVersion
+from app.models.tenant.document import DOCUMENT_TYPE_INVOICE
 from app.models.tenant.invoice import Invoice, Payment, Refund, invoice_status_for_payment
 from app.models.tenant.patient import Patient
 from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.visit import Visit, VisitStatus
-from app.schemas.invoice import InvoiceCreate, InvoiceDocumentVersionRead, InvoicePayment, InvoiceRead, PaymentRead, RefundCreate
+from app.schemas.document import DocumentVersionRead
+from app.schemas.invoice import InvoiceCreate, InvoicePayment, InvoiceRead, PaymentRead, RefundCreate
+from app.services.document_service import (
+    DocumentFinalizationError,
+    DocumentIntegrityError,
+    finalize_document,
+    get_version as get_document_version,
+    list_versions as list_document_versions,
+    read_document_bytes,
+)
+from app.services.document_storage import LocalFileDocumentStorage
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
 from app.websocket.manager import ws_manager
 
 logger = logging.getLogger(__name__)
+
+_invoice_document_storage = LocalFileDocumentStorage()
 
 
 def _extract_razorpay_context(event_data: dict) -> dict:
@@ -325,7 +334,7 @@ async def get_invoice_receipt(
     return invoice
 
 
-@router.post("/{invoice_id}/documents/finalize", response_model=InvoiceDocumentVersionRead, status_code=status.HTTP_201_CREATED)
+@router.post("/{invoice_id}/documents/finalize", response_model=DocumentVersionRead, status_code=status.HTTP_201_CREATED)
 async def finalize_invoice_document(
     invoice_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
@@ -340,55 +349,28 @@ async def finalize_invoice_document(
     visit = await session.get(Visit, invoice.visit_id)
     patient = await session.get(Patient, visit.patient_id) if visit else None
     snapshot = _invoice_to_snapshot(invoice, visit, patient)
-    checksum = snapshot_digest(snapshot)
 
-    existing = (
-        await session.execute(
-            select(InvoiceDocumentVersion).where(
-                InvoiceDocumentVersion.invoice_id == invoice.id,
-                InvoiceDocumentVersion.checksum_sha256 == checksum,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing:
-        return existing
-
-    latest = (
-        await session.execute(
-            select(InvoiceDocumentVersion)
-            .where(InvoiceDocumentVersion.invoice_id == invoice.id)
-            .order_by(InvoiceDocumentVersion.version.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    next_version = (latest.version + 1) if latest else 1
-
-    pdf_bytes = build_invoice_pdf(snapshot)
-    storage_path, file_size = persist_invoice_pdf(
-        invoice_id=str(invoice.id),
-        version=next_version,
-        pdf_bytes=pdf_bytes,
-    )
-
-    created_by_user_id = None
+    generated_by_user_id = None
     sub = current_user.get("sub")
     if sub:
         try:
-            created_by_user_id = uuid.UUID(str(sub))
+            generated_by_user_id = uuid.UUID(str(sub))
         except ValueError:
-            created_by_user_id = None
+            generated_by_user_id = None
 
-    document = InvoiceDocumentVersion(
-        id=uuid.uuid4(),
-        invoice_id=invoice.id,
-        version=next_version,
-        checksum_sha256=checksum,
-        storage_path=storage_path,
-        file_size_bytes=file_size,
-        snapshot_json=snapshot,
-        created_by_user_id=created_by_user_id,
-    )
-    session.add(document)
+    try:
+        document = await finalize_document(
+            session,
+            document_type=DOCUMENT_TYPE_INVOICE,
+            parent_id=invoice.id,
+            snapshot=snapshot,
+            render_pdf=build_invoice_pdf,
+            storage=_invoice_document_storage,
+            generated_by_user_id=generated_by_user_id,
+        )
+    except DocumentFinalizationError as exc:
+        raise HTTPException(status_code=409, detail="Could not finalize invoice document, please retry") from exc
+
     record_audit(
         session,
         current_user=current_user,
@@ -399,9 +381,9 @@ async def finalize_invoice_document(
         visit_id=invoice.visit_id,
         new_value={
             "invoice_id": str(invoice.id),
-            "version": next_version,
-            "checksum_sha256": checksum,
-            "storage_path": storage_path,
+            "version": document.version,
+            "checksum_sha256": document.checksum_sha256,
+            "storage_key": document.storage_key,
         },
     )
     await session.commit()
@@ -409,7 +391,7 @@ async def finalize_invoice_document(
     return document
 
 
-@router.get("/{invoice_id}/documents", response_model=List[InvoiceDocumentVersionRead])
+@router.get("/{invoice_id}/documents", response_model=List[DocumentVersionRead])
 async def list_invoice_documents(
     invoice_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
@@ -417,14 +399,7 @@ async def list_invoice_documents(
 ):
     if not await session.get(Invoice, invoice_id):
         raise HTTPException(status_code=404, detail="Invoice not found")
-    rows = (
-        await session.execute(
-            select(InvoiceDocumentVersion)
-            .where(InvoiceDocumentVersion.invoice_id == invoice_id)
-            .order_by(InvoiceDocumentVersion.version.asc())
-        )
-    ).scalars().all()
-    return rows
+    return await list_document_versions(session, DOCUMENT_TYPE_INVOICE, invoice_id)
 
 
 @router.get("/{invoice_id}/documents/{version}/download")
@@ -434,25 +409,21 @@ async def download_invoice_document(
     session: AsyncSession = Depends(get_session),
     _: dict = Depends(require_role("receptionist", "billing_officer", "nurse", "doctor", "hospital_admin")),
 ):
-    document = (
-        await session.execute(
-            select(InvoiceDocumentVersion).where(
-                InvoiceDocumentVersion.invoice_id == invoice_id,
-                InvoiceDocumentVersion.version == version,
-            )
-        )
-    ).scalar_one_or_none()
+    if not await session.get(Invoice, invoice_id):
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    document = await get_document_version(session, DOCUMENT_TYPE_INVOICE, invoice_id, version)
     if not document:
         raise HTTPException(status_code=404, detail="Invoice document version not found")
 
-    file_path = resolve_invoice_pdf_path(document.storage_path)
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Stored invoice document file is missing")
+    try:
+        pdf_bytes = read_document_bytes(_invoice_document_storage, document)
+    except DocumentIntegrityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    return FileResponse(
-        path=str(file_path),
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
-        filename=f"invoice-{invoice_id}-v{version}.pdf",
+        headers={"Content-Disposition": f'attachment; filename="invoice-{invoice_id}-v{version}.pdf"'},
     )
 
 

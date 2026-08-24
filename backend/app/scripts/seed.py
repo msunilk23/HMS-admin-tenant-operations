@@ -11,7 +11,7 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import hash_password
+from app.core.security import hash_password, generate_temp_password
 from app.db.engine import AsyncSessionLocal, init_db
 from app.models.public.user import Tenant, User
 
@@ -29,7 +29,7 @@ ADMIN_USER = {
     "username": "hospitaladmin",
     "full_name": "Hospital Admin",
     "role": "hospital_admin",
-    "password": "ChangeMe@123",  # must be changed on first login
+    "password": generate_temp_password(),  # unique per run; must change on first login
 }
 
 SUPER_ADMIN_USER = {
@@ -37,7 +37,7 @@ SUPER_ADMIN_USER = {
     "username": "superadmin",
     "full_name": "Platform Super Admin",
     "role": "super_admin",
-    "password": "SuperAdmin@123",
+    "password": generate_temp_password(),  # unique per run; must change on first login
 }
 
 

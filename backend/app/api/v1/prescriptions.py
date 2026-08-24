@@ -4,23 +4,39 @@ Prescriptions API — build and retrieve prescriptions for a visit.
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import require_role
+from app.core.prescription_pdf_service import build_prescription_pdf, canonical_prescription_snapshot
 from app.db.engine import get_session
+from app.models.tenant.doctor import Doctor
+from app.models.tenant.document import DOCUMENT_TYPE_PRESCRIPTION
 from app.models.tenant.lab_order import LabOrder
 from app.models.tenant.patient import Patient
 from app.models.tenant.prescription import Prescription, PrescriptionItem
 from app.models.tenant.visit import Visit, VisitStatus
 from app.models.tenant.medicine_master import MedicineMaster
+from app.schemas.document import DocumentVersionRead
 from app.schemas.prescription import PrescriptionCreate, PrescriptionRead, PrescriptionUpdate
+from app.services.document_service import (
+    DocumentFinalizationError,
+    DocumentIntegrityError,
+    finalize_document,
+    get_version as get_document_version,
+    list_versions as list_document_versions,
+    read_document_bytes,
+)
+from app.services.document_storage import LocalFileDocumentStorage
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
 from app.websocket.manager import ws_manager
 
 router = APIRouter()
+
+_prescription_document_storage = LocalFileDocumentStorage()
 
 
 @router.post("", response_model=PrescriptionRead, status_code=status.HTTP_201_CREATED)
@@ -268,3 +284,123 @@ async def get_prescription(
     data = PrescriptionRead.model_validate(rx)
     data.lab_tests = lab_order.tests if lab_order else None
     return data
+
+
+def _prescription_to_snapshot(rx: Prescription, patient: Patient | None, doctor: Doctor | None) -> dict:
+    return canonical_prescription_snapshot(
+        {
+            "id": rx.id,
+            "visit_id": rx.visit_id,
+            "uhid": rx.uhid,
+            "status": rx.status,
+            "instructions": rx.instructions,
+            "medicines": rx.medicines,
+            "created_at": rx.created_at,
+            "patient_id": patient.id if patient else None,
+            "patient_name": f"{patient.first_name} {patient.last_name}" if patient else None,
+            "doctor_id": rx.doctor_id,
+            "doctor_name": doctor.full_name if doctor else None,
+        }
+    )
+
+
+@router.post("/{visit_id}/documents/finalize", response_model=DocumentVersionRead, status_code=status.HTTP_201_CREATED)
+async def finalize_prescription_document(
+    visit_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("doctor", "hospital_admin")),
+):
+    rx = (await session.execute(
+        select(Prescription).where(Prescription.visit_id == visit_id)
+    )).scalar_one_or_none()
+    if not rx:
+        raise HTTPException(status_code=404, detail="Prescription not found for this visit")
+    if rx.status != "finalized":
+        raise HTTPException(status_code=400, detail="Prescription document can be finalized only once the prescription is finalized")
+
+    visit = await session.get(Visit, rx.visit_id)
+    patient = await session.get(Patient, visit.patient_id) if visit else None
+    doctor = await session.get(Doctor, rx.doctor_id) if rx.doctor_id else None
+    snapshot = _prescription_to_snapshot(rx, patient, doctor)
+
+    generated_by_user_id = None
+    sub = current_user.get("sub")
+    if sub:
+        try:
+            generated_by_user_id = uuid.UUID(str(sub))
+        except ValueError:
+            generated_by_user_id = None
+
+    try:
+        document = await finalize_document(
+            session,
+            document_type=DOCUMENT_TYPE_PRESCRIPTION,
+            parent_id=rx.id,
+            snapshot=snapshot,
+            render_pdf=build_prescription_pdf,
+            storage=_prescription_document_storage,
+            generated_by_user_id=generated_by_user_id,
+        )
+    except DocumentFinalizationError as exc:
+        raise HTTPException(status_code=409, detail="Could not finalize prescription document, please retry") from exc
+
+    record_audit(
+        session,
+        current_user=current_user,
+        action="CREATE",
+        resource_type="prescription_document",
+        resource_id=document.id,
+        patient_id=visit.patient_id if visit else None,
+        visit_id=rx.visit_id,
+        new_value={
+            "prescription_id": str(rx.id),
+            "version": document.version,
+            "checksum_sha256": document.checksum_sha256,
+            "storage_key": document.storage_key,
+        },
+    )
+    await session.commit()
+    await session.refresh(document)
+    return document
+
+
+@router.get("/{visit_id}/documents", response_model=list[DocumentVersionRead])
+async def list_prescription_documents(
+    visit_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_role("doctor", "nurse", "pharmacist", "hospital_admin")),
+):
+    rx = (await session.execute(
+        select(Prescription).where(Prescription.visit_id == visit_id)
+    )).scalar_one_or_none()
+    if not rx:
+        raise HTTPException(status_code=404, detail="Prescription not found for this visit")
+    return await list_document_versions(session, DOCUMENT_TYPE_PRESCRIPTION, rx.id)
+
+
+@router.get("/{visit_id}/documents/{version}/download")
+async def download_prescription_document(
+    visit_id: uuid.UUID,
+    version: int,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_role("doctor", "nurse", "pharmacist", "hospital_admin")),
+):
+    rx = (await session.execute(
+        select(Prescription).where(Prescription.visit_id == visit_id)
+    )).scalar_one_or_none()
+    if not rx:
+        raise HTTPException(status_code=404, detail="Prescription not found for this visit")
+    document = await get_document_version(session, DOCUMENT_TYPE_PRESCRIPTION, rx.id, version)
+    if not document:
+        raise HTTPException(status_code=404, detail="Prescription document version not found")
+
+    try:
+        pdf_bytes = read_document_bytes(_prescription_document_storage, document)
+    except DocumentIntegrityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="prescription-{rx.id}-v{version}.pdf"'},
+    )

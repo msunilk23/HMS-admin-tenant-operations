@@ -97,15 +97,9 @@ async def app_client(monkeypatch_module):
     tenant_b_id = uuid.uuid4()
     user_a_id = uuid.uuid4()
     user_b_id = uuid.uuid4()
+    super_admin_id = uuid.uuid4()
 
     async with engine.begin() as conn:
-        await conn.execute(
-            text("DELETE FROM public.patients WHERE phone = ANY(:phones) OR aadhar_number = ANY(:aadhars)"),
-            {
-                "phones": ["9000000001", "9000000002", "9000000003", "9000000004"],
-                "aadhars": ["111122223333", "222233334444", "333344445555", "444455556666"],
-            },
-        )
         for schema in (HOSPITAL_A_SCHEMA, HOSPITAL_B_SCHEMA):
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -159,6 +153,26 @@ async def app_client(monkeypatch_module):
                 },
             ],
         )
+        # A real super_admin user row — used to prove super_admin still passes
+        # user-existence/active checks even though it bypasses tenant revocation.
+        await conn.execute(
+            text(
+                """
+                INSERT INTO public.users
+                    (id, tenant_id, tenant_name, email, username, phone, hashed_password,
+                     full_name, role, is_active, must_change_password, password_changed_at,
+                     created_at, updated_at)
+                VALUES
+                    (:id, :tenant_id, :tenant_name, :email, :username, NULL, :hashed_password,
+                     :full_name, 'super_admin', true, false, now(), now(), now())
+                """
+            ),
+            {
+                "id": super_admin_id, "tenant_id": tenant_a_id, "tenant_name": HOSPITAL_A_SCHEMA,
+                "email": f"superadmin-{super_admin_id}@test.com", "username": f"sa{super_admin_id.hex[:8]}",
+                "hashed_password": hash_password("Passw0rd!"), "full_name": "Platform Super Admin",
+            },
+        )
 
     # Build tenant-schema tables via SQLAlchemy metadata (search_path scoped)
     from app.db.base import Base
@@ -183,6 +197,7 @@ async def app_client(monkeypatch_module):
             "tenant_b_id": tenant_b_id,
             "user_a_id": user_a_id,
             "user_b_id": user_b_id,
+            "super_admin_id": super_admin_id,
         }
 
     # Cleanup
@@ -190,14 +205,7 @@ async def app_client(monkeypatch_module):
     async with cleanup_engine.begin() as conn:
         for schema in (HOSPITAL_A_SCHEMA, HOSPITAL_B_SCHEMA):
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-        await conn.execute(
-            text("DELETE FROM public.patients WHERE phone = ANY(:phones) OR aadhar_number = ANY(:aadhars)"),
-            {
-                "phones": ["9000000001", "9000000002", "9000000003", "9000000004"],
-                "aadhars": ["111122223333", "222233334444", "333344445555", "444455556666"],
-            },
-        )
-        await conn.execute(text("DELETE FROM public.users WHERE id = ANY(:ids)"), {"ids": [user_a_id, user_b_id]})
+        await conn.execute(text("DELETE FROM public.users WHERE id = ANY(:ids)"), {"ids": [user_a_id, user_b_id, super_admin_id]})
         await conn.execute(text("DELETE FROM public.tenants WHERE id = ANY(:ids)"), {"ids": [tenant_a_id, tenant_b_id]})
     await cleanup_engine.dispose()
 
@@ -346,8 +354,8 @@ async def test_deactivated_tenant_is_rejected(app_client):
 async def test_super_admin_cannot_access_tenant_clinical_api(app_client):
     client = app_client["client"]
     super_admin_token = create_access_token(
-        subject=str(uuid.uuid4()),
-        extra_claims={"role": "super_admin", "tenant_schema": "", "hospital_name": "", "features": []},
+        subject=str(app_client["super_admin_id"]),
+        extra_claims={"role": "super_admin", "tenant_schema": "", "hospital_name": "", "features": [], "session_version": 0},
     )
     resp = await client.get(
         "/api/v1/patients",

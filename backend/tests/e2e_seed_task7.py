@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.security import hash_password
 from app.db.base import Base
+from app.models.public.tenant_feature import TenantFeature
 from app.models.public.user import Tenant, User
 from app.models.tenant import *  # noqa: F401,F403
 
@@ -113,6 +114,12 @@ async def seed():
         user_b = User(id=HOSPITAL_B_DOCTOR_USER_ID, tenant_id=TENANT_B_ID, tenant_name=SCHEMA_B, email=HOSPITAL_B_DOCTOR_EMAIL, username=HOSPITAL_B_DOCTOR_USERNAME, hashed_password=hash_password(HOSPITAL_B_DOCTOR_PASSWORD), full_name="E2E Doctor B", role="doctor", is_active=True, must_change_password=False)
         session.add_all([tenant_a, tenant_b, user_a, receptionist_a, user_b])
         await session.commit()
+        session.add_all([
+            TenantFeature(id=uuid.uuid4(), tenant_id=TENANT_A_ID, feature="billing", enabled=True),
+            TenantFeature(id=uuid.uuid4(), tenant_id=TENANT_A_ID, feature="opd_queue", enabled=True),
+            TenantFeature(id=uuid.uuid4(), tenant_id=TENANT_A_ID, feature="pharmacy", enabled=True),
+        ])
+        await session.commit()
 
         await session.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
         department = Department(id=DEPARTMENT_ID, name="E2E General Medicine", is_active=True)
@@ -148,33 +155,8 @@ async def cleanup():
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA_A}" CASCADE'))
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA_B}" CASCADE'))
-        await conn.execute(text('DELETE FROM public.vitals WHERE visit_id = :id'), {"id": VISIT_ID})
-        await conn.execute(text('DELETE FROM public.vitals WHERE visit_id = :id'), {"id": HOSPITAL_B_VISIT_ID})
-        await conn.execute(text('DELETE FROM public.consultations WHERE visit_id = :id'), {"id": VISIT_ID})
-        await conn.execute(text('DELETE FROM public.consultations WHERE visit_id = :id'), {"id": HOSPITAL_B_VISIT_ID})
-        await conn.execute(text('DELETE FROM public.prescriptions WHERE visit_id = :id'), {"id": VISIT_ID})
-        await conn.execute(text('DELETE FROM public.prescriptions WHERE visit_id = :id'), {"id": HOSPITAL_B_VISIT_ID})
-        await conn.execute(text('DELETE FROM public.lab_orders WHERE visit_id = :id'), {"id": VISIT_ID})
-        await conn.execute(text('DELETE FROM public.lab_orders WHERE visit_id = :id'), {"id": HOSPITAL_B_VISIT_ID})
-        await conn.execute(text('DELETE FROM public.queue_tokens WHERE visit_id = :id'), {"id": VISIT_ID})
-        await conn.execute(text('DELETE FROM public.queue_tokens WHERE visit_id = :id'), {"id": HOSPITAL_B_VISIT_ID})
-        await conn.execute(text('DELETE FROM public.visits WHERE id IN (:id_a, :id_b) OR doctor_id IN (:doctor_a, :doctor_b)'), {
-            "id_a": VISIT_ID,
-            "id_b": HOSPITAL_B_VISIT_ID,
-            "doctor_a": DOCTOR_ID,
-            "doctor_b": HOSPITAL_B_DOCTOR_ID,
-        })
-        await conn.execute(text('DELETE FROM public.doctors WHERE id IN (:doctor_a, :doctor_b) OR department_id IN (:dept_a, :dept_b)'), {
-            "doctor_a": DOCTOR_ID,
-            "doctor_b": HOSPITAL_B_DOCTOR_ID,
-            "dept_a": DEPARTMENT_ID,
-            "dept_b": HOSPITAL_B_DEPARTMENT_ID,
-        })
-        await conn.execute(text('DELETE FROM public.departments WHERE id IN (:dept_a, :dept_b)'), {
-            "dept_a": DEPARTMENT_ID,
-            "dept_b": HOSPITAL_B_DEPARTMENT_ID,
-        })
         await conn.execute(delete(User).where(User.id.in_([DOCTOR_USER_ID, RECEPTIONIST_USER_ID, HOSPITAL_B_DOCTOR_USER_ID])))
+        await conn.execute(delete(TenantFeature).where(TenantFeature.tenant_id.in_([TENANT_A_ID, TENANT_B_ID])))
         await conn.execute(delete(Tenant).where(Tenant.id.in_([TENANT_A_ID, TENANT_B_ID])))
     await engine.dispose()
 

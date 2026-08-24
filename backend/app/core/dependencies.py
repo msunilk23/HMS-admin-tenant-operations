@@ -34,20 +34,25 @@ async def get_current_user(
     try:
         payload = decode_token(credentials.credentials)
         user_id: str = payload.get("sub")
-        if user_id is None:
+        if user_id is None or payload.get("type") != "access":
             raise credentials_exception
 
         token_iat = payload.get("iat")
         user = await session.get(User, user_id)
-        if payload.get("role") != "super_admin":
-            if not user or not user.is_active:
-                raise session_invalidated_exception
-            if payload.get("session_version", 0) != getattr(user, "session_version", 0):
-                raise session_invalidated_exception
-            if user.tokens_valid_after and token_iat is not None and token_iat < user.tokens_valid_after.timestamp():
-                raise session_invalidated_exception
+        # User-level checks apply to EVERY role, including super_admin: existence,
+        # active flag, session_version and forced-logout (tokens_valid_after) must
+        # always be enforced. Only tenant-level revocation is exempt for super_admin
+        # (a platform operator has no tenant context).
+        if not user or not user.is_active:
+            raise session_invalidated_exception
+        if payload.get("session_version", 0) != getattr(user, "session_version", 0):
+            raise session_invalidated_exception
+        if user.tokens_valid_after and token_iat is not None and token_iat < int(user.tokens_valid_after.timestamp()):
+            raise session_invalidated_exception
 
-        # Check forced-logout for tenant users — super_admin is never forced out
+        # Check forced-logout for tenant users — super_admin is never bound to a
+        # tenant so it never carries a tenant_id claim and this block is skipped
+        # for that role naturally.
         tenant_id_str = payload.get("tenant_id")
         if tenant_id_str:
             tenant = await session.get(Tenant, tenant_id_str)
@@ -55,7 +60,7 @@ async def get_current_user(
                 raise session_invalidated_exception
             if payload.get("tenant_session_version", 0) != tenant.session_version:
                 raise session_invalidated_exception
-            if tenant.tokens_valid_after and token_iat is not None and token_iat < tenant.tokens_valid_after.timestamp():
+            if tenant.tokens_valid_after and token_iat is not None and token_iat < int(tenant.tokens_valid_after.timestamp()):
                 raise session_invalidated_exception
             try:
                 forced_logout_time = await get_tenant_forced_logout_time(tenant_id_str)
@@ -63,7 +68,7 @@ async def get_current_user(
                 forced_logout_time = None
             if forced_logout_time is not None:
                 token_iat = payload.get("iat")
-                if token_iat is not None and token_iat < forced_logout_time:
+                if token_iat is not None and token_iat < int(forced_logout_time):
                     raise session_invalidated_exception
 
         return payload

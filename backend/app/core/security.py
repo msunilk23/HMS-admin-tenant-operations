@@ -42,11 +42,21 @@ def create_access_token(subject: str, extra_claims: Optional[Dict[str, Any]] = N
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
-def create_refresh_token(subject: str) -> str:
+def create_refresh_token(subject: str, extra_claims: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Create a refresh token. Refresh tokens must carry the same session/tenant
+    identity claims as access tokens (role, tenant_id, tenant_schema,
+    session_version, tenant_session_version) so that refresh rotation and
+    invalidation can be enforced without a database round-trip on every field.
+    Callers must supply these from the current database state — never from
+    client-supplied input.
+    """
     now = datetime.now(timezone.utc)
     jti = str(uuid.uuid4())  # Unique token ID — used for blocklist on logout
     expire = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     payload = {"sub": subject, "iat": int(now.timestamp()), "exp": expire, "type": "refresh", "jti": jti}
+    if extra_claims:
+        payload.update(extra_claims)
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
