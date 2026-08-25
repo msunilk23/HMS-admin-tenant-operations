@@ -1,11 +1,13 @@
 """
 Vitals API — nurse records patient vitals for a visit.
 """
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_role, require_feature
@@ -14,9 +16,15 @@ from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit, VisitStatus
 from app.models.tenant.vitals import Vitals
 from app.schemas.vitals import VitalsCreate, VitalsRead
-from app.services.audit_service import record_audit
+from app.services.audit_service import get_audit_request_context, record_audit
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
+
+logger = logging.getLogger(__name__)
+
+
+def _request_id() -> str | None:
+    return get_audit_request_context()[0]
 
 router = APIRouter(dependencies=[Depends(require_feature("vitals"))])
 
@@ -125,22 +133,35 @@ async def record_vitals(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    await session.flush()  # populate vitals.id for new rows before audit/commit
-
-    record_audit(
-        session,
-        current_user=current_user,
-        action="vitals.completed" if payload.status == "completed" else "vitals.draft_saved",
-        resource_type="vitals",
-        resource_id=vitals.id,
-        patient_id=visit.patient_id,
-        visit_id=visit.id,
-        old_value=old_snapshot,
-        new_value={f: getattr(vitals, f) for f in _VITALS_FIELDS} | {"status": vitals.status, "bmi": vitals.bmi},
-        reason="draft updated" if was_draft_before else "vitals created",
-    )
-
-    await session.commit()
+    try:
+        await session.flush()  # populate vitals.id for new rows before audit/commit
+        record_audit(
+            session,
+            current_user=current_user,
+            action="vitals.completed" if payload.status == "completed" else "vitals.draft_saved",
+            resource_type="vitals",
+            resource_id=vitals.id,
+            patient_id=visit.patient_id,
+            visit_id=visit.id,
+            old_value=old_snapshot,
+            new_value={f: getattr(vitals, f) for f in _VITALS_FIELDS} | {"status": vitals.status, "bmi": vitals.bmi},
+            reason="draft updated" if was_draft_before else "vitals created",
+        )
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Vitals could not be saved because the record changed concurrently. Please reload and try again.",
+        ) from exc
+    except Exception:
+        await session.rollback()
+        logger.exception("Unexpected vitals save failure request_id=%s", _request_id())
+        request_id = _request_id() or "unavailable"
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Server error while saving vitals. Reference: {request_id}",
+        ) from None
     await session.refresh(vitals)
 
     tenant = current_user.get("tenant_schema", "public")
