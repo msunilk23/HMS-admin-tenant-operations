@@ -36,14 +36,16 @@ async def record_vitals(
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("nurse", "doctor", "hospital_admin")),
 ):
-    visit = await session.get(Visit, payload.visit_id)
+    visit = (await session.execute(
+        select(Visit).where(Visit.id == payload.visit_id).with_for_update()
+    )).scalar_one_or_none()
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
 
     allowed_states = {VisitStatus.WAITING_FOR_NURSE.value, VisitStatus.IN_PRE_VITAL.value}
     if visit.status not in allowed_states:
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_409_CONFLICT,
             detail="Pre-vitals can only be recorded while the patient is waiting for nurse assessment or already in pre-vitals.",
         )
 
@@ -51,7 +53,7 @@ async def record_vitals(
     # of inserting a new row every time the nurse saves.
     existing = (
         await session.execute(
-            select(Vitals).where(Vitals.visit_id == payload.visit_id).order_by(Vitals.recorded_at.desc()).limit(1)
+            select(Vitals).where(Vitals.visit_id == payload.visit_id).with_for_update().limit(1)
         )
     ).scalar_one_or_none()
 
