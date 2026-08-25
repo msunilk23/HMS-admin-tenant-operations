@@ -112,13 +112,26 @@ async function openConsultationForSeedPatient(page: Page) {
   const callIn = page.getByRole('button', { name: /call in/i }).first()
   if (await callIn.isVisible({ timeout: 5_000 }).catch(() => false)) {
     await callIn.click()
+    await expect(page.getByPlaceholder(/what brings the patient in today/i)).toBeVisible()
     return
   }
   await page.getByText('E2E Patient').first().click()
+  await expect(page.getByPlaceholder(/what brings the patient in today/i)).toBeVisible()
 }
 
 test.describe.serial('Task 7 controlled clinical data', () => {
   test('doctor searches ICD-10 by code and description, selects, saves, and reloads diagnosis', async ({ page }) => {
+    if (test.info().retry > 0) {
+      execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed'], {
+        cwd: path.join(repoRoot, 'backend'),
+        stdio: 'inherit',
+        env: {
+          ...process.env,
+          DATABASE_URL: process.env.E2E_DATABASE_URL ?? 'postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital',
+          SECRET_KEY: process.env.SECRET_KEY ?? 'test-secret-key',
+        },
+      })
+    }
     await login(page)
     await openConsultationForSeedPatient(page)
     await page.getByRole('button', { name: /add diagnosis/i }).click()
@@ -130,7 +143,10 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     await expect(diagnosis).toHaveValue(/E2E\.J06\.9.*E2E Acute upper respiratory infection/)
 
     await page.getByPlaceholder(/what brings the patient in today/i).fill('E2E cough follow-up')
+    const saveResponse = page.waitForResponse(response => response.url().includes('/api/v1/consultations') && ['POST', 'PATCH'].includes(response.request().method()))
     await page.getByRole('button', { name: /save & write prescription/i }).click()
+    const response = await saveResponse
+    expect(response.ok(), await response.text()).toBeTruthy()
     await expect(page).toHaveURL(/doctor\/prescription/)
 
     await page.goto('/doctor/consultation')
