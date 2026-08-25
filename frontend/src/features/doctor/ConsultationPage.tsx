@@ -455,6 +455,14 @@ export default function ConsultationPage() {
                   <VitalChip label="Pulse" value={vitals.pulse?.toString() ?? '—'} unit="bpm" />
                   <VitalChip label="Weight" value={vitals.weight?.toString() ?? '—'} unit="kg" />
                   <VitalChip label="Height" value={vitals.height?.toString() ?? '—'} unit="cm" />
+                  <VitalChip label="BMI" value={vitals.bmi?.toString() ?? '—'} unit="kg/m²" />
+                  <VitalChip label="Respiratory Rate" value={vitals.respiratory_rate?.toString() ?? '—'} unit="/min" />
+                  <VitalChip label="Pain" value={vitals.pain_score?.toString() ?? '—'} unit="/10" />
+                </div>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-gray-700">
+                  <p><span className="font-medium">Chief complaint:</span> {vitals.chief_complaint ?? '—'}</p>
+                  <p><span className="font-medium">Allergies:</span> {vitals.known_no_allergies ? 'Known no allergies' : vitals.allergies ?? '—'}</p>
+                  <p className="md:col-span-2"><span className="font-medium">Nurse notes:</span> {vitals.nurse_notes ?? '—'}</p>
                 </div>
               </div>
             )}

@@ -89,9 +89,11 @@ class VitalsCreate(BaseModel):
             self.level_of_consciousness,
             self.nurse_notes,
         ]
-        if any(value is None for value in required):
+        if any(value is None or (isinstance(value, str) and not value.strip()) for value in required):
             raise ValueError("Completed pre-vitals require all clinical observations and notes.")
-        if self.known_no_allergies is None and not (self.allergies or "").strip():
+        allergy_text = (self.allergies or "").strip()
+        has_real_allergy = bool(allergy_text) and allergy_text.lower() not in {"none", "nil", "no known allergies", "nka"}
+        if self.known_no_allergies is not True and not has_real_allergy:
             raise ValueError("Allergies must be entered, or Known No Allergies must be selected.")
         return self
 

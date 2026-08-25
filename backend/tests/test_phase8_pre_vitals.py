@@ -199,6 +199,18 @@ async def test_completion_missing_mandatory_fields_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_completion_rejects_false_kna_without_allergy_text():
+    with pytest.raises(ValueError, match="Allergies must be entered"):
+        VitalsCreate(
+            visit_id=uuid.uuid4(), temperature=37.0, pulse=72, respiratory_rate=18,
+            bp_systolic=120, bp_diastolic=80, spo2=99, pain_score=2, height=170, weight=70,
+            blood_glucose=96, chief_complaint="Fever", known_no_allergies=False,
+            general_condition="Stable", level_of_consciousness="Alert", nurse_notes="ok",
+            status="completed",
+        )
+
+
+@pytest.mark.asyncio
 async def test_kna_mutually_exclusive_with_entered_allergy():
     with pytest.raises(Exception):
         VitalsCreate(
