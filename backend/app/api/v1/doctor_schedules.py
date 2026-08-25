@@ -83,6 +83,8 @@ async def create_doctor_schedule(
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("hospital_admin")),
 ):
+    if payload.doctor_id is None:
+        raise HTTPException(status_code=422, detail="doctor_id is required")
     await _doctor_and_department(session, payload.doctor_id, payload.department_id)
     existing = (await session.execute(select(DoctorSchedule).where(DoctorSchedule.doctor_id == payload.doctor_id))).scalars().all()
     if _check_overlap(existing, payload):
