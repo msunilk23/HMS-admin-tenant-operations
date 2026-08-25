@@ -11,7 +11,7 @@ class _StrictModel(BaseModel):
 
 
 class DoctorScheduleCreate(_StrictModel):
-    doctor_id: uuid.UUID
+    doctor_id: uuid.UUID | None = None
     department_id: uuid.UUID | None = None
     weekday: int = Field(ge=0, le=6)
     start_time: time

@@ -2,6 +2,7 @@ import uuid
 from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
+from app.schemas.doctor_schedule import DoctorScheduleCreate
 
 
 class DoctorCreate(BaseModel):
@@ -71,6 +72,8 @@ class DoctorOnboard(BaseModel):
     qualification: Optional[str] = Field(None, max_length=500)
     experience_years: Optional[int] = Field(None, ge=0, le=60)
     send_via: str = Field("whatsapp", pattern=r"^(sms|whatsapp)$")
+    schedules: list[DoctorScheduleCreate] = Field(default_factory=list)
+    schedule_later: bool = False
 
     @field_validator("username", mode="before")
     @classmethod

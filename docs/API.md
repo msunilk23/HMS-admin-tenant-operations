@@ -43,6 +43,12 @@ remaining capacity, room, appointment type, past-slot filtering, and active
 leave/holiday/blocked-period handling. The compatibility endpoint
 `/appointments/slots?doctor_id=...&date=...` uses the same service.
 
+Doctor onboarding accepts optional `schedules[]` in `POST /api/v1/doctors/onboard`.
+When `schedule_later` is true, no schedule is created; otherwise the profile
+and supplied sessions are committed together. Hospital administrators can
+reset a tenant doctor through `POST /api/v1/doctors/{doctor_id}/reset-password`
+with a mandatory reason and `send_via` of `sms`, `whatsapp`, or `none`.
+
 ## Feedback
 
 `POST /api/v1/feedback` accepts `visit_id`, `rating` from 1 to 5, optional `comments`, and `channel` (`qr`, `sms`, `whatsapp`, `kiosk`, or `staff`). A visit can have one feedback record. Duplicate submissions return `409`.

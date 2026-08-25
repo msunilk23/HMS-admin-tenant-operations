@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import { doctorService } from '@/services/clinicalService'
@@ -10,8 +11,9 @@ const EMPTY = { start_time: '09:00', end_time: '13:00', slot_duration_minutes: 1
 type Draft = typeof EMPTY
 
 export default function DoctorSchedulesPage() {
+  const [searchParams] = useSearchParams()
   const qc = useQueryClient()
-  const [doctorId, setDoctorId] = useState('')
+  const [doctorId, setDoctorId] = useState(searchParams.get('doctor_id') ?? '')
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [drafts, setDrafts] = useState<Record<number, Draft>>({})
   const [message, setMessage] = useState('')
