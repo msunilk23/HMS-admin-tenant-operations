@@ -116,7 +116,7 @@ export default function App() {
             <Route path="/billing" element={<FeatureGuard feature="billing"><RoleGuard allowed={BILLING}><BillingPage /></RoleGuard></FeatureGuard>} />
             <Route path="/indent" element={<RoleGuard allowed={ALL_STAFF}><RequisitionsPage /></RoleGuard>} />
             <Route path="/admin/doctors" element={<RoleGuard allowed={ADMIN}><DoctorsAdminPage /></RoleGuard>} />
-            <Route path="/admin/doctor-schedules" element={<RoleGuard allowed={ADMIN}><DoctorSchedulesPage /></RoleGuard>} />
+            <Route path="/admin/doctors/schedules" element={<RoleGuard allowed={ADMIN}><DoctorSchedulesPage /></RoleGuard>} />
             <Route path="/admin/users" element={<RoleGuard allowed={['hospital_admin']}><UsersAdminPage /></RoleGuard>} />
             <Route path="/super/hospitals" element={<RoleGuard allowed={['super_admin']}><TenantsPage /></RoleGuard>} />
             <Route path="/change-password" element={<ChangePasswordPage />} />

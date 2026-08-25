@@ -3,6 +3,7 @@
  * Two tabs: Departments (CRUD) + Doctors (CRUD with dept association)
  */
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -37,6 +38,12 @@ const doctorOnboardSchema = z.object({
   qualification: z.string().optional(),
   experience_years: z.coerce.number().min(0).max(60).optional(),
   send_via: z.enum(['sms', 'whatsapp']).default('sms'),
+  schedule_later: z.boolean().default(true),
+  schedule_weekday: z.coerce.number().min(0).max(6).default(0),
+  schedule_start: z.string().default('09:00'),
+  schedule_end: z.string().default('13:00'),
+  schedule_duration: z.coerce.number().min(5).max(240).default(15),
+  schedule_capacity: z.coerce.number().min(1).max(100).default(1),
 })
 
 type DoctorOnboardForm = z.infer<typeof doctorOnboardSchema>
@@ -97,6 +104,34 @@ const FormField = ({
 )
 
 const inputCls = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary'
+
+function DoctorResetModal({ doctor, onClose }: { doctor: Doctor; onClose: () => void }) {
+  const [reason, setReason] = useState('')
+  const [sendVia, setSendVia] = useState<'sms' | 'whatsapp' | 'none'>('none')
+  const [result, setResult] = useState<Awaited<ReturnType<typeof doctorService.resetPassword>> | null>(null)
+  const reset = useMutation({ mutationFn: () => doctorService.resetPassword(doctor.id, reason.trim(), sendVia), onSuccess: setResult })
+  return (
+    <Modal title="Reset Doctor Password" onClose={onClose}>
+      {result ? (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700">The old sessions were terminated. The doctor must change this password at next login.</p>
+          <div className="flex gap-2"><code className="flex-1 bg-gray-100 rounded px-3 py-2 font-mono select-all">{result.temporary_password}</code><button type="button" onClick={() => void navigator.clipboard.writeText(result.temporary_password)} className="bg-gray-900 text-white rounded px-3 text-sm">Copy</button></div>
+          <p className="text-xs text-gray-500">Delivery: {result.delivery_status}. Phone: {result.phone ?? 'not registered'}.</p>
+          <button type="button" onClick={onClose} className="w-full bg-primary text-white rounded-lg py-2 text-sm">Done</button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700"><strong>{doctor.full_name}</strong> · {doctor.username ?? 'No username'} · {doctor.phone ? `******${doctor.phone.slice(-4)}` : 'No phone'}</p>
+          <textarea value={reason} onChange={e => setReason(e.target.value)} maxLength={500} rows={3} placeholder="Reason for reset (required)" className={inputCls} />
+          <select value={sendVia} onChange={e => setSendVia(e.target.value as typeof sendVia)} className={inputCls}><option value="none">Display once only</option><option value="sms">SMS</option><option value="whatsapp">WhatsApp</option></select>
+          {reset.isError && <p className="text-xs text-red-600">Reset failed.</p>}
+          <p className="text-xs text-amber-700 bg-amber-50 rounded px-3 py-2">Existing doctor sessions will be terminated. The doctor must change the password at next login.</p>
+          <div className="flex gap-3"><button type="button" onClick={onClose} className="flex-1 border rounded-lg py-2 text-sm">Cancel</button><button type="button" disabled={reason.trim().length < 5 || reset.isPending} onClick={() => reset.mutate()} className="flex-1 bg-red-600 text-white rounded-lg py-2 text-sm disabled:opacity-50">{reset.isPending ? 'Resetting…' : 'Confirm Reset'}</button></div>
+        </div>
+      )}
+    </Modal>
+  )
+}
 
 // ── Departments Tab ────────────────────────────────────────────────────────────
 
@@ -259,12 +294,14 @@ function DepartmentsTab() {
 
 function DoctorsTab({ departments }: { departments: Department[] }) {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [showCreate, setShowCreate] = useState(false)
   const [editing, setEditing] = useState<Doctor | null>(null)
   const [showInactive, setShowInactive] = useState(false)
   const [createdCreds, setCreatedCreds] = useState<{
     username: string; email: string; phone: string; password: string; full_name: string
   } | null>(null)
+  const [resetTarget, setResetTarget] = useState<Doctor | null>(null)
 
   const { data: doctors = [], isLoading } = useQuery({
     queryKey: ['doctors-admin', showInactive],
@@ -291,7 +328,7 @@ function DoctorsTab({ departments }: { departments: Department[] }) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['doctors-admin'] }); setEditing(null) },
   })
 
-  const createForm = useForm<DoctorOnboardForm>({ resolver: zodResolver(doctorOnboardSchema), mode: 'onChange', defaultValues: { send_via: 'whatsapp' } })
+  const createForm = useForm<DoctorOnboardForm>({ resolver: zodResolver(doctorOnboardSchema), mode: 'onChange', defaultValues: { send_via: 'whatsapp', schedule_later: true, schedule_weekday: 0, schedule_start: '09:00', schedule_end: '13:00', schedule_duration: 15, schedule_capacity: 1 } })
   const editForm = useForm<DoctorEditForm>({ resolver: zodResolver(doctorEditSchema) })
 
   const openEdit = (doc: Doctor) => {
@@ -403,6 +440,15 @@ function DoctorsTab({ departments }: { departments: Department[] }) {
                     <button onClick={() => openEdit(doc)} className="text-primary hover:underline text-xs">
                       Edit
                     </button>
+                    <button onClick={() => navigate(`/admin/doctors/schedules?doctor_id=${doc.id}`)} className="text-blue-600 hover:underline text-xs">
+                      Schedule
+                    </button>
+                    <button onClick={() => navigate(`/admin/doctors/schedules?doctor_id=${doc.id}&exception=1`)} className="text-amber-600 hover:underline text-xs">
+                      Leave/Block
+                    </button>
+                    <button onClick={() => setResetTarget(doc)} className="text-red-600 hover:underline text-xs">
+                      Reset Password
+                    </button>
                     <button
                       onClick={() => updateMut.mutate({ id: doc.id, data: { is_active: !doc.is_active } })}
                       className="text-gray-400 hover:text-gray-600 text-xs"
@@ -415,6 +461,10 @@ function DoctorsTab({ departments }: { departments: Department[] }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {resetTarget && (
+        <DoctorResetModal doctor={resetTarget} onClose={() => setResetTarget(null)} />
       )}
 
       {/* Create modal */}
@@ -430,6 +480,22 @@ function DoctorsTab({ departments }: { departments: Department[] }) {
                 qualification: data.qualification || undefined,
                 username: data.username || undefined,
                 send_via: data.send_via,
+                schedule_later: data.schedule_later,
+                schedules: data.schedule_later ? [] : [{
+                  doctor_id: undefined,
+                  department_id: data.department_id || undefined,
+                  weekday: data.schedule_weekday,
+                  start_time: data.schedule_start,
+                  end_time: data.schedule_end,
+                  slot_duration_minutes: data.schedule_duration,
+                  capacity: data.schedule_capacity,
+                  effective_from: null,
+                  effective_to: null,
+                  room: null,
+                  appointment_type: 'consultation',
+                  is_active: true,
+                  notes: null,
+                }],
               })
             )}
             className="space-y-4"
@@ -492,6 +558,10 @@ function DoctorsTab({ departments }: { departments: Department[] }) {
               </div>
             </div>
             <DoctorProfileFields form={createForm} />
+            <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700"><input type="checkbox" {...createForm.register('schedule_later')} /> Schedule later</label>
+              {!createForm.watch('schedule_later') && <div className="grid grid-cols-2 gap-3"><FormField label="Working day"><select {...createForm.register('schedule_weekday')} className={inputCls}>{['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day, index) => <option key={day} value={index}>{day}</option>)}</select></FormField><FormField label="Slot duration"><input type="number" {...createForm.register('schedule_duration')} min={5} max={240} className={inputCls} /></FormField><FormField label="Start"><input type="time" {...createForm.register('schedule_start')} className={inputCls} /></FormField><FormField label="End"><input type="time" {...createForm.register('schedule_end')} className={inputCls} /></FormField><FormField label="Capacity"><input type="number" {...createForm.register('schedule_capacity')} min={1} max={100} className={inputCls} /></FormField></div>}
+            </div>
             {onboardMut.isError && (
               <p className="text-xs text-red-600">
                 {(onboardMut.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Failed to create doctor'}

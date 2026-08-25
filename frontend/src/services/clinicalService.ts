@@ -102,6 +102,22 @@ export const doctorService = {
     qualification?: string
     experience_years?: number
     send_via?: string
+    schedule_later?: boolean
+    schedules?: Array<{
+      doctor_id?: string
+      department_id?: string
+      weekday: number
+      start_time: string
+      end_time: string
+      slot_duration_minutes: number
+      capacity: number
+      effective_from?: string | null
+      effective_to?: string | null
+      room?: string | null
+      appointment_type?: string
+      is_active?: boolean
+      notes?: string | null
+    }>
   }) => apiClient.post<Doctor & { temp_password: string }>('/doctors/onboard', data).then(r => r.data),
 
   update: (id: string, data: Partial<{
@@ -113,6 +129,18 @@ export const doctorService = {
     experience_years: number
     is_active: boolean
   }>) => apiClient.patch<Doctor>(`/doctors/${id}`, data).then(r => r.data),
+
+  resetPassword: (doctorId: string, reason: string, sendVia: 'sms' | 'whatsapp' | 'none') =>
+    apiClient.post<{
+      message: string
+      doctor_id: string
+      user_id: string
+      username: string
+      phone: string | null
+      temporary_password: string
+      must_change_password: boolean
+      delivery_status: 'sent' | 'failed' | 'not_requested'
+    }>(`/doctors/${doctorId}/reset-password`, { reason, send_via: sendVia }).then(r => r.data),
 }
 
 export const userService = {
