@@ -3,12 +3,13 @@ Consultations API — doctor SOAP notes + ICD-10 diagnosis.
 Creates or updates a consultation record keyed 1:1 with visit_id.
 """
 import uuid
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.dependencies import require_role
 from app.db.engine import get_session
@@ -19,13 +20,19 @@ from app.models.tenant.visit import Visit, VisitStatus
 from app.models.tenant.icd10_code import ICD10Code
 from app.schemas.consultation import ConsultationCreate, ConsultationRead, ConsultationUpdate
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
-from app.services.audit_service import record_audit
+from app.services.audit_service import get_audit_request_context, record_audit
 from app.websocket.manager import ws_manager
+
+logger = logging.getLogger(__name__)
+
+
+def _request_id() -> str:
+    return get_audit_request_context()[0] or "unavailable"
 
 router = APIRouter()
 
 
-async def _validate_diagnoses(session: AsyncSession, diagnoses: list[dict] | None, free_text_reason: str | None = None) -> tuple[list[dict] | None, bool]:
+async def _validate_diagnoses(session: AsyncSession, diagnoses: list[dict] | None, free_text_reason: str | None = None, *, require_master_id: bool = False) -> tuple[list[dict] | None, bool]:
     if not diagnoses:
         return None, False
     normalized: list[dict] = []
@@ -33,7 +40,9 @@ async def _validate_diagnoses(session: AsyncSession, diagnoses: list[dict] | Non
     for diagnosis in diagnoses:
         code = str(diagnosis.get("code") or "").strip()
         description = str(diagnosis.get("description") or "").strip()
-        if not code or code.upper() == "FREE_TEXT":
+        master_id = diagnosis.get("master_id")
+        is_free_text = bool(diagnosis.get("free_text")) or code.upper() == "FREE_TEXT"
+        if is_free_text:
             if not description:
                 raise HTTPException(status_code=422, detail="Free-text diagnosis requires a description")
             if not free_text_reason or not free_text_reason.strip():
@@ -42,15 +51,25 @@ async def _validate_diagnoses(session: AsyncSession, diagnoses: list[dict] | Non
             used_free_text = True
             continue
         try:
-            master = (await session.execute(select(ICD10Code).where(ICD10Code.code == code, ICD10Code.is_active == True))).scalar_one_or_none()  # noqa: E712
+            if not master_id and require_master_id:
+                await session.execute(select(ICD10Code.id).limit(1))
+                raise HTTPException(status_code=422, detail=f"Select an active ICD-10 diagnosis for '{code}'")
+            master_query = select(ICD10Code).where(ICD10Code.is_active == True)  # noqa: E712
+            master_query = master_query.where(ICD10Code.id == master_id) if master_id else master_query.where(ICD10Code.code == code)
+            master = (await session.execute(master_query)).scalar_one_or_none()
         except OperationalError:
             # Legacy SQLite/unit fixtures may predate the master table; real
             # Postgres deployments receive it through migration 0041.
-            normalized.append({"code": code, "description": description, "free_text": False})
+            normalized.append({"code": code, "description": description, "master_id": str(master_id) if master_id else None, "free_text": False})
             continue
         if not master:
-            raise HTTPException(status_code=422, detail=f"ICD-10 code '{code}' is not active or does not exist")
-        normalized.append({"code": master.code, "description": master.description, "free_text": False})
+            raise HTTPException(status_code=422, detail="Selected ICD-10 diagnosis is inactive, unavailable, or belongs to another tenant")
+        if master.code != code:
+            raise HTTPException(status_code=422, detail="Selected ICD-10 code does not match the master diagnosis")
+        normalized_item = {"code": master.code, "description": master.description, "free_text": False}
+        if master_id:
+            normalized_item["master_id"] = str(master.id)
+        normalized.append(normalized_item)
     return normalized, used_free_text
 
 
@@ -60,7 +79,7 @@ async def create_consultation(
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("doctor", "hospital_admin")),
 ):
-    visit = await session.get(Visit, payload.visit_id)
+    visit = (await session.execute(select(Visit).where(Visit.id == payload.visit_id).with_for_update())).scalar_one_or_none()
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
 
@@ -82,7 +101,7 @@ async def create_consultation(
         )
 
     existing = (await session.execute(
-        select(Consultation).where(Consultation.visit_id == payload.visit_id)
+        select(Consultation).where(Consultation.visit_id == payload.visit_id).with_for_update()
     )).scalar_one_or_none()
 
     if existing:
@@ -111,7 +130,7 @@ async def create_consultation(
         data["diagnosis_icd10"] = None
 
     free_text_reason = data.pop("free_text_diagnosis_reason", None)
-    data["diagnosis_icd10"], used_free_text_diagnosis = await _validate_diagnoses(session, data.get("diagnosis_icd10"), free_text_reason)
+    data["diagnosis_icd10"], used_free_text_diagnosis = await _validate_diagnoses(session, data.get("diagnosis_icd10"), free_text_reason, require_master_id=True)
     now = datetime.now(timezone.utc)
     status_value = data.get("status") or "draft"
     data["status"] = status_value
@@ -132,6 +151,7 @@ async def create_consultation(
                 VisitTransitionSource.DOCTOR,
             )
         except ValueError as exc:
+            await session.rollback()
             raise HTTPException(status_code=409, detail=f"Cannot start consultation: {str(exc)}") from exc
 
     if consult.status == "completed":
@@ -144,6 +164,7 @@ async def create_consultation(
                 VisitTransitionSource.DOCTOR,
             )
         except ValueError as exc:
+            await session.rollback()
             raise HTTPException(status_code=409, detail=f"Cannot complete consultation: {str(exc)}") from exc
 
     record_audit(
@@ -157,7 +178,15 @@ async def create_consultation(
         new_value={"status": consult.status, "fields": data, "free_text_diagnosis": used_free_text_diagnosis},
         reason=free_text_reason if used_free_text_diagnosis else None,
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Consultation could not be saved because it already exists or changed concurrently") from exc
+    except Exception:
+        await session.rollback()
+        logger.exception("Unexpected consultation save failure request_id=%s", _request_id())
+        raise HTTPException(status_code=500, detail=f"Consultation could not be saved. Reference: {_request_id()}") from None
     await session.refresh(consult)
     return consult
 
@@ -170,12 +199,12 @@ async def update_consultation(
     current_user: dict = Depends(require_role("doctor", "hospital_admin")),
 ):
     consult = (await session.execute(
-        select(Consultation).where(Consultation.visit_id == visit_id)
+        select(Consultation).where(Consultation.visit_id == visit_id).with_for_update()
     )).scalar_one_or_none()
     if not consult:
         raise HTTPException(status_code=404, detail="Consultation not found for this visit")
 
-    visit = await session.get(Visit, visit_id)
+    visit = (await session.execute(select(Visit).where(Visit.id == visit_id).with_for_update())).scalar_one_or_none()
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
 
@@ -208,7 +237,7 @@ async def update_consultation(
     free_text_reason = data.pop("free_text_diagnosis_reason", None)
     used_free_text_diagnosis = False
     if "diagnosis_icd10" in data:
-        data["diagnosis_icd10"], used_free_text_diagnosis = await _validate_diagnoses(session, data["diagnosis_icd10"], free_text_reason)
+        data["diagnosis_icd10"], used_free_text_diagnosis = await _validate_diagnoses(session, data["diagnosis_icd10"], free_text_reason, require_master_id=True)
     if "status" in data:
         new_status = data["status"]
         if new_status == "completed":
@@ -222,7 +251,8 @@ async def update_consultation(
                     VisitTransitionSource.DOCTOR,
                 )
             except ValueError:
-                pass
+                await session.rollback()
+                raise HTTPException(status_code=409, detail="Consultation cannot be completed from the current visit state")
         elif new_status == "amended":
             consult.amended_at = datetime.now(timezone.utc)
         elif new_status in {"draft", "in_progress"}:
@@ -251,7 +281,15 @@ async def update_consultation(
         new_value=data,
         reason=free_text_reason if used_free_text_diagnosis else ("Controlled clinical amendment" if consult.status == "amended" else None),
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Consultation could not be updated because it changed concurrently") from exc
+    except Exception:
+        await session.rollback()
+        logger.exception("Unexpected consultation update failure request_id=%s", _request_id())
+        raise HTTPException(status_code=500, detail=f"Consultation could not be saved. Reference: {_request_id()}") from None
     await session.refresh(consult)
     return consult
 

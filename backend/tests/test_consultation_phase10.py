@@ -23,6 +23,7 @@ from app.models.tenant.consultation import Consultation
 from app.models.tenant.doctor import Doctor
 from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit, VisitStatus
+from app.models.tenant.icd10_code import ICD10Code
 from app.schemas.consultation import ConsultationCreate, ConsultationUpdate
 
 CURRENT_USER = {"sub": str(uuid.uuid4()), "tenant_schema": "test_tenant", "role": "doctor"}
@@ -190,3 +191,24 @@ async def test_completed_consultations_require_explicit_amendment(session):
         )
 
     assert completed.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_free_text_diagnosis_requires_reason(session):
+    with pytest.raises(Exception, match="clinical reason"):
+        ConsultationCreate(
+            visit_id=uuid.uuid4(),
+            chief_complaint="Fever",
+            diagnosis_icd10=[{"code": "FREE_TEXT", "description": "Unusual syndrome", "free_text": True}],
+            status="draft",
+        )
+
+
+@pytest.mark.asyncio
+async def test_consultation_diagnosis_schema_rejects_unknown_fields():
+    with pytest.raises(Exception):
+        ConsultationCreate(
+            visit_id=uuid.uuid4(),
+            chief_complaint="Fever",
+            diagnosis_icd10=[{"code": "J06.9", "description": "URI", "unexpected": "value"}],
+        )

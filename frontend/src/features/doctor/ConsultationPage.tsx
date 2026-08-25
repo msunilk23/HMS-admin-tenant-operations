@@ -57,6 +57,21 @@ const consultSchema = z.object({
 
 type ConsultForm = z.infer<typeof consultSchema>
 
+function consultationErrorMessage(error: unknown): string {
+  const response = (error as { response?: { status?: number; data?: { detail?: unknown }; headers?: Record<string, string> } })?.response
+  const detail = response?.data?.detail
+  const message = typeof detail === 'string'
+    ? detail
+    : Array.isArray(detail)
+      ? detail.map(item => typeof item === 'string' ? item : (item as { msg?: string })?.msg ?? 'Invalid value').join(' ')
+      : 'Consultation could not be saved.'
+  if (response?.status === 500) {
+    const requestId = response.headers?.['x-request-id'] ?? response.headers?.['x-correlation-id']
+    return `${message}${requestId ? ` Reference: ${requestId}` : ''}`
+  }
+  return response?.status ? `${message} (HTTP ${response.status})` : message
+}
+
 function DiagnosisSelector({ index, value, setValue }: { index: number; value: string; setValue: (name: `diagnoses.${number}.${'code' | 'description' | 'master_id' | 'free_text'}`, value: string | boolean) => void }) {
   const [query, setQuery] = useState(value ?? '')
   const [freeText, setFreeText] = useState(false)
@@ -70,7 +85,7 @@ function DiagnosisSelector({ index, value, setValue }: { index: number; value: s
     <div className="flex-1 relative">
       <input
         value={query}
-        onChange={e => { setQuery(e.target.value); setValue(`diagnoses.${index}.description`, e.target.value); setValue(`diagnoses.${index}.free_text`, freeText) }}
+        onChange={e => { setQuery(e.target.value); setValue(`diagnoses.${index}.description`, e.target.value); setValue(`diagnoses.${index}.code`, ''); setValue(`diagnoses.${index}.master_id`, ''); setValue(`diagnoses.${index}.free_text`, freeText) }}
         placeholder={freeText ? 'Free-text diagnosis' : 'Search ICD-10 code or description'}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
       />
@@ -469,7 +484,7 @@ export default function ConsultationPage() {
 
             {/* SOAP form */}
             <form onSubmit={handleSubmit(d => saveConsultation(d))} className="space-y-5 bg-white rounded-xl border border-gray-200 p-6">
-              {saveError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">Unable to save consultation. Check the diagnosis selection and free-text reason.</p>}
+              {saveError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{consultationErrorMessage(saveError)}</p>}
               <SoapField label="Chief Complaint *" error={errors.chief_complaint?.message}>
                 <textarea {...register('chief_complaint')} rows={2}
                   className={txtCls(!!errors.chief_complaint)}
