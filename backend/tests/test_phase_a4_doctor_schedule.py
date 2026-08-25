@@ -86,7 +86,7 @@ def _make_doctor(**overrides) -> Doctor:
 async def test_slots_follow_doctor_schedule_capacity_and_booking(session):
     patient = _make_patient()
     doctor = _make_doctor()
-    target_date = date(2026, 8, 17)
+    target_date = date(2026, 8, 31)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -101,7 +101,7 @@ async def test_slots_follow_doctor_schedule_capacity_and_booking(session):
         is_active=True,
     )
     ist_tz = timezone(timedelta(hours=5, minutes=30))
-    appointment_time = datetime(2026, 8, 17, 9, 30, tzinfo=ist_tz).astimezone(timezone.utc)
+    appointment_time = datetime(2026, 8, 31, 9, 30, tzinfo=ist_tz).astimezone(timezone.utc)
     appt = Appointment(
         id=uuid.uuid4(),
         patient_id=patient.id,
@@ -125,16 +125,16 @@ async def test_slots_follow_doctor_schedule_capacity_and_booking(session):
 
     available_slot_times = [slot.slot_time for slot in slots if slot.is_available]
     ist_tz = timezone(timedelta(hours=5, minutes=30))
-    assert datetime(2026, 8, 17, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc) in available_slot_times
-    assert datetime(2026, 8, 17, 9, 30, tzinfo=ist_tz).astimezone(timezone.utc) not in available_slot_times
-    assert datetime(2026, 8, 17, 10, 0, tzinfo=ist_tz).astimezone(timezone.utc) in available_slot_times
+    assert datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc) in available_slot_times
+    assert datetime(2026, 8, 31, 9, 30, tzinfo=ist_tz).astimezone(timezone.utc) not in available_slot_times
+    assert datetime(2026, 8, 31, 10, 0, tzinfo=ist_tz).astimezone(timezone.utc) in available_slot_times
 
 
 @pytest.mark.asyncio
 async def test_book_appointment_rejects_over_capacity_slot(session):
     patient = _make_patient()
     doctor = _make_doctor()
-    target_date = date(2026, 8, 17)
+    target_date = date(2026, 8, 31)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -149,7 +149,7 @@ async def test_book_appointment_rejects_over_capacity_slot(session):
         is_active=True,
     )
     ist_tz = timezone(timedelta(hours=5, minutes=30))
-    appt_time = datetime(2026, 8, 17, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
+    appt_time = datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
     session.add_all([patient, doctor, schedule])
     await session.commit()
 
@@ -183,7 +183,7 @@ async def test_book_appointment_rejects_over_capacity_slot(session):
 @pytest.mark.asyncio
 async def test_multi_capacity_slot_allows_up_to_configured_limit(session):
     doctor = _make_doctor()
-    target_date = date(2026, 8, 17)
+    target_date = date(2026, 8, 31)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -198,7 +198,7 @@ async def test_multi_capacity_slot_allows_up_to_configured_limit(session):
         is_active=True,
     )
     ist_tz = timezone(timedelta(hours=5, minutes=30))
-    slot_time = datetime(2026, 8, 17, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
+    slot_time = datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
     for idx in range(2):
         patient = _make_patient(id=uuid.uuid4(), uhid=f"UHID{idx + 10:03d}")
         session.add(
@@ -232,7 +232,7 @@ async def test_multi_capacity_slot_allows_up_to_configured_limit(session):
 async def test_cancelled_appointments_release_capacity(session):
     patient = _make_patient()
     doctor = _make_doctor()
-    target_date = date(2026, 8, 17)
+    target_date = date(2026, 8, 31)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -247,7 +247,7 @@ async def test_cancelled_appointments_release_capacity(session):
         is_active=True,
     )
     ist_tz = timezone(timedelta(hours=5, minutes=30))
-    slot_time = datetime(2026, 8, 17, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
+    slot_time = datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
     appt = Appointment(
         id=uuid.uuid4(),
         patient_id=patient.id,
@@ -278,7 +278,7 @@ async def test_cancelled_appointments_release_capacity(session):
 @pytest.mark.asyncio
 async def test_last_capacity_booking_is_concurrency_safe(session):
     doctor = _make_doctor()
-    target_date = date(2026, 8, 17)
+    target_date = date(2026, 8, 31)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -293,7 +293,7 @@ async def test_last_capacity_booking_is_concurrency_safe(session):
         is_active=True,
     )
     ist_tz = timezone(timedelta(hours=5, minutes=30))
-    slot_time = datetime(2026, 8, 17, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
+    slot_time = datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
     session.add_all([doctor, schedule])
     await session.commit()
 
