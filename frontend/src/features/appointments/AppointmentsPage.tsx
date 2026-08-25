@@ -374,6 +374,7 @@ function BookModal({
   const [filterDeptId, setFilterDeptId] = useState('')
   const [noResults, setNoResults] = useState(false)
   const [showRegisterModal, setShowRegisterModal] = useState(false)
+  const [selectedAvailableSlot, setSelectedAvailableSlot] = useState('')
 
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<BookForm>({
     resolver: zodResolver(bookSchema),
@@ -396,6 +397,16 @@ function BookModal({
   const todayStr = format(new Date(), 'yyyy-MM-dd')
   const selStr   = format(calSelectedDate, 'yyyy-MM-dd')
   const isSelectedToday = selStr === todayStr
+  const { data: availableSlots = [] } = useQuery<AppointmentSlot[]>({
+    queryKey: ['booking-slots', watchedDoctorId, selStr],
+    queryFn: () => appointmentService.slots(watchedDoctorId, selStr),
+    enabled: !!watchedDoctorId && !!selStr,
+  })
+
+  useEffect(() => {
+    setSelectedAvailableSlot('')
+    setValue('slot_time', '')
+  }, [watchedDoctorId, selStr, setValue])
 
   // Auto-correct time forward whenever the selected date changes to today
   useEffect(() => {
@@ -496,7 +507,10 @@ function BookModal({
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
         </div>
         <form
-          onSubmit={handleSubmit(data => bookMut.mutate({ ...data, slot_time: data.slot_time }))}
+          onSubmit={handleSubmit(data => {
+            if (!selectedAvailableSlot) return
+            bookMut.mutate({ ...data, slot_time: selectedAvailableSlot })
+          })}
           className="px-6 py-5 space-y-4"
         >
           {/* Patient search */}
@@ -711,6 +725,22 @@ function BookModal({
             {errors.slot_time && <p className="text-xs text-red-500">Select a date and time</p>}
           </div>
 
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Generated consultation slots</label>
+            {!watchedDoctorId ? (
+              <p className="text-xs text-gray-500">Select a doctor to load availability.</p>
+            ) : availableSlots.length === 0 ? (
+              <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">No consultation schedule is configured for this doctor on the selected date.</p>
+            ) : (
+              <div className="grid grid-cols-4 gap-1.5">
+                {availableSlots.map(slot => {
+                  const booked = !slot.is_available
+                  return <button key={slot.slot_time} type="button" disabled={booked} onClick={() => { setSelectedAvailableSlot(slot.slot_time); setValue('slot_time', slot.slot_time) }} className={`px-2 py-1.5 rounded text-xs font-medium border ${booked ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed' : selectedAvailableSlot === slot.slot_time ? 'bg-primary text-white border-primary' : 'bg-green-50 text-green-700 border-green-200 hover:border-primary'}`}>{format(parseISO(slot.slot_time), 'HH:mm')}<span className="block text-[10px]">{booked ? 'full' : 'available'}</span></button>
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Notes */}
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">Notes (optional)</label>
@@ -729,7 +759,7 @@ function BookModal({
             </button>
             <button
               type="submit"
-              disabled={bookMut.isPending}
+              disabled={bookMut.isPending || !selectedAvailableSlot}
               className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
             >
               {bookMut.isPending ? 'Booking…' : 'Book Appointment'}
