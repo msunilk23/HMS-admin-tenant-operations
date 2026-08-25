@@ -26,6 +26,23 @@ Authenticated tenant APIs use `Authorization: Bearer <access-token>`. Tenant ide
 | Feedback | `/api/v1/feedback` | One feedback record per visit |
 | Nurse roster | `/api/v1/nurse-roster` | Nurse, department, date, shift |
 
+## Doctor Schedules and Availability
+
+Hospital administrators manage tenant-scoped doctor schedules through
+`/api/v1/doctor-schedules`. Schedule writes use strict Pydantic validation,
+reject overlapping active sessions, and are soft-deactivated rather than
+deleted. Receptionists can read active schedules; doctors can read only their
+own schedules.
+
+The schedule API provides `GET`, `POST`, `PATCH`, and soft `DELETE` for
+`/doctor-schedules`, exception lifecycle endpoints under
+`/doctor-schedules/{doctor_id}/exceptions`, and generated availability at
+`/doctor-schedules/{doctor_id}/availability?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD`.
+Availability includes the tenant timezone, slot timestamp, booked count,
+remaining capacity, room, appointment type, past-slot filtering, and active
+leave/holiday/blocked-period handling. The compatibility endpoint
+`/appointments/slots?doctor_id=...&date=...` uses the same service.
+
 ## Feedback
 
 `POST /api/v1/feedback` accepts `visit_id`, `rating` from 1 to 5, optional `comments`, and `channel` (`qr`, `sms`, `whatsapp`, `kiosk`, or `staff`). A visit can have one feedback record. Duplicate submissions return `409`.

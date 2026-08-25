@@ -9,6 +9,7 @@ from app.api.v1.consultations import router as consultations_router
 from app.api.v1.clinical_alerts import router as clinical_alerts_router
 from app.api.v1.departments import router as departments_router
 from app.api.v1.doctors import router as doctors_router
+from app.api.v1.doctor_schedules import router as doctor_schedules_router
 from app.api.v1.lab import router as lab_router
 from app.api.v1.nurse_departments import router as nurse_departments_router
 from app.api.v1.nurse_roster import router as nurse_roster_router
@@ -40,6 +41,7 @@ api_router.include_router(users_router, prefix="/users", tags=["users"], **_tena
 api_router.include_router(patients_router, prefix="/patients", tags=["patients"], **_tenant_guard)
 api_router.include_router(departments_router, prefix="/departments", tags=["departments"], **_tenant_guard)
 api_router.include_router(doctors_router, prefix="/doctors", tags=["doctors"], **_tenant_guard)
+api_router.include_router(doctor_schedules_router, prefix="/doctor-schedules", tags=["doctor-schedules"], **_tenant_guard)
 api_router.include_router(appointments_router, prefix="/appointments", tags=["appointments"], **_tenant_guard)
 api_router.include_router(queue_router, prefix="/queue", tags=["queue"], **_tenant_guard)
 api_router.include_router(visits_router, prefix="/visits", tags=["visits"], **_tenant_guard)

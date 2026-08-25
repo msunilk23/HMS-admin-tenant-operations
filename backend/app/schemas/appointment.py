@@ -63,3 +63,9 @@ class CheckInResult(BaseModel):
 class SlotInfo(BaseModel):
     slot_time: datetime
     is_available: bool
+    booked_count: int = 0
+    remaining_capacity: int = 0
+    capacity: int = 1
+    room: Optional[str] = None
+    appointment_type: Optional[str] = None
+    blocked_reason: Optional[str] = None

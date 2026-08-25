@@ -39,6 +39,7 @@ from app.core.sms import send_appointment_confirmation
 from app.models.public.user import Tenant
 from app.services.token_allocation import TokenAllocationConflict, allocate_and_create_token
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
+from app.services.doctor_availability_service import available_slots, validate_slot
 from app.websocket.manager import ws_manager
 
 router = APIRouter(dependencies=[Depends(require_feature("appointments"))])
@@ -193,40 +194,8 @@ async def get_slots(
         "receptionist", "hospital_admin",
     )),
 ):
-    schedule_slots = await _doctor_slot_times(session, doctor_id, slot_date)
-    if not schedule_slots:
-        return []
-
-    day_start = datetime.combine(slot_date, time(0, 0), tzinfo=_IST).astimezone(timezone.utc)
-    day_end = datetime.combine(slot_date, time(23, 59, 59), tzinfo=_IST).astimezone(timezone.utc)
-
-    booked_stmt = select(Appointment.slot_time, func.count(Appointment.id)).where(
-        and_(
-            Appointment.doctor_id == doctor_id,
-            Appointment.slot_time >= day_start,
-            Appointment.slot_time <= day_end,
-            Appointment.status.notin_(["cancelled", "no_show"]),
-        )
-    ).group_by(Appointment.slot_time)
-    booked_counts_raw = (await session.execute(booked_stmt)).all()
-    booked_counts = {
-        _normalize_utc(slot_time): count
-        for slot_time, count in booked_counts_raw
-    }
-
-    results: List[SlotInfo] = []
-    for slot in schedule_slots:
-        schedule = next(
-            (s for s in await _resolve_active_schedule_rows(session, doctor_id, slot_date) if
-             slot.astimezone(_IST).time() >= s.start_time and slot.astimezone(_IST).time() < s.end_time),
-            None,
-        )
-        if schedule is None:
-            continue
-        slot_count = booked_counts.get(_normalize_utc(slot), 0)
-        is_available = slot_count < schedule.capacity
-        results.append(SlotInfo(slot_time=slot, is_available=is_available))
-    return results
+    _, generated = await available_slots(session, doctor_id, slot_date, tenant_schema=_.get("tenant_schema"))
+    return [SlotInfo.model_validate(slot.model_dump()) for slot in generated]
 
 
 # ── Create / Book ─────────────────────────────────────────────────────────────
@@ -247,20 +216,17 @@ async def book_appointment(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
-    doctor_date = payload.slot_time.astimezone(_IST).date()
-    available_slots = await _doctor_slot_times(session, payload.doctor_id, doctor_date)
-    schedule_rows = await _resolve_active_schedule_rows(session, payload.doctor_id, doctor_date)
-    matching_schedule = None
-    for schedule in schedule_rows:
-        if payload.slot_time.astimezone(_IST).time() >= schedule.start_time and payload.slot_time.astimezone(_IST).time() < schedule.end_time:
-            matching_schedule = schedule
-            break
     normalized_slot_time = _normalize_utc(payload.slot_time)
-    if matching_schedule is None or normalized_slot_time not in {_normalize_utc(slot) for slot in available_slots}:
-        raise HTTPException(status_code=409, detail="Slot is not available for this doctor schedule")
 
     slot_lock = await _booking_slot_lock(payload.doctor_id, payload.slot_time)
     async with slot_lock:
+        try:
+            matching_slot, matching_schedule = await validate_slot(
+                session, payload.doctor_id, payload.slot_time,
+                tenant_schema=current_user.get("tenant_schema"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         # Hold the schedule row in the same transaction as the capacity read and insert.
         # This prevents competing calls from both seeing the final seat as available.
         backend_name = session.bind.url.get_backend_name() if session.bind is not None else ""
@@ -280,7 +246,7 @@ async def book_appointment(
                 )
             )
         )).scalar() or 0
-        if booked_count >= matching_schedule.capacity:
+        if booked_count >= matching_slot.capacity:
             raise HTTPException(status_code=409, detail="Slot capacity reached for this doctor")
 
         booked_by_user_id = None
@@ -371,21 +337,25 @@ async def reschedule_appointment(
             detail=f"Cannot reschedule appointment with status '{appt.status}'",
         )
 
-    # Conflict check on new slot
-    conflict = (await session.execute(
-        select(Appointment).where(
-            and_(
-                Appointment.doctor_id == appt.doctor_id,
-                Appointment.slot_time == payload.slot_time,
-                Appointment.id != appt_id,
-                Appointment.status.notin_(["cancelled", "no_show"]),
-            )
+    try:
+        matching_slot, schedule = await validate_slot(
+            session, appt.doctor_id, payload.slot_time,
+            tenant_schema=current_user.get("tenant_schema"),
+            exclude_appointment_id=appt.id,
         )
-    )).scalar_one_or_none()
-    if conflict:
-        raise HTTPException(status_code=409, detail="New slot already booked for this doctor")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.execute(select(DoctorSchedule).where(DoctorSchedule.id == schedule.id).with_for_update())
+    booked_count = (await session.execute(select(func.count(Appointment.id)).where(
+        Appointment.doctor_id == appt.doctor_id,
+        Appointment.slot_time == _normalize_utc(payload.slot_time),
+        Appointment.id != appt.id,
+        Appointment.status.notin_(["cancelled", "no_show"]),
+    ))).scalar() or 0
+    if booked_count >= matching_slot.capacity:
+        raise HTTPException(status_code=409, detail="New slot capacity reached for this doctor")
 
-    appt.slot_time = payload.slot_time
+    appt.slot_time = _normalize_utc(payload.slot_time)
     if payload.notes is not None:
         appt.notes = payload.notes
     appt.status = "scheduled"
