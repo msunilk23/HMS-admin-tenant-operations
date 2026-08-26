@@ -231,7 +231,8 @@ test.describe.serial('Task 7 controlled clinical data', () => {
       headers,
       data: { status: 'completed' },
     })
-    expect([200, 409]).toContain(completeConsultation.status())
+    const completeBody = await completeConsultation.text()
+    expect([200, 409], `PATCH /api/v1/consultations/${doctor.visitId} returned ${completeConsultation.status()}: ${completeBody}`).toContain(completeConsultation.status())
 
     const after = fixtureSnapshot()
     expect(after.state.prescription_count).toBeGreaterThanOrEqual(before.state.prescription_count)

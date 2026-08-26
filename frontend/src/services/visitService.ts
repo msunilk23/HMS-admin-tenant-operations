@@ -34,7 +34,12 @@ export interface ConsultationCreate {
   chief_complaint?: string
   history?: string
   examination?: string
-  diagnosis_icd10?: { code: string; description: string }[]
+  diagnosis_icd10?: Array<{
+    code?: string
+    description: string
+    master_id?: string
+    free_text?: boolean
+  }>
   notes?: string
   follow_up_date?: string
 }

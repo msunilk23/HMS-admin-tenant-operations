@@ -50,6 +50,9 @@ const consultSchema = z.object({
   })).optional(),
   free_text_diagnosis_reason: z.string().optional(),
 }).superRefine((data, ctx) => {
+  if (data.diagnoses?.some(d => !d.free_text && (!d.code.trim() || !d.master_id))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['diagnoses'], message: 'Select an ICD-10 diagnosis from the results' })
+  }
   if (data.diagnoses?.some(d => d.free_text) && !data.free_text_diagnosis_reason?.trim()) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['free_text_diagnosis_reason'], message: 'Reason is required for free-text diagnosis' })
   }
@@ -269,11 +272,11 @@ export default function ConsultationPage() {
   const { mutate: saveConsultation, isPending, error: saveError } = useMutation({
     mutationFn: (data: ConsultForm) => {
       // If diagnoses is present but all entries are empty, treat as null
-      let cleanedDiagnoses = data.diagnoses
-      if (Array.isArray(cleanedDiagnoses)) {
-        cleanedDiagnoses = cleanedDiagnoses.filter(d => d.code.trim() || d.description.trim())
-        if (cleanedDiagnoses.length === 0) cleanedDiagnoses = undefined
-      }
+      const cleanedDiagnoses = (data.diagnoses ?? [])
+        .filter(d => d.code?.trim() || d.description.trim())
+        .map(d => d.free_text
+          ? { description: d.description.trim(), free_text: true }
+          : { code: d.code?.trim() ?? '', description: d.description.trim(), master_id: d.master_id, free_text: false })
       const payload = {
         visit_id: selectedVisit!.id,
         chief_complaint: data.chief_complaint,
@@ -281,7 +284,7 @@ export default function ConsultationPage() {
         examination: data.examination,
         notes: data.notes,
         follow_up_date: data.follow_up_date || undefined,
-        diagnosis_icd10: cleanedDiagnoses,
+        diagnosis_icd10: cleanedDiagnoses.length > 0 ? cleanedDiagnoses : undefined,
         free_text_diagnosis_reason: data.free_text_diagnosis_reason,
       }
       // Use PATCH if consultation already exists (editing), POST if new

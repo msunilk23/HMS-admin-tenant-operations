@@ -47,7 +47,8 @@ async def _validate_diagnoses(session: AsyncSession, diagnoses: list[dict] | Non
                 raise HTTPException(status_code=422, detail="Free-text diagnosis requires a description")
             if not free_text_reason or not free_text_reason.strip():
                 raise HTTPException(status_code=422, detail="Free-text diagnosis requires a clinical reason")
-            normalized.append({"code": "FREE_TEXT", "description": description, "free_text": True})
+            # Store free-text diagnoses without controlled ICD identifiers.
+            normalized.append({"description": description, "free_text": True})
             used_free_text = True
             continue
         try:
@@ -251,8 +252,9 @@ async def update_consultation(
                     VisitTransitionSource.DOCTOR,
                 )
             except ValueError:
-                await session.rollback()
-                raise HTTPException(status_code=409, detail="Consultation cannot be completed from the current visit state")
+                if visit.status != VisitStatus.CONSULTATION_COMPLETED.value:
+                    await session.rollback()
+                    raise HTTPException(status_code=409, detail="Consultation cannot be completed from the current visit state")
         elif new_status == "amended":
             consult.amended_at = datetime.now(timezone.utc)
         elif new_status in {"draft", "in_progress"}:
