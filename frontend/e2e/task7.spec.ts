@@ -86,6 +86,21 @@ function fixtureSnapshot(visitId: string = doctor.visitId): FixtureSnapshot {
   return JSON.parse(output) as FixtureSnapshot
 }
 
+function resetTask7Fixture() {
+  execFileSync(process.env.PYTHON ?? 'python', [
+    path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'),
+    'seed',
+  ], {
+    cwd: path.join(repoRoot, 'backend'),
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      DATABASE_URL: process.env.E2E_DATABASE_URL ?? 'postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital',
+      SECRET_KEY: process.env.SECRET_KEY ?? 'test-secret-key',
+    },
+  })
+}
+
 async function login(page: Page) {
   await page.goto('/login')
   await page.getByPlaceholder(/you@hospital\.in or mkrish66/i).fill(doctor.username)
@@ -155,16 +170,30 @@ test.describe.serial('Task 7 controlled clinical data', () => {
   })
 
   test('free-text diagnosis requires a reason and is visibly marked', async ({ page }) => {
+    resetTask7Fixture()
     await login(page)
     await page.goto('/doctor/consultation')
     await page.getByText('E2E Patient').first().click()
+    await page.getByRole('button', { name: /add diagnosis/i }).click()
     await page.getByRole('button', { name: /free-text diagnosis/i }).first().click()
     await page.getByPlaceholder('Free-text diagnosis', { exact: true }).fill('E2E uncommon syndrome')
+    await page.getByPlaceholder(/what brings the patient in today/i).fill('E2E uncommon syndrome symptoms')
     await page.getByRole('button', { name: /save & write prescription/i }).click()
     await expect(page.getByPlaceholder(/reason for using free-text diagnosis/i)).toBeVisible()
     await page.getByPlaceholder(/reason for using free-text diagnosis/i).fill('No suitable ICD-10 code exists')
     await expect(page).toHaveURL(/doctor\/consultation/)
+    const consultationResponsePromise = page.waitForResponse(
+      response =>
+        response.url().includes('/consultations') &&
+        ['POST', 'PATCH'].includes(response.request().method())
+    )
     await page.locator('form').getByRole('button', { name: /save & write prescription/i }).click()
+    const consultationResponse = await consultationResponsePromise
+    const responseBody = await consultationResponse.text()
+    expect(
+      consultationResponse.ok(),
+      `${consultationResponse.request().method()} ${consultationResponse.url()}\nPayload: ${consultationResponse.request().postData() ?? '{}'}\nStatus: ${consultationResponse.status()}\nBody: ${responseBody}`,
+    ).toBeTruthy()
     await expect(page).toHaveURL(/doctor\/prescription/)
   })
 

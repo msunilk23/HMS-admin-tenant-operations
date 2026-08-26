@@ -145,6 +145,8 @@ test.describe.serial('Nurse vitals draft and handoff', () => {
     await login(page, fixture.nurse_username, fixture.nurse_password, /nurse\/vitals/)
     await expect(page.getByText('Nurse Vitals Patient')).toBeVisible()
     await page.getByText('Nurse Vitals Patient').click()
+    await expect(page.locator('input[name="bp_systolic"]')).toHaveValue('120')
+    await expect(page.locator('input[name="temperature"]')).toHaveValue('98.6')
     await fillCompleteVitals(page)
     const completeRequest = page.waitForRequest(requestItem => requestItem.url().includes('/api/v1/vitals') && requestItem.method() === 'POST')
     const completeResponse = page.waitForResponse(response => response.url().includes('/api/v1/vitals') && response.request().method() === 'POST')
