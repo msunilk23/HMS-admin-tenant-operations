@@ -86,6 +86,21 @@ function fixtureSnapshot(visitId: string = doctor.visitId): FixtureSnapshot {
   return JSON.parse(output) as FixtureSnapshot
 }
 
+function resetTask7Fixture() {
+  execFileSync(process.env.PYTHON ?? 'python', [
+    path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'),
+    'seed',
+  ], {
+    cwd: path.join(repoRoot, 'backend'),
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      DATABASE_URL: process.env.E2E_DATABASE_URL ?? 'postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital',
+      SECRET_KEY: process.env.SECRET_KEY ?? 'test-secret-key',
+    },
+  })
+}
+
 async function login(page: Page) {
   await page.goto('/login')
   await page.getByPlaceholder(/you@hospital\.in or mkrish66/i).fill(doctor.username)
@@ -112,13 +127,26 @@ async function openConsultationForSeedPatient(page: Page) {
   const callIn = page.getByRole('button', { name: /call in/i }).first()
   if (await callIn.isVisible({ timeout: 5_000 }).catch(() => false)) {
     await callIn.click()
+    await expect(page.getByPlaceholder(/what brings the patient in today/i)).toBeVisible()
     return
   }
   await page.getByText('E2E Patient').first().click()
+  await expect(page.getByPlaceholder(/what brings the patient in today/i)).toBeVisible()
 }
 
 test.describe.serial('Task 7 controlled clinical data', () => {
   test('doctor searches ICD-10 by code and description, selects, saves, and reloads diagnosis', async ({ page }) => {
+    if (test.info().retry > 0) {
+      execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed'], {
+        cwd: path.join(repoRoot, 'backend'),
+        stdio: 'inherit',
+        env: {
+          ...process.env,
+          DATABASE_URL: process.env.E2E_DATABASE_URL ?? 'postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital',
+          SECRET_KEY: process.env.SECRET_KEY ?? 'test-secret-key',
+        },
+      })
+    }
     await login(page)
     await openConsultationForSeedPatient(page)
     await page.getByRole('button', { name: /add diagnosis/i }).click()
@@ -130,7 +158,10 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     await expect(diagnosis).toHaveValue(/E2E\.J06\.9.*E2E Acute upper respiratory infection/)
 
     await page.getByPlaceholder(/what brings the patient in today/i).fill('E2E cough follow-up')
+    const saveResponse = page.waitForResponse(response => response.url().includes('/api/v1/consultations') && ['POST', 'PATCH'].includes(response.request().method()))
     await page.getByRole('button', { name: /save & write prescription/i }).click()
+    const response = await saveResponse
+    expect(response.ok(), await response.text()).toBeTruthy()
     await expect(page).toHaveURL(/doctor\/prescription/)
 
     await page.goto('/doctor/consultation')
@@ -139,16 +170,30 @@ test.describe.serial('Task 7 controlled clinical data', () => {
   })
 
   test('free-text diagnosis requires a reason and is visibly marked', async ({ page }) => {
+    resetTask7Fixture()
     await login(page)
     await page.goto('/doctor/consultation')
     await page.getByText('E2E Patient').first().click()
+    await page.getByRole('button', { name: /add diagnosis/i }).click()
     await page.getByRole('button', { name: /free-text diagnosis/i }).first().click()
     await page.getByPlaceholder('Free-text diagnosis', { exact: true }).fill('E2E uncommon syndrome')
+    await page.getByPlaceholder(/what brings the patient in today/i).fill('E2E uncommon syndrome symptoms')
     await page.getByRole('button', { name: /save & write prescription/i }).click()
     await expect(page.getByPlaceholder(/reason for using free-text diagnosis/i)).toBeVisible()
     await page.getByPlaceholder(/reason for using free-text diagnosis/i).fill('No suitable ICD-10 code exists')
     await expect(page).toHaveURL(/doctor\/consultation/)
+    const consultationResponsePromise = page.waitForResponse(
+      response =>
+        response.url().includes('/consultations') &&
+        ['POST', 'PATCH'].includes(response.request().method())
+    )
     await page.locator('form').getByRole('button', { name: /save & write prescription/i }).click()
+    const consultationResponse = await consultationResponsePromise
+    const responseBody = await consultationResponse.text()
+    expect(
+      consultationResponse.ok(),
+      `${consultationResponse.request().method()} ${consultationResponse.url()}\nPayload: ${consultationResponse.request().postData() ?? '{}'}\nStatus: ${consultationResponse.status()}\nBody: ${responseBody}`,
+    ).toBeTruthy()
     await expect(page).toHaveURL(/doctor\/prescription/)
   })
 
@@ -186,7 +231,8 @@ test.describe.serial('Task 7 controlled clinical data', () => {
       headers,
       data: { status: 'completed' },
     })
-    expect([200, 409]).toContain(completeConsultation.status())
+    const completeBody = await completeConsultation.text()
+    expect([200, 409], `PATCH /api/v1/consultations/${doctor.visitId} returned ${completeConsultation.status()}: ${completeBody}`).toContain(completeConsultation.status())
 
     const after = fixtureSnapshot()
     expect(after.state.prescription_count).toBeGreaterThanOrEqual(before.state.prescription_count)

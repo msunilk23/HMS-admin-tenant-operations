@@ -2,7 +2,29 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, validator
+
+
+class DiagnosisInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: Optional[str] = Field(None, min_length=1)
+    description: str = Field(..., min_length=1)
+    master_id: Optional[uuid.UUID] = None
+    free_text: bool = False
+
+    @model_validator(mode="after")
+    def validate_kind(self):
+        if not self.description.strip():
+            raise ValueError("Diagnosis description cannot be blank")
+        if self.free_text:
+            if self.code is not None or self.master_id is not None:
+                raise ValueError("Free-text diagnoses must not include code or master_id")
+        elif not self.code or not self.code.strip():
+            raise ValueError("Controlled ICD-10 diagnosis requires a code")
+        elif self.master_id is None:
+            raise ValueError("Controlled ICD-10 diagnosis requires a master_id")
+        return self
 
 
 class ConsultationCreate(BaseModel):
@@ -12,7 +34,7 @@ class ConsultationCreate(BaseModel):
     history: Optional[str] = None
     examination: Optional[str] = None
     # e.g. [{"code": "J06.9", "description": "Acute upper respiratory infection"}]
-    diagnosis_icd10: Optional[List[Dict[str, Any]]] = None
+    diagnosis_icd10: Optional[List[DiagnosisInput]] = None
     free_text_diagnosis_reason: Optional[str] = None
 
     @validator("diagnosis_icd10", pre=True)
@@ -35,6 +57,12 @@ class ConsultationCreate(BaseModel):
         return v
     notes: Optional[str] = None
     follow_up_date: Optional[date] = None
+
+    @model_validator(mode="after")
+    def require_free_text_reason(self):
+        if any(item.free_text or (item.code or "").upper() == "FREE_TEXT" for item in (self.diagnosis_icd10 or [])) and not (self.free_text_diagnosis_reason or "").strip():
+            raise ValueError("Free-text diagnosis requires a clinical reason")
+        return self
 
 
 class ConsultationUpdate(BaseModel):
@@ -42,7 +70,7 @@ class ConsultationUpdate(BaseModel):
     chief_complaint: Optional[str] = None
     history: Optional[str] = None
     examination: Optional[str] = None
-    diagnosis_icd10: Optional[List[Dict[str, Any]]] = None
+    diagnosis_icd10: Optional[List[DiagnosisInput]] = None
     free_text_diagnosis_reason: Optional[str] = None
 
     @validator("diagnosis_icd10", pre=True)
@@ -65,6 +93,12 @@ class ConsultationUpdate(BaseModel):
         return v
     notes: Optional[str] = None
     follow_up_date: Optional[date] = None
+
+    @model_validator(mode="after")
+    def require_free_text_reason(self):
+        if any(item.free_text or (item.code or "").upper() == "FREE_TEXT" for item in (self.diagnosis_icd10 or [])) and not (self.free_text_diagnosis_reason or "").strip():
+            raise ValueError("Free-text diagnosis requires a clinical reason")
+        return self
 
 
 class ConsultationRead(BaseModel):
@@ -74,7 +108,7 @@ class ConsultationRead(BaseModel):
     chief_complaint: Optional[str] = None
     history: Optional[str] = None
     examination: Optional[str] = None
-    diagnosis_icd10: Optional[List[Dict[str, Any]]] = None
+    diagnosis_icd10: Optional[List[DiagnosisInput]] = None
     free_text_diagnosis_reason: Optional[str] = None
     notes: Optional[str] = None
     follow_up_date: Optional[date] = None
@@ -103,4 +137,12 @@ class ConsultationRead(BaseModel):
                 return None
         if isinstance(v, list) and len(v) == 0:
             return None
+        # Normalize legacy persisted free-text sentinel data on reads.
+        if isinstance(v, list):
+            return [
+                {"description": item.get("description", ""), "free_text": True}
+                if isinstance(item, dict) and str(item.get("code", "")).upper() == "FREE_TEXT"
+                else item
+                for item in v
+            ]
         return v

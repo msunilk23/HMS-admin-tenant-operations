@@ -50,12 +50,30 @@ const consultSchema = z.object({
   })).optional(),
   free_text_diagnosis_reason: z.string().optional(),
 }).superRefine((data, ctx) => {
+  if (data.diagnoses?.some(d => !d.free_text && (!d.code.trim() || !d.master_id))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['diagnoses'], message: 'Select an ICD-10 diagnosis from the results' })
+  }
   if (data.diagnoses?.some(d => d.free_text) && !data.free_text_diagnosis_reason?.trim()) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['free_text_diagnosis_reason'], message: 'Reason is required for free-text diagnosis' })
   }
 })
 
 type ConsultForm = z.infer<typeof consultSchema>
+
+function consultationErrorMessage(error: unknown): string {
+  const response = (error as { response?: { status?: number; data?: { detail?: unknown }; headers?: Record<string, string> } })?.response
+  const detail = response?.data?.detail
+  const message = typeof detail === 'string'
+    ? detail
+    : Array.isArray(detail)
+      ? detail.map(item => typeof item === 'string' ? item : (item as { msg?: string })?.msg ?? 'Invalid value').join(' ')
+      : 'Consultation could not be saved.'
+  if (response?.status === 500) {
+    const requestId = response.headers?.['x-request-id'] ?? response.headers?.['x-correlation-id']
+    return `${message}${requestId ? ` Reference: ${requestId}` : ''}`
+  }
+  return response?.status ? `${message} (HTTP ${response.status})` : message
+}
 
 function DiagnosisSelector({ index, value, setValue }: { index: number; value: string; setValue: (name: `diagnoses.${number}.${'code' | 'description' | 'master_id' | 'free_text'}`, value: string | boolean) => void }) {
   const [query, setQuery] = useState(value ?? '')
@@ -70,7 +88,7 @@ function DiagnosisSelector({ index, value, setValue }: { index: number; value: s
     <div className="flex-1 relative">
       <input
         value={query}
-        onChange={e => { setQuery(e.target.value); setValue(`diagnoses.${index}.description`, e.target.value); setValue(`diagnoses.${index}.free_text`, freeText) }}
+        onChange={e => { setQuery(e.target.value); setValue(`diagnoses.${index}.description`, e.target.value); setValue(`diagnoses.${index}.code`, ''); setValue(`diagnoses.${index}.master_id`, ''); setValue(`diagnoses.${index}.free_text`, freeText) }}
         placeholder={freeText ? 'Free-text diagnosis' : 'Search ICD-10 code or description'}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
       />
@@ -254,11 +272,11 @@ export default function ConsultationPage() {
   const { mutate: saveConsultation, isPending, error: saveError } = useMutation({
     mutationFn: (data: ConsultForm) => {
       // If diagnoses is present but all entries are empty, treat as null
-      let cleanedDiagnoses = data.diagnoses
-      if (Array.isArray(cleanedDiagnoses)) {
-        cleanedDiagnoses = cleanedDiagnoses.filter(d => d.code.trim() || d.description.trim())
-        if (cleanedDiagnoses.length === 0) cleanedDiagnoses = undefined
-      }
+      const cleanedDiagnoses = (data.diagnoses ?? [])
+        .filter(d => d.code?.trim() || d.description.trim())
+        .map(d => d.free_text
+          ? { description: d.description.trim(), free_text: true }
+          : { code: d.code?.trim() ?? '', description: d.description.trim(), master_id: d.master_id, free_text: false })
       const payload = {
         visit_id: selectedVisit!.id,
         chief_complaint: data.chief_complaint,
@@ -266,7 +284,7 @@ export default function ConsultationPage() {
         examination: data.examination,
         notes: data.notes,
         follow_up_date: data.follow_up_date || undefined,
-        diagnosis_icd10: cleanedDiagnoses,
+        diagnosis_icd10: cleanedDiagnoses.length > 0 ? cleanedDiagnoses : undefined,
         free_text_diagnosis_reason: data.free_text_diagnosis_reason,
       }
       // Use PATCH if consultation already exists (editing), POST if new
@@ -469,7 +487,7 @@ export default function ConsultationPage() {
 
             {/* SOAP form */}
             <form onSubmit={handleSubmit(d => saveConsultation(d))} className="space-y-5 bg-white rounded-xl border border-gray-200 p-6">
-              {saveError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">Unable to save consultation. Check the diagnosis selection and free-text reason.</p>}
+              {saveError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{consultationErrorMessage(saveError)}</p>}
               <SoapField label="Chief Complaint *" error={errors.chief_complaint?.message}>
                 <textarea {...register('chief_complaint')} rows={2}
                   className={txtCls(!!errors.chief_complaint)}

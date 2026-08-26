@@ -23,6 +23,7 @@ from app.models.tenant.consultation import Consultation
 from app.models.tenant.doctor import Doctor
 from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit, VisitStatus
+from app.models.tenant.icd10_code import ICD10Code
 from app.schemas.consultation import ConsultationCreate, ConsultationUpdate
 
 CURRENT_USER = {"sub": str(uuid.uuid4()), "tenant_schema": "test_tenant", "role": "doctor"}
@@ -33,6 +34,7 @@ _TABLES = [
     Visit.__table__,
     Consultation.__table__,
     AuditLog.__table__,
+    ICD10Code.__table__,
 ]
 
 
@@ -134,14 +136,15 @@ async def test_consultation_completion_moves_visit_to_consultation_completed(ses
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
-    session.add_all([doctor, patient, visit])
+    icd = ICD10Code(id=uuid.uuid4(), code="J06.9", description="Acute URI", is_active=True)
+    session.add_all([doctor, patient, visit, icd])
     await session.commit()
 
     response = await create_consultation(
         payload=ConsultationCreate(
             visit_id=visit.id,
             chief_complaint="Dry cough",
-            diagnosis_icd10=[{"code": "J06.9", "description": "Acute URI"}],
+            diagnosis_icd10=[{"code": "J06.9", "description": "Acute URI", "master_id": icd.id}],
             status="completed",
         ),
         session=session,
@@ -190,3 +193,46 @@ async def test_completed_consultations_require_explicit_amendment(session):
         )
 
     assert completed.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_free_text_diagnosis_requires_reason(session):
+    with pytest.raises(Exception, match="clinical reason"):
+        ConsultationCreate(
+            visit_id=uuid.uuid4(),
+            chief_complaint="Fever",
+            diagnosis_icd10=[{"description": "Unusual syndrome", "free_text": True}],
+            status="draft",
+        )
+
+
+@pytest.mark.asyncio
+async def test_consultation_diagnosis_schema_rejects_unknown_fields():
+    with pytest.raises(Exception):
+        ConsultationCreate(
+            visit_id=uuid.uuid4(),
+            chief_complaint="Fever",
+            diagnosis_icd10=[{"code": "J06.9", "description": "URI", "unexpected": "value"}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_diagnosis_schema_enforces_controlled_and_free_text_contracts():
+    with pytest.raises(Exception, match="master_id"):
+        ConsultationCreate(
+            visit_id=uuid.uuid4(),
+            diagnosis_icd10=[{"code": "J06.9", "description": "URI"}],
+        )
+    with pytest.raises(Exception):
+        ConsultationCreate(
+            visit_id=uuid.uuid4(),
+            diagnosis_icd10=[{"code": "", "master_id": "", "description": "Free text", "free_text": True}],
+            free_text_diagnosis_reason="No suitable ICD-10 code",
+        )
+    payload = ConsultationCreate(
+        visit_id=uuid.uuid4(),
+        diagnosis_icd10=[{"description": "Unusual syndrome", "free_text": True}],
+        free_text_diagnosis_reason="No suitable ICD-10 code",
+    )
+    assert payload.diagnosis_icd10[0].code is None
+    assert payload.diagnosis_icd10[0].master_id is None
