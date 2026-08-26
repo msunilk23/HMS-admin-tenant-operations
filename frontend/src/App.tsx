@@ -24,6 +24,7 @@ import LabPage from '@/features/lab/LabPage'
 import AdminDashboard from '@/features/admin/AdminDashboard'
 import TenantsPage from '@/features/super_admin/TenantsPage'
 import RequisitionsPage from '@/features/requisitions/RequisitionsPage'
+import PharmacyAdminPage from '@/features/admin/PharmacyAdminPage'
 
 import { useAuthStore } from '@/features/auth/authStore'
 import TenantBranding from '@/components/shared/TenantBranding'
@@ -118,6 +119,7 @@ export default function App() {
             <Route path="/admin/doctors" element={<RoleGuard allowed={ADMIN}><DoctorsAdminPage /></RoleGuard>} />
             <Route path="/admin/doctors/schedules" element={<RoleGuard allowed={ADMIN}><DoctorSchedulesPage /></RoleGuard>} />
             <Route path="/admin/users" element={<RoleGuard allowed={['hospital_admin']}><UsersAdminPage /></RoleGuard>} />
+            <Route path="/admin/pharmacy" element={<RoleGuard allowed={ADMIN}><PharmacyAdminPage /></RoleGuard>} />
             <Route path="/super/hospitals" element={<RoleGuard allowed={['super_admin']}><TenantsPage /></RoleGuard>} />
             <Route path="/change-password" element={<ChangePasswordPage />} />
           </Route>

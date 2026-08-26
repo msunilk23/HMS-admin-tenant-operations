@@ -198,24 +198,25 @@ test.describe.serial('Task 7 controlled clinical data', () => {
   })
 
   test('doctor searches distinct medicines, fills multiple rows, and reloads prescription details', async ({ page }) => {
+    resetTask7Fixture()
     const before = fixtureSnapshot()
     const doctorUserId = before.tenants.hospital_a.doctor_user_id
 
     await login(page)
     await page.goto(`/doctor/prescription/${doctor.visitId}`)
-    const medicineSearch = page.getByPlaceholder(/search generic, brand, strength or form/i).first()
+    const medicineSearch = page.getByPlaceholder(/search formulary generic, brand or composition/i).first()
     await page.getByRole('button', { name: /add medicine/i }).click()
-    await medicineSearch.fill('E2E Paracetamol')
-    await expect(page.getByText(/500 mg.*Tablet/)).toBeVisible()
-    await page.getByRole('button', { name: /E2E Paracetamol.*500 mg.*Tablet/i }).click()
+    await medicineSearch.fill('E2E Dolo')
+    await expect(page.getByText(/E2E Paracetamol.*500.*Tablet/)).toBeVisible()
+    await page.getByRole('button', { name: /E2E Paracetamol.*500.*Tablet/i }).click()
     await page.getByPlaceholder(/e\.g\. 500mg/i).first().fill('1')
     await page.locator('select').nth(0).selectOption({ label: '5 days' })
     await page.getByPlaceholder(/e\.g\. 10/i).first().fill('5')
     await page.getByRole('button', { name: /add medicine/i }).click()
-    const secondSearch = page.getByPlaceholder(/search generic, brand, strength or form/i).nth(1)
+    const secondSearch = page.getByPlaceholder(/search formulary generic, brand or composition/i).nth(1)
     await secondSearch.fill('E2E Crocin')
-    await expect(page.getByText(/650 mg.*Capsule/)).toBeVisible()
-    await page.getByRole('button', { name: /E2E Paracetamol.*650 mg.*Capsule/i }).click()
+    await expect(page.getByText(/650.*Tablet/)).toBeVisible()
+    await page.getByRole('button', { name: /E2E Paracetamol.*650.*Tablet/i }).click()
     await page.getByPlaceholder(/e\.g\. 500mg/i).nth(1).fill('1')
     await page.locator('select').nth(2).selectOption({ label: '3 days' })
     await page.getByPlaceholder(/e\.g\. 10/i).nth(1).fill('3')
@@ -223,7 +224,7 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     await expect(page).toHaveURL(/doctor\/consultation/)
 
     await page.goto(`/doctor/prescription/${doctor.visitId}`)
-    await expect(page.getByText(/E2E Paracetamol/).first()).toBeVisible()
+    await expect(page.getByText(/E2E Dolo/).first()).toBeVisible()
     await expect(page.getByText(/500 mg/).first()).toBeVisible()
 
     const headers = await authRequest(page.request)

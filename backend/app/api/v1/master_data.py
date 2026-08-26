@@ -2,7 +2,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.dependencies import require_role
+from app.core.dependencies import require_permission, require_role
 from app.db.engine import get_session
 from app.models.tenant.department import Department
 from app.models.tenant.dosage_form import DosageForm
@@ -45,7 +45,7 @@ from app.schemas.master_data import (
 )
 from app.services.audit_service import record_audit
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_permission("PHARMACY_MASTER_VIEW"))])
 
 
 def _generic_medicine_values(item: GenericMedicine | None) -> dict | None:
@@ -97,7 +97,7 @@ async def get_generic_medicine(
 async def create_generic_medicine(
     payload: GenericMedicineCreate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     code = payload.code.strip().upper()
     existing = await session.scalar(select(GenericMedicine).where(GenericMedicine.code == code))
@@ -128,7 +128,7 @@ async def update_generic_medicine(
     generic_medicine_id: uuid.UUID,
     payload: GenericMedicineUpdate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(GenericMedicine, generic_medicine_id)
     if not item:
@@ -155,7 +155,7 @@ async def update_generic_medicine(
 async def deactivate_generic_medicine(
     generic_medicine_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(GenericMedicine, generic_medicine_id)
     if not item:
@@ -180,7 +180,7 @@ async def deactivate_generic_medicine(
 async def import_generic_medicines(
     items: list[GenericMedicineImportItem],
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     result = []
     for payload in items:
@@ -277,7 +277,7 @@ async def get_dosage_form(
 async def create_dosage_form(
     payload: DosageFormCreate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     code = payload.code.strip().upper()
     if await session.scalar(select(DosageForm).where(DosageForm.code == code)):
@@ -295,7 +295,7 @@ async def update_dosage_form(
     dosage_form_id: uuid.UUID,
     payload: DosageFormUpdate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(DosageForm, dosage_form_id)
     if not item:
@@ -314,7 +314,7 @@ async def update_dosage_form(
 async def deactivate_dosage_form(
     dosage_form_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(DosageForm, dosage_form_id)
     if not item:
@@ -330,7 +330,7 @@ async def deactivate_dosage_form(
 async def import_dosage_forms(
     items: list[DosageFormImportItem],
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     result = []
     for payload in items:
@@ -385,7 +385,7 @@ async def get_route(
 async def create_route(
     payload: RouteCreate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     code = payload.code.strip().upper()
     if await session.scalar(select(Route).where(Route.code == code)):
@@ -403,7 +403,7 @@ async def update_route(
     route_id: uuid.UUID,
     payload: RouteUpdate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(Route, route_id)
     if not item:
@@ -422,7 +422,7 @@ async def update_route(
 async def deactivate_route(
     route_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(Route, route_id)
     if not item:
@@ -438,7 +438,7 @@ async def deactivate_route(
 async def import_routes(
     items: list[RouteImportItem],
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     result = []
     for payload in items:
@@ -504,7 +504,7 @@ async def get_manufacturer(
 async def create_manufacturer(
     payload: ManufacturerCreate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     code = payload.code.strip().upper()
     if await session.scalar(select(Manufacturer).where(Manufacturer.code == code)):
@@ -527,7 +527,7 @@ async def update_manufacturer(
     manufacturer_id: uuid.UUID,
     payload: ManufacturerUpdate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(Manufacturer, manufacturer_id)
     if not item:
@@ -546,7 +546,7 @@ async def update_manufacturer(
 async def deactivate_manufacturer(
     manufacturer_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(Manufacturer, manufacturer_id)
     if not item:
@@ -562,7 +562,7 @@ async def deactivate_manufacturer(
 async def import_manufacturers(
     items: list[ManufacturerImportItem],
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     result = []
     for payload in items:
@@ -668,7 +668,7 @@ async def get_medicine_product(
 async def create_medicine_product(
     payload: MedicineProductCreate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     code = payload.code.strip().upper()
     if await session.scalar(select(MedicineProduct).where(MedicineProduct.code == code)):
@@ -687,7 +687,7 @@ async def update_medicine_product(
     medicine_product_id: uuid.UUID,
     payload: MedicineProductUpdate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(MedicineProduct, medicine_product_id)
     if not item:
@@ -712,7 +712,7 @@ async def update_medicine_product(
 async def deactivate_medicine_product(
     medicine_product_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_EDIT")),
 ):
     item = await session.get(MedicineProduct, medicine_product_id)
     if not item:
@@ -728,7 +728,7 @@ async def deactivate_medicine_product(
 async def import_medicine_products(
     items: list[MedicineProductImportItem],
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
 ):
     result = []
     for payload in items:
@@ -828,7 +828,7 @@ async def get_hospital_formulary(
 async def create_hospital_formulary(
     payload: HospitalFormularyCreate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_FORMULARY_MANAGE")),
 ):
     await _validate_formulary_references(session, payload.medicine_product_id, payload.department_id)
     existing = await session.scalar(
@@ -852,7 +852,7 @@ async def update_hospital_formulary(
     formulary_id: uuid.UUID,
     payload: HospitalFormularyUpdate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_FORMULARY_MANAGE")),
 ):
     item = await session.get(HospitalFormulary, formulary_id)
     if not item:
@@ -869,7 +869,7 @@ async def update_hospital_formulary(
 async def deactivate_hospital_formulary(
     formulary_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_FORMULARY_MANAGE")),
 ):
     item = await session.get(HospitalFormulary, formulary_id)
     if not item:
@@ -885,7 +885,7 @@ async def deactivate_hospital_formulary(
 async def import_hospital_formulary(
     items: list[HospitalFormularyImportItem],
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_FORMULARY_MANAGE")),
 ):
     result = []
     for payload in items:

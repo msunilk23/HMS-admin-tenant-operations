@@ -92,6 +92,35 @@ def require_role(*roles: str):
     return _check
 
 
+def require_permission(*permissions: str):
+    """Dependency factory for live role-permission checks."""
+
+    async def _check(
+        current_user: Annotated[dict, Depends(get_current_user)],
+        session: Annotated[AsyncSession, Depends(get_session)],
+    ) -> dict:
+        role = current_user.get("role")
+        if not role or role == "super_admin":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        from app.models.public.permission import Permission, RolePermission
+
+        allowed = await session.scalar(
+            select(Permission.code)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(
+                RolePermission.role == role,
+                Permission.code.in_(permissions),
+                Permission.is_active == True,  # noqa: E712
+            )
+            .limit(1)
+        )
+        if allowed is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        return current_user
+
+    return _check
+
+
 async def require_tenant_user(
     current_user: Annotated[dict, Depends(get_current_user)],
 ) -> dict:

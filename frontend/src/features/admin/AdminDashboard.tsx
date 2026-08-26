@@ -391,6 +391,9 @@ export default function AdminDashboard() {
             </p>
           )}
         </div>
+        <a href="/admin/pharmacy" className="px-3 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary/90">
+          Pharmacy Master Data
+        </a>
       </div>
 
       {/* Row 3: Department performance table */}
