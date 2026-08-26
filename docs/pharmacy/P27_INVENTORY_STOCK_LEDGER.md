@@ -1,0 +1,2 @@
+# P27 — Batch Inventory + Stock Ledger + FEFO
+Implement pharmacy locations, inventory batches and auditable stock transactions. Inventory is medicine+batch+location based. Expired/quarantined stock is non-dispensable. FEFO is default allocation. Ledger is the audit source; prescription creation creates no stock movement. Add reconciliation and isolation tests. Split into P27.x tasks and approval-gate each task.

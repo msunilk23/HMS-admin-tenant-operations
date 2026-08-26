@@ -18,11 +18,6 @@ Backend dependencies are authoritative. Frontend route and navigation guards are
 | User/role management | No | No | No | No | No | No | Manage tenant staff | Manage platform users/tenants |
 | Audit records | No direct access | No direct access | No direct access | No direct access | No direct access | No direct access | Tenant administration scope | Platform scope |
 
-The Super Admin platform scope includes resetting the password of exactly one
-active `hospital_admin` for an active selected tenant. It does not permit
-resetting super admins or other tenant roles, and every reset requires a
-reason and creates a secret-free platform audit record.
-
 ## Enforcement rules
 
 - Every tenant route is protected by tenant context and role dependencies.
@@ -31,3 +26,33 @@ reason and creates a secret-free platform audit record.
 - Nurses are filtered to assigned departments and roster scope.
 - Feature dependencies are evaluated from tenant entitlements; missing or invalid tenant context is rejected.
 - The client cannot submit role, tenant, workflow status, payment state, or audit identity as an authorization override.
+
+---
+
+## Pharmacy Extended Permissions
+
+The current Pharmacist/Hospital Admin capabilities remain valid. The expanded Pharmacy module introduces granular permissions using the existing authorization framework rather than frontend role-name checks.
+
+Initial P25 permissions should be equivalent to:
+
+- `PHARMACY_MASTER_VIEW`
+- `PHARMACY_MASTER_CREATE`
+- `PHARMACY_MASTER_EDIT`
+- `PHARMACY_FORMULARY_MANAGE`
+
+Future permissions should distinguish:
+
+- pharmacy dispensing
+- pharmacy manager approval
+- supplier/procurement management
+- GRN receiving
+- inventory viewing
+- stock adjustment
+- stock transfer
+- physical count
+- variance approval
+- reports/audit
+
+Future operational roles may include `PHARMACIST`, `PHARMACY_MANAGER`, and `STORE_MANAGER`, but roles/permissions must reuse the repository's existing RBAC model and require task-level approval before schema changes.
+
+Platform Super Admin does not automatically receive tenant clinical/pharmacy mutation rights.

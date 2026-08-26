@@ -569,3 +569,26 @@ Run:
 Target release:
 
 **HMS OPD Core v1**
+
+---
+
+## Pharmacy Phase 12 Clarification
+
+The original **Phase 12 — Pharmacy** is retained as completed historical OPD stabilization work. It established the independent Pharmacy workflow concept and must not be renumbered or overwritten.
+
+The full Pharmacy subsystem is now implemented through a separate approved roadmap:
+
+- P25 — Medicine Master, Formulary and Prescription Integration
+- P26 — Supplier, Purchase Order and GRN
+- P27 — Batch Inventory, Stock Ledger and FEFO
+- P28 — Pharmacy Queue, Validation and Dispensing
+- P29 — Billing Integration
+- P30 — Returns
+- P31 — Expiry, Damage and Recall
+- P32 — Stock Transfer
+- P33 — Physical Verification
+- P34 — Dashboard, Alerts, Reports and Audit
+
+See `docs/pharmacy/PHARMACY_MASTER_REQUIREMENTS.md`.
+
+P25-P34 extend Phase 12; they do not change the canonical Visit lifecycle.

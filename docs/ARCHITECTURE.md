@@ -418,3 +418,61 @@ Camera unavailable:
 normal hospital operation remains usable.
 
 Smart capabilities must enhance HMS, not become mandatory dependencies for core care delivery.
+
+---
+
+# 12. Pharmacy Domain Architecture
+
+Pharmacy is now an approved active extension of the HMS domain platform. It retains an independent operational lifecycle and must not alter the canonical OPD Visit lifecycle.
+
+## 12.1 Separation of clinical prescribing and inventory
+
+The architecture must preserve this boundary:
+
+```text
+Medicine Master
+→ Hospital Formulary
+→ Doctor Prescription
+
+Supplier / Purchase / GRN
+→ Batch Inventory
+→ Stock Ledger
+
+Prescription + Inventory
+→ Pharmacy Queue
+→ Validation
+→ Dispensing
+→ Billing
+→ Stock Deduction
+```
+
+The doctor searches the **Hospital Formulary**, not the inventory table.
+
+An active, prescribable formulary medicine remains clinically prescribable even when hospital stock is zero. Stock availability may be displayed as operational information but must never invalidate the prescription, reduce the prescribed quantity, or force substitution. The patient may purchase unavailable medicine externally.
+
+Inventory is never deducted when a doctor creates a prescription. Inventory is deducted only through confirmed pharmacy dispensing.
+
+## 12.2 Pharmacy inventory principles
+
+- Inventory is batch and location based.
+- Batch expiry is mandatory where applicable.
+- FEFO (First Expiry, First Out) is the default dispensing allocation strategy.
+- Stock movement is recorded through an auditable stock ledger.
+- Current balance must not be the only source of stock audit history.
+- Expired/quarantined/recalled stock is non-dispensable.
+- Stock transfer, adjustment and physical-count variance require explicit workflows and audit.
+
+## 12.3 Pharmacy implementation roadmap
+
+Detailed requirements are maintained under `docs/pharmacy/`:
+
+- P25 — Medicine Master, Formulary and Prescription Integration
+- P26 — Supplier, Purchase Order and GRN
+- P27 — Batch Inventory, Stock Ledger and FEFO
+- P28 — Pharmacy Queue, Validation and Dispensing
+- P29 — Billing Integration
+- P30 — Patient and Supplier Returns
+- P31 — Expiry, Damage and Recall
+- P32 — Stock Transfer / Multi-location
+- P33 — Cycle Count / Physical Verification
+- P34 — Dashboard, Alerts, Reports and Audit

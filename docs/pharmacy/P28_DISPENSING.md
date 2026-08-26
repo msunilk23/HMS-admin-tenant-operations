@@ -1,0 +1,2 @@
+# P28 — Pharmacy Queue + Validation + Dispensing
+Implement prescription reception/queue, pharmacist validation, full/partial/no internal fulfillment, outside purchase and controlled substitution. FEFO proposes batches. Store prescribed vs dispensed medicine when substitution occurs. Deduct only quantities actually confirmed as dispensed according to the approved billing boundary. Add E2E and audit tests. Approval-gate every P28.x task.

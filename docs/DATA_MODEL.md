@@ -584,3 +584,86 @@ Patient
 Do not force IP/ER/OT concepts into OPD Visit prematurely.
 
 A future generalized Encounter abstraction may be introduced only after requirements are sufficiently defined.
+
+---
+
+# 20. Expanded Pharmacy Data Model
+
+The original Pharmacy section is the high-level foundation. The approved P25-P34 Pharmacy extension uses the following domain entities, subject to repository analysis and task-level approval before creation.
+
+## 20.1 Clinical pharmacy masters
+
+- `medicine_generic`
+- `medicine_dosage_form`
+- `medicine_route`
+- `manufacturer`
+- `medicine_master`
+- `medicine_formulary`
+
+## 20.2 Procurement
+
+- `supplier`
+- `purchase_order`
+- `purchase_order_item`
+- `goods_receipt`
+- `goods_receipt_item`
+
+## 20.3 Inventory
+
+- `pharmacy_location`
+- `inventory_batch`
+- `stock_transaction`
+
+## 20.4 Dispensing and returns
+
+- `pharmacy_dispense`
+- `pharmacy_dispense_item`
+- `patient_return`
+- `patient_return_item`
+- `supplier_return`
+- `supplier_return_item`
+
+## 20.5 Stock control
+
+- `stock_transfer`
+- `stock_transfer_item`
+- `stock_count`
+- `stock_count_item`
+- `stock_adjustment`
+- `pharmacy_alert`
+
+## 20.6 PrescriptionItem extension
+
+Prescriptions must preserve the selected controlled medicine reference and a historical snapshot so later Medicine Master changes do not rewrite clinical history.
+
+Add/reuse equivalent fields as appropriate:
+
+- `medicine_id`
+- `generic_name_snapshot`
+- `brand_name_snapshot`
+- `strength_snapshot`
+- `dosage_form_snapshot`
+- `route_snapshot`
+- `dose`
+- `frequency`
+- `duration`
+- `quantity_auto_calculated`
+- `quantity_final`
+- `quantity_overridden`
+- `quantity_override_reason`
+- `food_instruction`
+- `instructions`
+
+For supported UNIT dosage forms:
+
+`quantity = sum(daily frequency units) × duration_in_days`
+
+Complex liquids, injections, creams, PRN and variable dosing must not be incorrectly auto-calculated.
+
+## 20.7 Stock boundary
+
+Prescription creation creates no stock transaction.
+
+Only confirmed dispensing may create `DISPENSE` stock movement. Future stock transaction types include purchase, return, transfer, adjustment, expiry, damage and cycle-count adjustment.
+
+Detailed entity requirements are maintained in `docs/pharmacy/`.

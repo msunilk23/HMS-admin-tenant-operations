@@ -60,9 +60,20 @@ Run migration and deployment checks against disposable PostgreSQL/Redis services
 
 PostgreSQL is authoritative. Back up PostgreSQL before migrations, retain Redis as disposable supporting infrastructure, monitor backend logs, and verify that tenant-scoped audit, billing, lab, feedback, and roster records remain in the correct schema.
 
-For tenant administrator recovery, apply the latest Alembic migration before
-using the Super Admin reset action. The temporary password is displayed only
-in the successful administrative response and must be handed to the tenant
-administrator through the approved operational channel. It is not present in
-logs, audit metadata, URLs, or browser storage. Confirm that the old session
-is rejected and that the first login requires a permanent password change.
+---
+
+## Pharmacy release checks
+
+For Pharmacy phases that add schema or seed data:
+
+1. Run Alembic against a fresh database.
+2. Run Alembic against an existing development database.
+3. Verify tenant schemas receive the migration.
+4. Load deterministic Pharmacy development/E2E seed data where configured.
+5. Verify Medicine Master and formulary search.
+6. Verify Doctor Prescription medicine selection/save/reload.
+7. Verify zero stock never blocks prescribing once inventory exists.
+8. For later phases verify GRN → batch stock → dispense → billing → stock ledger reconciliation.
+9. Run the existing OPD regression suite.
+
+Do not use production data for migration experiments.

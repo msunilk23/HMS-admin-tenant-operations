@@ -235,3 +235,29 @@ Only after OPD and Patient Digital Platform are stable: `IP / ER / OT / ICU`.
 # Architecture rule to preserve
 
 **ONE HMS DOMAIN PLATFORM** serving Staff Web, Patient App, Kiosk and future clients. Maintain one Patient identity model, Doctor scheduling engine, Appointment domain, Arrival/Check-In service, Visit/Encounter foundation, Queue, Lab, Billing/Payment and tenant/security architecture.
+
+---
+
+# Approved Pharmacy Implementation Stream — P25-P34
+
+The full Pharmacy subsystem is an approved implementation stream. It extends the original completed Phase 12 Pharmacy foundation.
+
+Detailed requirements are maintained under `docs/pharmacy/`.
+
+Execution order:
+
+P25 → P26 → P27 → P28 → P29 → P30 → P31 → P32 → P33 → P34
+
+Each phase is divided into smaller tasks and uses a mandatory approval gate. Completion of one task never authorizes the next task.
+
+For every Pharmacy task:
+
+1. Inspect current code first.
+2. Identify already implemented / partial / missing / incorrect behavior.
+3. Implement only the explicitly approved task.
+4. Run relevant tests and OPD regression.
+5. Produce a completion report.
+6. STOP.
+7. Wait for `APPROVED - PROCEED <NEXT_TASK_ID>`.
+
+Do not implement BLE/UWB/RFID/camera pharmacy fraud analytics as part of P25-P34 unless separately approved. Preserve audit/event extension points for future Smart Hospital analytics.

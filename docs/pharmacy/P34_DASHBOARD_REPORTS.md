@@ -1,0 +1,2 @@
+# P34 — Pharmacy Dashboard + Alerts + Reports + Audit
+Dashboard: pending/partial prescriptions, low/out stock, near expiry, expired stock, dispensing, purchases, returns, adjustments, fast/slow movers and valuation. Reports: stock-on-hand, batch/expiry, ledger, purchase/GRN, dispensing, outside purchase, returns, adjustments and count variance. Alerts include unusual/repeated adjustments, returns, overrides, substitutions and high-value variance. Preserve end-to-end traceability prescription → dispense → bill → stock transaction. Approval-gate every task.

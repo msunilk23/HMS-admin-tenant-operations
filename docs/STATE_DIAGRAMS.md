@@ -31,3 +31,23 @@ flowchart LR
 ```
 
 Pharmacy, lab, billing, feedback, and TAT state never replace the canonical Visit status. Completed clinical documentation requires controlled amendment. Payment webhooks are signature-verified and idempotent. Feedback is unique per visit.
+
+---
+
+## Pharmacy fulfillment state
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> CALLED
+    CALLED --> DISPENSING
+    DISPENSING --> DISPENSED
+    DISPENSING --> PARTIALLY_DISPENSED
+    DISPENSING --> OUTSIDE_PURCHASE
+    PENDING --> CANCELLED
+    CALLED --> CANCELLED
+```
+
+`OUT_OF_STOCK` may be retained as an operational stock condition/status where the existing implementation requires it, but it must not invalidate the doctor's prescription. A zero-stock item may result in `OUTSIDE_PURCHASE` or partial fulfillment while the original prescription remains unchanged.
+
+Stock deduction occurs only for quantities actually dispensed.

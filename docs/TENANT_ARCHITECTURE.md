@@ -28,3 +28,25 @@ The tenant schema in the authenticated JWT is authoritative for tenant users. Cl
 ## Tenant lifecycle
 
 Tenant provisioning and feature/plan changes are platform operations under `/api/v1/super/*`. Active tenant schemas are included in Alembic migration execution. Tenant feature changes invalidate the Redis cache and force stale sessions to re-authenticate.
+
+---
+
+## Pharmacy tenant isolation
+
+All Pharmacy operational and clinical data follows the same tenant trust boundary.
+
+Tenant-isolated data includes, as applicable:
+
+- medicine/formulary configuration
+- suppliers and procurement
+- GRNs
+- pharmacy locations
+- inventory batches
+- stock ledger
+- dispensing
+- returns
+- transfers
+- counts/adjustments
+- pharmacy audit and alerts
+
+Facility/location scope must be enforced in addition to tenant scope where the domain requires it. Client-supplied tenant identity must never switch Pharmacy context.

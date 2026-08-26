@@ -376,3 +376,37 @@ The workflow must allow calculation of:
 * Billing wait
 
 These metrics will later support Smart Hospital optimization.
+
+---
+
+# 11.1 Pharmacy Prescription and Stock Boundary
+
+The Pharmacy lifecycle above remains independent of Visit status. The expanded Pharmacy implementation adds a strict separation between clinical prescription and hospital fulfillment.
+
+```text
+Doctor Prescription
+       ↓
+Active/prescribable formulary medicine?
+       ├── No  → controlled non-formulary/free-text exception if policy permits
+       └── Yes → prescription remains valid
+                    ↓
+              Hospital stock check
+                 ┌──┴──┐
+           Available   Unavailable
+               ↓           ↓
+         Pharmacy       Patient may
+         fulfillment    purchase outside
+```
+
+**Hard rule:** inventory availability is never a clinical prescription validation rule.
+
+Therefore:
+
+- zero stock must not block Save Prescription;
+- prescribed quantity must not be reduced to hospital stock;
+- substitution must not occur silently;
+- stock must not be deducted at prescription creation;
+- partial/no internal fulfillment must preserve the original prescription;
+- outside purchase is a fulfillment outcome, not a prescription failure.
+
+For supported unit medicines, prescription quantity should be automatically calculated from frequency and duration, with controlled/audited override.
