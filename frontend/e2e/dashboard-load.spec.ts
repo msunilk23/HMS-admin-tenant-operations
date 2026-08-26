@@ -1,0 +1,47 @@
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
+
+const admin = {
+  username: 'e2e_admin_task7',
+  password: 'E2eAdmin@123',
+}
+
+async function loginAs(request: APIRequestContext) {
+  const response = await request.post('/api/v1/auth/login', {
+    data: { login_id: admin.username, password: admin.password },
+  })
+  expect(response.ok(), await response.text()).toBeTruthy()
+  return { Authorization: `Bearer ${(await response.json()).access_token}` }
+}
+
+async function login(page: Page) {
+  await page.goto('/login')
+  await page.getByPlaceholder(/you@hospital\.in or mkrish66/i).fill(admin.username)
+  await page.locator('input[type="password"]').fill(admin.password)
+  await page.getByRole('button', { name: /sign in/i }).click()
+  await expect(page).toHaveURL(/dashboard/)
+}
+
+test.describe('P25.19 Dashboard Load', () => {
+  test('hospital admin dashboard renders KPI cards and service panels', async ({ page }) => {
+    await login(page)
+    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible()
+    await expect(page.getByText('Total Patients', { exact: true })).toBeVisible()
+    await expect(page.getByText('OPD Visits Today', { exact: true })).toBeVisible()
+    await expect(page.getByText('Total Staff', { exact: true })).toBeVisible()
+    await expect(page.getByText('Revenue Today', { exact: true })).toBeVisible()
+    await expect(page.getByText('Pharmacy', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText('Could not load dashboard data.', { exact: true })).toHaveCount(0)
+  })
+
+  test('admin stats endpoint returns the dashboard contract', async ({ request }) => {
+    const headers = await loginAs(request)
+    const response = await request.get('/api/v1/admin/stats', { headers })
+    expect(response.ok(), await response.text()).toBeTruthy()
+    const data = await response.json()
+    expect(data).toHaveProperty('total_patients')
+    expect(data).toHaveProperty('visits_today')
+    expect(data).toHaveProperty('revenue_today')
+    expect(data).toHaveProperty('departments')
+    expect(Array.isArray(data.departments)).toBe(true)
+  })
+})

@@ -25,6 +25,9 @@ DOCTOR_PASSWORD = "E2eDoctor@123"
 RECEPTIONIST_USERNAME = "e2e_receptionist_task7"
 RECEPTIONIST_EMAIL = "e2e-receptionist-task7@example.test"
 RECEPTIONIST_PASSWORD = "E2eReception@123"
+ADMIN_USERNAME = "e2e_admin_task7"
+ADMIN_EMAIL = "e2e-admin-task7@example.test"
+ADMIN_PASSWORD = "E2eAdmin@123"
 HOSPITAL_B_DOCTOR_USERNAME = "e2e_doctor_task7_b"
 HOSPITAL_B_DOCTOR_EMAIL = "e2e-doctor-task7-b@example.test"
 HOSPITAL_B_DOCTOR_PASSWORD = "E2eDoctorB@123"
@@ -33,6 +36,7 @@ TENANT_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-tenant-a")
 TENANT_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-tenant-b")
 DOCTOR_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor")
 RECEPTIONIST_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-receptionist")
+ADMIN_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-admin")
 HOSPITAL_B_DOCTOR_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-b")
 DOCTOR_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-profile")
 HOSPITAL_B_DOCTOR_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-profile-b")
@@ -104,12 +108,14 @@ async def seed():
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_tables(), checkfirst=False))
         await conn.execute(text(f'SET search_path TO "{SCHEMA_B}", public'))
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_tables(), checkfirst=False))
-        await conn.execute(text('DELETE FROM public.users WHERE id IN (:doctor_id, :receptionist_id, :doctor_b_id) OR username IN (:doctor_username, :receptionist_username, :doctor_b_username)'), {
+        await conn.execute(text('DELETE FROM public.users WHERE id IN (:doctor_id, :receptionist_id, :admin_id, :doctor_b_id) OR username IN (:doctor_username, :receptionist_username, :admin_username, :doctor_b_username)'), {
             "doctor_id": DOCTOR_USER_ID,
             "receptionist_id": RECEPTIONIST_USER_ID,
+            "admin_id": ADMIN_USER_ID,
             "doctor_b_id": HOSPITAL_B_DOCTOR_USER_ID,
             "doctor_username": DOCTOR_USERNAME,
             "receptionist_username": RECEPTIONIST_USERNAME,
+            "admin_username": ADMIN_USERNAME,
             "doctor_b_username": HOSPITAL_B_DOCTOR_USERNAME,
         })
         await conn.execute(text('DELETE FROM public.tenants WHERE id IN (:id_a, :id_b) OR schema_name IN (:schema_a, :schema_b)'), {
@@ -125,8 +131,9 @@ async def seed():
         tenant_b = Tenant(id=TENANT_B_ID, schema_name=SCHEMA_B, hospital_name="E2E Task 7 Hospital B", contact_email="e2e-task7-b@example.test", display_token=f"e2e-b-{uuid.uuid4().hex}")
         user_a = User(id=DOCTOR_USER_ID, tenant_id=TENANT_A_ID, tenant_name=SCHEMA_A, email=DOCTOR_EMAIL, username=DOCTOR_USERNAME, hashed_password=hash_password(DOCTOR_PASSWORD), full_name="E2E Doctor A", role="doctor", is_active=True, must_change_password=False)
         receptionist_a = User(id=RECEPTIONIST_USER_ID, tenant_id=TENANT_A_ID, tenant_name=SCHEMA_A, email=RECEPTIONIST_EMAIL, username=RECEPTIONIST_USERNAME, hashed_password=hash_password(RECEPTIONIST_PASSWORD), full_name="E2E Receptionist A", role="receptionist", is_active=True, must_change_password=False)
+        admin_a = User(id=ADMIN_USER_ID, tenant_id=TENANT_A_ID, tenant_name=SCHEMA_A, email=ADMIN_EMAIL, username=ADMIN_USERNAME, hashed_password=hash_password(ADMIN_PASSWORD), full_name="E2E Admin A", role="hospital_admin", is_active=True, must_change_password=False)
         user_b = User(id=HOSPITAL_B_DOCTOR_USER_ID, tenant_id=TENANT_B_ID, tenant_name=SCHEMA_B, email=HOSPITAL_B_DOCTOR_EMAIL, username=HOSPITAL_B_DOCTOR_USERNAME, hashed_password=hash_password(HOSPITAL_B_DOCTOR_PASSWORD), full_name="E2E Doctor B", role="doctor", is_active=True, must_change_password=False)
-        session.add_all([tenant_a, tenant_b, user_a, receptionist_a, user_b])
+        session.add_all([tenant_a, tenant_b, user_a, receptionist_a, admin_a, user_b])
         await session.commit()
         session.add_all([
             TenantFeature(id=uuid.uuid4(), tenant_id=TENANT_A_ID, feature="billing", enabled=True),
@@ -187,7 +194,7 @@ async def cleanup():
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA_A}" CASCADE'))
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA_B}" CASCADE'))
-        await conn.execute(delete(User).where(User.id.in_([DOCTOR_USER_ID, RECEPTIONIST_USER_ID, HOSPITAL_B_DOCTOR_USER_ID])))
+        await conn.execute(delete(User).where(User.id.in_([DOCTOR_USER_ID, RECEPTIONIST_USER_ID, ADMIN_USER_ID, HOSPITAL_B_DOCTOR_USER_ID])))
         await conn.execute(delete(TenantFeature).where(TenantFeature.tenant_id.in_([TENANT_A_ID, TENANT_B_ID])))
         await conn.execute(delete(Tenant).where(Tenant.id.in_([TENANT_A_ID, TENANT_B_ID])))
     await engine.dispose()
