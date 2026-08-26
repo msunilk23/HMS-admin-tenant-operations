@@ -20,7 +20,13 @@ from app.models.tenant.clinical_alert import ClinicalAlert
 from app.models.tenant.audit_log import AuditLog
 from app.models.tenant.token_counter import TokenCounter
 from app.models.tenant.icd10_code import ICD10Code
+from app.models.tenant.generic_medicine import GenericMedicine
+from app.models.tenant.dosage_form import DosageForm
+from app.models.tenant.hospital_formulary import HospitalFormulary
+from app.models.tenant.manufacturer import Manufacturer
 from app.models.tenant.medicine_master import MedicineMaster
+from app.models.tenant.medicine_product import MedicineProduct
+from app.models.tenant.route import Route
 
 __all__ = [
     "Department",
@@ -49,5 +55,11 @@ __all__ = [
     "AuditLog",
     "TokenCounter",
     "ICD10Code",
+    "GenericMedicine",
+    "DosageForm",
+    "HospitalFormulary",
+    "Manufacturer",
     "MedicineMaster",
+    "MedicineProduct",
+    "Route",
 ]

@@ -189,6 +189,14 @@ export interface Vitals {
 export interface MedicineItem {
   name: string
   medicine_master_id?: string
+  medicine_product_id?: string
+  is_free_text?: boolean
+  free_text_reason?: string
+  generic_name_snapshot?: string
+  brand_name_snapshot?: string
+  strength_snapshot?: string
+  dosage_form_snapshot?: string
+  route_snapshot?: string
   strength?: string
   dosage_form?: string
   dose: string
@@ -197,6 +205,7 @@ export interface MedicineItem {
   route: string
   timing_relative_to_food?: string
   quantity?: string
+  quantity_override_reason?: string
   instructions?: string
 }
 

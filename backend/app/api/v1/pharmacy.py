@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import select, text as sql_text
+from sqlalchemy import and_, or_, select, text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -19,15 +19,20 @@ from app.core.sms import send_prescription_whatsapp
 from app.db.engine import get_session
 from app.models.tenant.consultation import Consultation
 from app.models.tenant.department import Department
+from app.models.tenant.dosage_form import DosageForm
 from app.models.tenant.doctor import Doctor
+from app.models.tenant.generic_medicine import GenericMedicine
+from app.models.tenant.hospital_formulary import HospitalFormulary
 from app.models.tenant.invoice import Invoice
 from app.models.tenant.lab_order import LabOrder
 from app.models.tenant.patient import Patient
 from app.models.tenant.pharmacy_queue import PharmacyQueue
+from app.models.tenant.medicine_product import MedicineProduct
 from app.models.tenant.prescription import Prescription
+from app.models.tenant.route import Route
 from app.models.tenant.visit import Visit, VisitStatus
 from app.schemas.invoice import InvoiceRead, PharmacyBillCreate
-from app.schemas.pharmacy import PharmacyQueueRead, PharmacyStatusUpdate
+from app.schemas.pharmacy import FormularyMedicineSearchResult, PharmacyQueueRead, PharmacyStatusUpdate
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
 from app.services.audit_service import record_audit
@@ -35,6 +40,77 @@ from app.services.audit_service import record_audit
 logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_feature("pharmacy"))])
+
+
+@router.get("/medicines/search", response_model=List[FormularyMedicineSearchResult])
+async def search_formulary_medicines(
+    q: str = Query("", max_length=100),
+    department_id: Optional[uuid.UUID] = None,
+    prescribable_only: bool = True,
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_role("doctor", "pharmacist", "hospital_admin")),
+):
+    today = datetime.now(timezone.utc).date()
+    stmt = (
+        select(HospitalFormulary, MedicineProduct, GenericMedicine, DosageForm, Route)
+        .join(MedicineProduct, MedicineProduct.id == HospitalFormulary.medicine_product_id)
+        .join(GenericMedicine, GenericMedicine.id == MedicineProduct.generic_medicine_id)
+        .join(DosageForm, DosageForm.id == MedicineProduct.dosage_form_id)
+        .outerjoin(
+            Route,
+            and_(
+                Route.id == MedicineProduct.default_route_id,
+                Route.is_active == True,  # noqa: E712
+            ),
+        )
+        .where(
+            HospitalFormulary.is_active == True,  # noqa: E712
+            HospitalFormulary.is_approved == True,  # noqa: E712
+            MedicineProduct.is_active == True,  # noqa: E712
+            GenericMedicine.is_active == True,  # noqa: E712
+            DosageForm.is_active == True,  # noqa: E712
+            or_(HospitalFormulary.effective_date.is_(None), HospitalFormulary.effective_date <= today),
+            or_(HospitalFormulary.expiry_date.is_(None), HospitalFormulary.expiry_date >= today),
+        )
+    )
+    if department_id is not None:
+        stmt = stmt.where(HospitalFormulary.department_id == department_id)
+    if prescribable_only:
+        stmt = stmt.where(HospitalFormulary.is_prescribable == True)  # noqa: E712
+    term = q.strip()
+    if term:
+        like = f"%{term}%"
+        stmt = stmt.where(
+            or_(
+                MedicineProduct.code.ilike(like),
+                MedicineProduct.brand_name.ilike(like),
+                GenericMedicine.name.ilike(like),
+                MedicineProduct.composition.ilike(like),
+            )
+        )
+    rows = (await session.execute(stmt.order_by(MedicineProduct.brand_name, MedicineProduct.code).limit(limit))).all()
+    return [
+        FormularyMedicineSearchResult(
+            medicine_product_id=product.id,
+            code=product.code,
+            brand_name=product.brand_name,
+            generic_name=generic.name,
+            strength=product.strength,
+            unit=product.unit,
+            dosage_form_name=dosage_form.name,
+            default_route_name=route.name if route else None,
+            composition=product.composition,
+            is_controlled_drug=product.is_controlled_drug,
+            requires_prescription=product.requires_prescription,
+            is_approved=formulary.is_approved,
+            is_preferred=formulary.is_preferred,
+            is_prescribable=formulary.is_prescribable,
+            effective_date=formulary.effective_date,
+            expiry_date=formulary.expiry_date,
+        )
+        for formulary, product, generic, dosage_form, route in rows
+    ]
 
 
 @router.get("", response_model=List[PharmacyQueueRead])

@@ -2,6 +2,8 @@
 Prescriptions API — build and retrieve prescriptions for a visit.
 """
 import uuid
+import re
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
@@ -18,7 +20,11 @@ from app.models.tenant.lab_order import LabOrder
 from app.models.tenant.patient import Patient
 from app.models.tenant.prescription import Prescription, PrescriptionItem
 from app.models.tenant.visit import Visit, VisitStatus
+from app.models.tenant.dosage_form import DosageForm
+from app.models.tenant.generic_medicine import GenericMedicine
 from app.models.tenant.medicine_master import MedicineMaster
+from app.models.tenant.medicine_product import MedicineProduct
+from app.models.tenant.route import Route
 from app.schemas.document import DocumentVersionRead
 from app.schemas.prescription import PrescriptionCreate, PrescriptionRead, PrescriptionUpdate
 from app.services.document_service import (
@@ -38,6 +44,163 @@ router = APIRouter()
 
 _prescription_document_storage = LocalFileDocumentStorage()
 
+_FREQUENCY_UNITS = {
+    "OD": Decimal("1"),
+    "BD": Decimal("2"),
+    "TID": Decimal("3"),
+    "QID": Decimal("4"),
+    "QHS": Decimal("1"),
+    "Q4H": Decimal("6"),
+    "Q6H": Decimal("4"),
+    "Q8H": Decimal("3"),
+}
+
+
+def _format_quantity(value: Decimal) -> str:
+    normalized = value.normalize()
+    return format(normalized, "f")
+
+
+def _parse_dose(value: str | None) -> Decimal | None:
+    if not value:
+        return None
+    normalized = value.strip().replace("½", "0.5")
+    match = re.match(r"^([0-9]+(?:\.[0-9]+)?)", normalized)
+    if not match:
+        return None
+    try:
+        dose = Decimal(match.group(1))
+    except InvalidOperation:
+        return None
+    return dose if dose > 0 else None
+
+
+def _daily_frequency_units(value: str | None) -> Decimal | None:
+    if not value:
+        return None
+    normalized = value.strip().upper()
+    if normalized in _FREQUENCY_UNITS:
+        return _FREQUENCY_UNITS[normalized]
+    parts = normalized.split("-")
+    if len(parts) != 4:
+        return None
+    try:
+        slots = [Decimal(part.replace("½", "0.5")) for part in parts]
+    except InvalidOperation:
+        return None
+    return sum(slots, Decimal("0"))
+
+
+def _duration_days(value: str | None) -> int | None:
+    if not value or value.strip().lower() == "ongoing":
+        return None
+    match = re.match(r"^\s*(\d+)\s*(day|days|month|months)\s*$", value, re.IGNORECASE)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    return amount * 30 if match.group(2).lower().startswith("month") else amount
+
+
+def _calculate_unit_quantity(*, dose: str | None, frequency: str | None, duration: str | None) -> str | None:
+    dose_value = _parse_dose(dose)
+    frequency_units = _daily_frequency_units(frequency)
+    duration_days = _duration_days(duration)
+    if dose_value is None or frequency_units is None or duration_days is None or frequency_units == 0:
+        return None
+    return _format_quantity(dose_value * frequency_units * duration_days)
+
+
+def _apply_quantity_policy(data: dict, item, calculation_type: str | None = None) -> None:
+    auto_quantity = None
+    if calculation_type == "UNIT":
+        auto_quantity = _calculate_unit_quantity(
+            dose=item.dose,
+            frequency=item.frequency,
+            duration=item.duration,
+        )
+    supplied_quantity = item.quantity.strip() if item.quantity and item.quantity.strip() else None
+    override_flag = bool(auto_quantity and supplied_quantity and supplied_quantity != auto_quantity)
+    if override_flag and not item.quantity_override_reason:
+        raise HTTPException(status_code=422, detail="Reason required when quantity overrides the calculated quantity")
+    data["auto_quantity"] = auto_quantity
+    data["final_quantity"] = supplied_quantity or auto_quantity
+    data["quantity_override_flag"] = override_flag
+    data["quantity_override_reason"] = item.quantity_override_reason.strip() if item.quantity_override_reason else None
+    data["quantity"] = data["final_quantity"]
+
+
+async def _normalize_medicine_item(session: AsyncSession, item) -> dict:
+    data = item.model_dump(mode="json")
+    if item.medicine_product_id:
+        product = await session.get(MedicineProduct, item.medicine_product_id)
+        if not product or not product.is_active:
+            raise HTTPException(status_code=422, detail="Selected medicine product is missing or inactive")
+        generic = await session.get(GenericMedicine, product.generic_medicine_id)
+        dosage_form = await session.get(DosageForm, product.dosage_form_id)
+        route = await session.get(Route, product.default_route_id) if product.default_route_id else None
+        if not generic or not generic.is_active or not dosage_form or not dosage_form.is_active:
+            raise HTTPException(status_code=422, detail="Selected medicine product has an inactive master reference")
+        if product.default_route_id and (not route or not route.is_active):
+            raise HTTPException(status_code=422, detail="Selected medicine product has an inactive route reference")
+        data["medicine_product_id"] = str(product.id)
+        data["medicine"] = product.brand_name or generic.name
+        data["strength"] = item.strength or product.strength
+        data["dosage_form"] = item.dosage_form or dosage_form.name
+        data["generic_name_snapshot"] = generic.name
+        data["brand_name_snapshot"] = product.brand_name
+        data["strength_snapshot"] = product.strength
+        data["dosage_form_snapshot"] = dosage_form.name
+        data["route_snapshot"] = route.name if route else None
+        _apply_quantity_policy(data, item, dosage_form.calculation_type)
+        return data
+
+    if item.medicine_master_id:
+        master = await session.get(MedicineMaster, item.medicine_master_id)
+        if not master or not master.is_active:
+            raise HTTPException(status_code=422, detail="Selected medicine is missing or inactive")
+        data["medicine_master_id"] = str(item.medicine_master_id)
+        data["medicine"] = master.generic_name
+        data["name_snapshot"] = master.brand_name or master.generic_name
+        data["strength"] = item.strength or master.strength
+        data["dosage_form"] = item.dosage_form or master.dosage_form
+        _apply_quantity_policy(data, item)
+        return data
+
+    if not item.is_free_text or not item.free_text_reason or not item.free_text_reason.strip():
+        raise HTTPException(status_code=422, detail="Select a medicine or provide a reason for free-text medicine")
+    if not item.medicine.strip():
+        raise HTTPException(status_code=422, detail="Free-text medicine name is required")
+    data["free_text_reason"] = item.free_text_reason.strip()
+    _apply_quantity_policy(data, item)
+    return data
+
+
+def _prescription_item_from_data(item, data: dict) -> PrescriptionItem:
+    return PrescriptionItem(
+        id=uuid.uuid4(),
+        medicine_master_id=item.medicine_master_id,
+        medicine_product_id=item.medicine_product_id,
+        medicine=data.get("medicine", item.medicine),
+        strength=data.get("strength", item.strength),
+        dose=item.dose,
+        route=item.route,
+        frequency=item.frequency,
+        duration=item.duration,
+        quantity=data.get("quantity", item.quantity),
+        auto_quantity=data.get("auto_quantity"),
+        final_quantity=data.get("final_quantity"),
+        quantity_override_flag=data.get("quantity_override_flag", False),
+        quantity_override_reason=data.get("quantity_override_reason"),
+        instructions=item.instructions,
+        dosage_form=data.get("dosage_form", item.dosage_form),
+        timing_relative_to_food=item.timing_relative_to_food,
+        generic_name_snapshot=data.get("generic_name_snapshot"),
+        brand_name_snapshot=data.get("brand_name_snapshot"),
+        strength_snapshot=data.get("strength_snapshot"),
+        dosage_form_snapshot=data.get("dosage_form_snapshot"),
+        route_snapshot=data.get("route_snapshot"),
+    )
+
 
 @router.post("", response_model=PrescriptionRead, status_code=status.HTTP_201_CREATED)
 async def create_prescription(
@@ -55,16 +218,7 @@ async def create_prescription(
     item_source = payload.items if payload.items is not None else payload.medicines
     medicines_data = []
     for item in item_source or []:
-        data = item.model_dump(mode="json")
-        if item.medicine_master_id:
-            master = await session.get(MedicineMaster, item.medicine_master_id)
-            if not master or not master.is_active:
-                raise HTTPException(status_code=422, detail="Selected medicine is missing or inactive")
-            data["medicine_master_id"] = str(item.medicine_master_id)
-            data["medicine"] = master.generic_name
-            data["name_snapshot"] = master.brand_name or master.generic_name
-            data["strength"] = item.strength or master.strength
-            data["dosage_form"] = item.dosage_form or master.dosage_form
+        data = await _normalize_medicine_item(session, item)
         medicines_data.append(data)
 
     # Upsert — each visit has at most one prescription
@@ -78,23 +232,7 @@ async def create_prescription(
         existing_rx.consultation_id = payload.consultation_id or existing_rx.consultation_id
         existing_rx.doctor_id = payload.doctor_id or visit.doctor_id or existing_rx.doctor_id
         existing_rx.status = "finalized"
-        existing_rx.items = [
-            PrescriptionItem(
-                id=uuid.uuid4(),
-                medicine_master_id=item.medicine_master_id,
-                medicine=medicines_data[i].get("medicine", item.medicine),
-                strength=item.strength,
-                dose=item.dose,
-                route=item.route,
-                frequency=item.frequency,
-                duration=item.duration,
-                quantity=item.quantity,
-                instructions=item.instructions,
-                dosage_form=item.dosage_form,
-                timing_relative_to_food=item.timing_relative_to_food,
-            )
-            for i, item in enumerate(item_source or [])
-        ]
+        existing_rx.items = [_prescription_item_from_data(item, medicines_data[i]) for i, item in enumerate(item_source or [])]
         prescription = existing_rx
     else:
         prescription = Prescription(
@@ -107,23 +245,7 @@ async def create_prescription(
             instructions=payload.instructions,
             status="finalized",
         )
-        prescription.items = [
-            PrescriptionItem(
-                id=uuid.uuid4(),
-                medicine_master_id=item.medicine_master_id,
-                medicine=medicines_data[i].get("medicine", item.medicine),
-                strength=item.strength,
-                dose=item.dose,
-                route=item.route,
-                frequency=item.frequency,
-                duration=item.duration,
-                quantity=item.quantity,
-                instructions=item.instructions,
-                dosage_form=item.dosage_form,
-                timing_relative_to_food=item.timing_relative_to_food,
-            )
-            for i, item in enumerate(item_source or [])
-        ]
+        prescription.items = [_prescription_item_from_data(item, medicines_data[i]) for i, item in enumerate(item_source or [])]
         session.add(prescription)
 
     # If doctor included lab tests, upsert a LabOrder alongside the prescription
@@ -208,35 +330,9 @@ async def update_prescription(
     if item_source is not None:
         normalized_items = []
         for item in item_source:
-            item_data = item.model_dump(mode="json")
-            if item.medicine_master_id:
-                master = await session.get(MedicineMaster, item.medicine_master_id)
-                if not master or not master.is_active:
-                    raise HTTPException(status_code=422, detail="Selected medicine is missing or inactive")
-                item_data["medicine_master_id"] = str(item.medicine_master_id)
-                item_data["medicine"] = master.generic_name
-                item_data["name_snapshot"] = master.brand_name or master.generic_name
-                item_data["strength"] = item.strength or master.strength
-                item_data["dosage_form"] = item.dosage_form or master.dosage_form
-            normalized_items.append(item_data)
+            normalized_items.append(await _normalize_medicine_item(session, item))
         rx.medicines = normalized_items
-        rx.items = [
-            PrescriptionItem(
-                id=uuid.uuid4(),
-                medicine=normalized_items[i].get("medicine", item.medicine),
-                medicine_master_id=item.medicine_master_id,
-                strength=item.strength,
-                dose=item.dose,
-                route=item.route,
-                frequency=item.frequency,
-                duration=item.duration,
-                quantity=item.quantity,
-                instructions=item.instructions,
-                dosage_form=item.dosage_form,
-                timing_relative_to_food=item.timing_relative_to_food,
-            )
-            for i, item in enumerate(item_source)
-        ]
+        rx.items = [_prescription_item_from_data(item, normalized_items[i]) for i, item in enumerate(item_source)]
     if payload.consultation_id is not None:
         rx.consultation_id = payload.consultation_id
     if payload.doctor_id is not None:

@@ -122,6 +122,8 @@ async def test_prescription_requires_structured_items_and_visit_links(session):
             consultation_id=consultation.id,
             items=[{
                 "medicine": "Paracetamol",
+                "is_free_text": True,
+                "free_text_reason": "No active formulary product was available in this test fixture",
                 "strength": "500mg",
                 "dose": "1 tablet",
                 "route": "oral",
