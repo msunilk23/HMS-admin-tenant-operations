@@ -40,6 +40,12 @@ from app.schemas.invoice import InvoiceRead, PharmacyBillCreate
 from app.schemas.pharmacy import FormularyMedicineSearchResult, PharmacyQueueRead, PharmacyStatusUpdate, SupplierCreate, SupplierImportItem, SupplierRead, SupplierUpdate
 from app.schemas.purchase_order import PurchaseOrderCreate, PurchaseOrderRead, PurchaseOrderUpdate
 from app.schemas.goods_receipt import GoodsReceiptCreate, GoodsReceiptItemCreate, GoodsReceiptItemRead, GoodsReceiptRead
+from app.schemas.inventory import InventoryBalanceRead, InventoryBatchRead, InventoryReconciliationRead, PharmacyLocationRead, StockAdjustmentCreate, StockTransactionRead
+from app.models.tenant.inventory_batch import InventoryBatch
+from app.models.tenant.pharmacy_location import PharmacyLocation
+from app.models.tenant.stock_transaction import StockTransaction
+from app.services.inventory_service import get_fefo_batches_for_medicine, get_location_medicine_balance, reconcile_inventory_batch
+from app.services.inventory_service import create_inventory_from_grn_item, record_stock_adjustment
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
 from app.services.audit_service import record_audit
@@ -266,6 +272,8 @@ def _goods_receipt_values(receipt: GoodsReceipt) -> dict:
         "grn_number": receipt.grn_number,
         "purchase_order_id": str(receipt.purchase_order_id),
         "supplier_id": str(receipt.supplier_id),
+        "facility_id": str(receipt.facility_id) if receipt.facility_id else None,
+        "pharmacy_location_id": str(receipt.pharmacy_location_id) if receipt.pharmacy_location_id else None,
         "status": receipt.status,
         "subtotal": str(receipt.subtotal),
         "tax_amount": str(receipt.tax_amount),
@@ -370,6 +378,8 @@ async def create_goods_receipt(
         grn_number=f"GRN-{now:%Y%m%d}-{uuid.uuid4().hex[:8].upper()}",
         purchase_order_id=order.id,
         supplier_id=order.supplier_id,
+        facility_id=payload.facility_id,
+        pharmacy_location_id=payload.pharmacy_location_id,
         supplier_invoice_number=payload.supplier_invoice_number,
         supplier_invoice_date=payload.supplier_invoice_date,
         received_date=payload.received_date,
@@ -464,6 +474,22 @@ async def finalize_goods_receipt(
     )).scalars().all()
     if not receipt_items:
         raise HTTPException(status_code=422, detail="Goods receipt must contain at least one item")
+    if bool(receipt.facility_id) != bool(receipt.pharmacy_location_id):
+        raise HTTPException(status_code=422, detail="facility_id and pharmacy_location_id must be provided together")
+    tenant_id = current_user.get("tenant_id")
+    if receipt.facility_id and not tenant_id:
+        raise HTTPException(status_code=401, detail="Tenant context is required for inventory posting")
+    if receipt.facility_id:
+        location = await session.scalar(
+            select(PharmacyLocation).where(
+                PharmacyLocation.id == receipt.pharmacy_location_id,
+                PharmacyLocation.tenant_id == uuid.UUID(str(tenant_id)),
+                PharmacyLocation.facility_id == receipt.facility_id,
+                PharmacyLocation.active == True,  # noqa: E712
+            )
+        )
+        if location is None:
+            raise HTTPException(status_code=422, detail="Pharmacy location is missing, inactive, or outside the tenant facility")
     order = (await session.execute(
         select(PurchaseOrder)
         .options(selectinload(PurchaseOrder.items))
@@ -490,6 +516,27 @@ async def finalize_goods_receipt(
     receipt.status = "FULLY_RECEIVED" if complete and len(grouped) == len(order.items) else "PARTIALLY_RECEIVED"
     order.status = "FULLY_RECEIVED" if receipt.status == "FULLY_RECEIVED" else "PARTIALLY_RECEIVED"
     receipt.updated_by_user_id = uuid.UUID(current_user["sub"])
+    if receipt.facility_id:
+        for item in receipt_items:
+            await create_inventory_from_grn_item(
+                session,
+                tenant_id=uuid.UUID(str(tenant_id)),
+                facility_id=receipt.facility_id,
+                pharmacy_location_id=receipt.pharmacy_location_id,
+                medicine_id=item.medicine_product_id,
+                supplier_id=receipt.supplier_id,
+                goods_receipt_id=receipt.id,
+                goods_receipt_item_id=item.id,
+                batch_number=item.batch_number,
+                received_quantity=item.received_quantity,
+                free_quantity=item.free_quantity,
+                purchase_rate=item.purchase_rate,
+                mrp=item.mrp,
+                manufacturing_date=item.manufacturing_date,
+                expiry_date=item.expiry_date,
+                created_by=uuid.UUID(current_user["sub"]),
+                commit=False,
+            )
     record_audit(session, current_user=current_user, action="FINALIZE", resource_type="goods_receipt", resource_id=receipt.id, new_value=_goods_receipt_values(receipt))
     await session.commit()
     return await _load_goods_receipt(session, receipt.id)
@@ -628,6 +675,145 @@ async def update_supplier(
     record_audit(session, current_user=current_user, action="UPDATE", resource_type="supplier", resource_id=item.id, old_value=old_value, new_value=_supplier_values(item))
     await session.commit()
     return item
+
+
+def _current_tenant_id(current_user: dict) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(current_user["tenant_id"]))
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=401, detail="Tenant context is required") from exc
+
+
+@router.get("/inventory/locations", response_model=List[PharmacyLocationRead])
+async def list_inventory_locations(
+    facility_id: uuid.UUID,
+    include_inactive: bool = False,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_INVENTORY_VIEW")),
+):
+    stmt = select(PharmacyLocation).where(
+        PharmacyLocation.tenant_id == _current_tenant_id(current_user),
+        PharmacyLocation.facility_id == facility_id,
+    )
+    if not include_inactive:
+        stmt = stmt.where(PharmacyLocation.active == True)  # noqa: E712
+    return (await session.execute(stmt.order_by(PharmacyLocation.location_name))).scalars().all()
+
+
+@router.get("/inventory/batches", response_model=List[InventoryBatchRead])
+async def list_inventory_batches(
+    facility_id: uuid.UUID,
+    pharmacy_location_id: uuid.UUID,
+    medicine_id: Optional[uuid.UUID] = None,
+    dispensable_only: bool = True,
+    limit: int = Query(100, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_INVENTORY_VIEW")),
+):
+    tenant_id = _current_tenant_id(current_user)
+    if medicine_id is not None:
+        return await get_fefo_batches_for_medicine(
+            session,
+            tenant_id=tenant_id,
+            facility_id=facility_id,
+            pharmacy_location_id=pharmacy_location_id,
+            medicine_id=medicine_id,
+            as_of_date=datetime.now(timezone.utc).date() if dispensable_only else None,
+            limit=limit,
+        )
+
+    stmt = select(InventoryBatch).where(
+        InventoryBatch.tenant_id == tenant_id,
+        InventoryBatch.facility_id == facility_id,
+        InventoryBatch.pharmacy_location_id == pharmacy_location_id,
+    )
+    if dispensable_only:
+        stmt = stmt.where(
+            InventoryBatch.status == "ACTIVE",
+            InventoryBatch.available_quantity > Decimal("0"),
+            InventoryBatch.expiry_date.is_(None) | (InventoryBatch.expiry_date >= datetime.now(timezone.utc).date()),
+        )
+    return (await session.execute(stmt.order_by(InventoryBatch.expiry_date.asc().nulls_last()).limit(limit))).scalars().all()
+
+
+@router.get("/inventory/balance", response_model=InventoryBalanceRead)
+async def inventory_balance(
+    facility_id: uuid.UUID,
+    pharmacy_location_id: uuid.UUID,
+    medicine_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_INVENTORY_VIEW")),
+):
+    return await get_location_medicine_balance(
+        session,
+        tenant_id=_current_tenant_id(current_user),
+        facility_id=facility_id,
+        pharmacy_location_id=pharmacy_location_id,
+        medicine_id=medicine_id,
+    )
+
+
+@router.get("/inventory/ledger", response_model=List[StockTransactionRead])
+async def list_inventory_ledger(
+    facility_id: uuid.UUID,
+    pharmacy_location_id: uuid.UUID,
+    medicine_id: Optional[uuid.UUID] = None,
+    inventory_batch_id: Optional[uuid.UUID] = None,
+    transaction_type: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_STOCK_LEDGER_VIEW")),
+):
+    filters = [
+        StockTransaction.tenant_id == _current_tenant_id(current_user),
+        StockTransaction.facility_id == facility_id,
+        StockTransaction.pharmacy_location_id == pharmacy_location_id,
+    ]
+    if medicine_id is not None:
+        filters.append(StockTransaction.medicine_id == medicine_id)
+    if inventory_batch_id is not None:
+        filters.append(StockTransaction.inventory_batch_id == inventory_batch_id)
+    if transaction_type:
+        filters.append(StockTransaction.transaction_type == transaction_type.upper())
+    stmt = select(StockTransaction).where(*filters).order_by(StockTransaction.created_at.desc()).limit(limit)
+    return (await session.execute(stmt)).scalars().all()
+
+
+@router.get("/inventory/batches/{inventory_batch_id}/reconciliation", response_model=InventoryReconciliationRead)
+async def inventory_batch_reconciliation(
+    inventory_batch_id: uuid.UUID,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_INVENTORY_RECONCILE")),
+):
+    return await reconcile_inventory_batch(
+        session,
+        inventory_batch_id,
+        tenant_id=_current_tenant_id(current_user),
+        facility_id=facility_id,
+    )
+
+
+@router.post("/inventory/adjustments", response_model=StockTransactionRead, status_code=201)
+async def create_inventory_adjustment(
+    payload: StockAdjustmentCreate,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_STOCK_ADJUST")),
+):
+    try:
+        return await record_stock_adjustment(
+            session,
+            tenant_id=_current_tenant_id(current_user),
+            facility_id=facility_id,
+            inventory_batch_id=payload.inventory_batch_id,
+            quantity=payload.quantity,
+            reference_id=payload.reference_id,
+            reason=payload.reason,
+            performed_by=uuid.UUID(str(current_user["sub"])),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/suppliers/{supplier_id}/deactivate", response_model=SupplierRead)

@@ -30,6 +30,9 @@ from app.models.tenant.manufacturer import Manufacturer
 from app.models.tenant.medicine_master import MedicineMaster
 from app.models.tenant.medicine_product import MedicineProduct
 from app.models.tenant.route import Route
+from app.models.tenant.pharmacy_location import PharmacyLocation
+from app.models.tenant.inventory_batch import InventoryBatch
+from app.models.tenant.stock_transaction import StockTransaction
 
 __all__ = [
     "Department",
@@ -70,4 +73,7 @@ __all__ = [
     "MedicineMaster",
     "MedicineProduct",
     "Route",
+    "PharmacyLocation",
+    "InventoryBatch",
+    "StockTransaction",
 ]

@@ -16,6 +16,8 @@ class GoodsReceipt(Base):
     grn_number: Mapped[str] = mapped_column(String(40), nullable=False, unique=True, index=True)
     purchase_order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("purchase_orders.id"), nullable=False, index=True)
     supplier_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("suppliers.id"), nullable=False, index=True)
+    facility_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    pharmacy_location_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     supplier_invoice_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     supplier_invoice_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     received_date: Mapped[date] = mapped_column(Date, nullable=False, default=date.today, index=True)

@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 class GoodsReceiptCreate(BaseModel):
     purchase_order_id: uuid.UUID
+    facility_id: Optional[uuid.UUID] = None
+    pharmacy_location_id: Optional[uuid.UUID] = None
     received_date: date = Field(default_factory=date.today)
     supplier_invoice_number: Optional[str] = None
     supplier_invoice_date: Optional[date] = None
@@ -51,6 +53,8 @@ class GoodsReceiptRead(BaseModel):
     grn_number: str
     purchase_order_id: uuid.UUID
     supplier_id: uuid.UUID
+    facility_id: Optional[uuid.UUID] = None
+    pharmacy_location_id: Optional[uuid.UUID] = None
     supplier_invoice_number: Optional[str] = None
     supplier_invoice_date: Optional[date] = None
     received_date: date
