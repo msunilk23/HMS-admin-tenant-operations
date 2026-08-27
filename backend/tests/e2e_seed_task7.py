@@ -4,6 +4,7 @@ import json
 import sys
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -69,6 +70,9 @@ ROUTE_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/route/oral/tas
 MANUFACTURER_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/manufacturer/cipla/task7/hospital-b")
 PRODUCT_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/product/cefixime/task7/hospital-b")
 FORMULARY_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/formulary/cefixime/task7/hospital-b")
+SUPPLIER_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/supplier/cipla/task7")
+PO_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/purchase-order/task7")
+PO_ITEM_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/purchase-order-item/task7")
 
 
 def _serialize_row(row):
@@ -161,9 +165,13 @@ async def seed():
         med_table = MedicineMaster(id=MED_A_ID, generic_name="E2E Paracetamol", brand_name="E2E Crocin", strength="500 mg", dosage_form="Tablet", is_active=True)
         med_capsule = MedicineMaster(id=uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/medicine/capsule"), generic_name="E2E Paracetamol", brand_name="E2E Crocin", strength="650 mg", dosage_form="Capsule", is_active=True)
         med_inactive = MedicineMaster(id=uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/medicine/inactive"), generic_name="E2E Inactive Drug", brand_name="E2E Old", strength="10 mg", dosage_form="Tablet", is_active=False)
-        session.add_all([department, doctor, patient, visit, vitals, icd_active, icd_inactive, generic_a, form_a, route_a, manufacturer_a, product_a, product_a_capsule, med_table, med_capsule, med_inactive])
+        supplier_a = Supplier(id=SUPPLIER_A_ID, supplier_code="E2E-SUP-1", supplier_name="E2E Supplier", country="India", is_active=True)
+        po_a = PurchaseOrder(id=PO_A_ID, po_number="E2E-PO-0001", supplier_id=SUPPLIER_A_ID, status="SENT", subtotal=Decimal("100.00"), tax_amount=Decimal("18.00"), total_amount=Decimal("118.00"))
+        po_item_a = PurchaseOrderItem(id=PO_ITEM_A_ID, purchase_order_id=PO_A_ID, medicine_product_id=PRODUCT_A_ID, ordered_quantity=Decimal("10"), unit_of_measure="tablet", unit_purchase_price=Decimal("10.00"), gst_percent=Decimal("18"), taxable_amount=Decimal("100.00"), tax_amount=Decimal("18.00"), line_total=Decimal("118.00"))
+        po_a.items.append(po_item_a)
+        session.add_all([department, doctor, patient, visit, vitals, icd_active, icd_inactive, generic_a, form_a, route_a, manufacturer_a, product_a, product_a_capsule, med_table, med_capsule, med_inactive, supplier_a])
         await session.flush()
-        session.add_all([formulary_a, formulary_a_capsule])
+        session.add_all([po_a, formulary_a, formulary_a_capsule])
         await session.commit()
 
         await session.execute(text(f'SET search_path TO "{SCHEMA_B}", public'))

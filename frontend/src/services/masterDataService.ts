@@ -74,6 +74,7 @@ export const masterDataService = {
   updateMedicineProduct: (id: string, data: unknown) => update<MedicineProduct>('medicine-products', id, data),
   deactivateMedicineProduct: (id: string) => deactivate<MedicineProduct>('medicine-products', id),
   listFormulary: (q?: string, departmentId?: string) => apiClient.get<HospitalFormulary[]>('/master-data/formulary', { params: { q, department_id: departmentId, limit: 100 } }).then(r => r.data),
+  listSuppliers: (q?: string) => apiClient.get<{ id: string; supplier_code: string; supplier_name: string; is_active: boolean }[]>('/pharmacy/suppliers', { params: { q, limit: 100 } }).then(r => r.data),
   createFormulary: (data: unknown) => create<HospitalFormulary>('formulary', data),
   updateFormulary: (id: string, data: unknown) => update<HospitalFormulary>('formulary', id, data),
   deactivateFormulary: (id: string) => deactivate<HospitalFormulary>('formulary', id),

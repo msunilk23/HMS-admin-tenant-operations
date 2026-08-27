@@ -4,15 +4,17 @@ Pharmacy Queue API — dispense prescribed medicines to patients.
 import json
 import logging
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import and_, or_, select, text as sql_text
+from sqlalchemy import and_, func, or_, select, text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
-from app.core.dependencies import ensure_feature_enabled, require_role, require_feature
+from app.core.dependencies import ensure_feature_enabled, require_permission, require_role, require_feature
 from app.core.pdf_service import generate_and_upload_prescription_pdf
 from app.core.razorpay_service import create_razorpay_order
 from app.core.sms import send_prescription_whatsapp
@@ -22,6 +24,7 @@ from app.models.tenant.department import Department
 from app.models.tenant.dosage_form import DosageForm
 from app.models.tenant.doctor import Doctor
 from app.models.tenant.generic_medicine import GenericMedicine
+from app.models.tenant.goods_receipt import GoodsReceipt, GoodsReceiptItem
 from app.models.tenant.hospital_formulary import HospitalFormulary
 from app.models.tenant.invoice import Invoice
 from app.models.tenant.lab_order import LabOrder
@@ -30,9 +33,13 @@ from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.medicine_product import MedicineProduct
 from app.models.tenant.prescription import Prescription
 from app.models.tenant.route import Route
+from app.models.tenant.supplier import Supplier
+from app.models.tenant.purchase_order import PurchaseOrder, PurchaseOrderItem
 from app.models.tenant.visit import Visit, VisitStatus
 from app.schemas.invoice import InvoiceRead, PharmacyBillCreate
-from app.schemas.pharmacy import FormularyMedicineSearchResult, PharmacyQueueRead, PharmacyStatusUpdate
+from app.schemas.pharmacy import FormularyMedicineSearchResult, PharmacyQueueRead, PharmacyStatusUpdate, SupplierCreate, SupplierImportItem, SupplierRead, SupplierUpdate
+from app.schemas.purchase_order import PurchaseOrderCreate, PurchaseOrderRead, PurchaseOrderUpdate
+from app.schemas.goods_receipt import GoodsReceiptCreate, GoodsReceiptItemCreate, GoodsReceiptItemRead, GoodsReceiptRead
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
 from app.services.audit_service import record_audit
@@ -40,6 +47,636 @@ from app.services.audit_service import record_audit
 logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_feature("pharmacy"))])
+
+_PO_TRANSITIONS = {
+    "DRAFT": {"SUBMITTED", "CANCELLED"},
+    "SUBMITTED": {"APPROVED", "REJECTED", "CANCELLED"},
+    "APPROVED": {"SENT", "CANCELLED"},
+    "SENT": {"PARTIALLY_RECEIVED", "FULLY_RECEIVED", "CANCELLED"},
+    "PARTIALLY_RECEIVED": {"FULLY_RECEIVED", "CANCELLED"},
+    "FULLY_RECEIVED": {"CLOSED"},
+    "REJECTED": set(),
+    "CANCELLED": set(),
+    "CLOSED": set(),
+}
+
+_GRN_TRANSITIONS = {
+    "DRAFT": {"PARTIALLY_RECEIVED", "FULLY_RECEIVED", "REJECTED", "CANCELLED"},
+    "PARTIALLY_RECEIVED": set(),
+    "FULLY_RECEIVED": set(),
+    "REJECTED": set(),
+    "CANCELLED": set(),
+}
+
+
+def _money(value: Decimal) -> Decimal:
+    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+async def _validate_po_references(session: AsyncSession, payload: PurchaseOrderCreate | PurchaseOrderUpdate) -> Supplier:
+    supplier = await session.get(Supplier, payload.supplier_id)
+    if not supplier or not supplier.is_active:
+        raise HTTPException(status_code=422, detail="Supplier is missing or inactive")
+    if payload.items is not None:
+        for item in payload.items:
+            product = await session.get(MedicineProduct, item.medicine_product_id)
+            if not product or not product.is_active:
+                raise HTTPException(status_code=422, detail="Medicine product is missing or inactive")
+    return supplier
+
+
+def _calculate_po_items(items) -> tuple[list[dict], Decimal, Decimal, Decimal, Decimal]:
+    calculated = []
+    subtotal = Decimal("0")
+    discount_amount = Decimal("0")
+    tax_amount = Decimal("0")
+    for item in items:
+        base = item.ordered_quantity * item.unit_purchase_price
+        discount = _money(base * item.discount_percent / Decimal("100"))
+        taxable = _money(base - discount)
+        tax = _money(taxable * item.gst_percent / Decimal("100"))
+        line_total = _money(taxable + tax)
+        subtotal += base
+        discount_amount += discount
+        tax_amount += tax
+        calculated.append({
+            **item.model_dump(),
+            "taxable_amount": taxable,
+            "tax_amount": tax,
+            "line_total": line_total,
+            "received_quantity": Decimal("0"),
+        })
+    return calculated, _money(subtotal), _money(discount_amount), _money(tax_amount), _money(subtotal - discount_amount + tax_amount)
+
+
+def _po_values(order: PurchaseOrder) -> dict:
+    return {
+        "po_number": order.po_number,
+        "supplier_id": str(order.supplier_id),
+        "status": order.status,
+        "subtotal": str(order.subtotal),
+        "discount_amount": str(order.discount_amount),
+        "tax_amount": str(order.tax_amount),
+        "total_amount": str(order.total_amount),
+    }
+
+
+@router.get("/purchase-orders", response_model=List[PurchaseOrderRead])
+async def list_purchase_orders(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    supplier_id: Optional[uuid.UUID] = None,
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_permission("PHARMACY_PO_VIEW")),
+):
+    stmt = select(PurchaseOrder).options(selectinload(PurchaseOrder.items)).order_by(PurchaseOrder.created_at.desc()).limit(limit)
+    if status_filter:
+        stmt = stmt.where(PurchaseOrder.status == status_filter.upper())
+    if supplier_id:
+        stmt = stmt.where(PurchaseOrder.supplier_id == supplier_id)
+    return (await session.execute(stmt)).scalars().all()
+
+
+@router.get("/purchase-orders/{po_id}", response_model=PurchaseOrderRead)
+async def get_purchase_order(po_id: uuid.UUID, session: AsyncSession = Depends(get_session), _: dict = Depends(require_permission("PHARMACY_PO_VIEW"))):
+    order = (await session.execute(select(PurchaseOrder).options(selectinload(PurchaseOrder.items)).where(PurchaseOrder.id == po_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    return order
+
+
+@router.post("/purchase-orders", response_model=PurchaseOrderRead, status_code=201)
+async def create_purchase_order(payload: PurchaseOrderCreate, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_permission("PHARMACY_PO_CREATE"))):
+    if payload.required_by_date and payload.required_by_date < payload.po_date:
+        raise HTTPException(status_code=422, detail="required_by_date cannot be before po_date")
+    if payload.po_date > datetime.now(timezone.utc).date():
+        raise HTTPException(status_code=422, detail="po_date cannot be in the future")
+    await _validate_po_references(session, payload)
+    calculated, subtotal, discount, tax, total = _calculate_po_items(payload.items)
+    now = datetime.now(timezone.utc)
+    order = PurchaseOrder(
+        po_number=f"PO-{now:%Y%m%d}-{uuid.uuid4().hex[:8].upper()}",
+        supplier_id=payload.supplier_id,
+        po_date=payload.po_date,
+        required_by_date=payload.required_by_date,
+        notes=payload.notes,
+        status="DRAFT",
+        subtotal=subtotal,
+        discount_amount=discount,
+        tax_amount=tax,
+        total_amount=total,
+        created_by_user_id=uuid.UUID(current_user["sub"]),
+        updated_by_user_id=uuid.UUID(current_user["sub"]),
+    )
+    order.items = [PurchaseOrderItem(**item) for item in calculated]
+    session.add(order)
+    await session.flush()
+    record_audit(session, current_user=current_user, action="CREATE", resource_type="purchase_order", resource_id=order.id, new_value=_po_values(order))
+    await session.commit()
+    loaded = await session.execute(
+        select(PurchaseOrder)
+        .options(selectinload(PurchaseOrder.items))
+        .where(PurchaseOrder.id == order.id)
+    )
+    return loaded.scalar_one()
+
+
+@router.put("/purchase-orders/{po_id}", response_model=PurchaseOrderRead)
+async def update_purchase_order(po_id: uuid.UUID, payload: PurchaseOrderUpdate, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_permission("PHARMACY_PO_EDIT"))):
+    order = (await session.execute(select(PurchaseOrder).options(selectinload(PurchaseOrder.items)).where(PurchaseOrder.id == po_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    if order.status != "DRAFT":
+        raise HTTPException(status_code=409, detail="Only draft purchase orders can be edited")
+    if payload.po_date and payload.po_date > datetime.now(timezone.utc).date():
+        raise HTTPException(status_code=422, detail="po_date cannot be in the future")
+    if payload.po_date and payload.required_by_date and payload.required_by_date < payload.po_date:
+        raise HTTPException(status_code=422, detail="required_by_date cannot be before po_date")
+    supplier_id = payload.supplier_id or order.supplier_id
+    if payload.items is not None:
+        await _validate_po_references(session, payload)
+        calculated, subtotal, discount, tax, total = _calculate_po_items(payload.items)
+        order.items = [PurchaseOrderItem(**item) for item in calculated]
+        order.subtotal, order.discount_amount, order.tax_amount, order.total_amount = subtotal, discount, tax, total
+    else:
+        await _validate_po_references(session, PurchaseOrderUpdate(supplier_id=supplier_id))
+    old_value = _po_values(order)
+    order.supplier_id = supplier_id
+    for field in ("po_date", "required_by_date", "notes"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(order, field, value)
+    order.updated_by_user_id = uuid.UUID(current_user["sub"])
+    record_audit(session, current_user=current_user, action="UPDATE", resource_type="purchase_order", resource_id=order.id, old_value=old_value, new_value=_po_values(order))
+    await session.commit()
+    return order
+
+
+async def _transition_purchase_order(po_id: uuid.UUID, target: str, session: AsyncSession, current_user: dict, reason: Optional[str] = None):
+    order = (await session.execute(select(PurchaseOrder).options(selectinload(PurchaseOrder.items)).where(PurchaseOrder.id == po_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    if target not in _PO_TRANSITIONS.get(order.status, set()):
+        raise HTTPException(status_code=409, detail=f"Cannot transition purchase order from {order.status} to {target}")
+    if target == "SUBMITTED" and not order.items:
+        raise HTTPException(status_code=422, detail="Purchase order must contain at least one item")
+    old_value = _po_values(order)
+    order.status = target
+    if target == "APPROVED":
+        order.approved_by_user_id = uuid.UUID(current_user["sub"])
+        order.approved_at = datetime.now(timezone.utc)
+    if target == "SENT":
+        order.sent_at = datetime.now(timezone.utc)
+    record_audit(session, current_user=current_user, action=target, resource_type="purchase_order", resource_id=order.id, old_value=old_value, new_value=_po_values(order), reason=reason)
+    await session.commit()
+    return order
+
+
+@router.post("/purchase-orders/{po_id}/submit", response_model=PurchaseOrderRead)
+async def submit_purchase_order(po_id: uuid.UUID, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_permission("PHARMACY_PO_SUBMIT"))):
+    return await _transition_purchase_order(po_id, "SUBMITTED", session, current_user)
+
+
+@router.post("/purchase-orders/{po_id}/approve", response_model=PurchaseOrderRead)
+async def approve_purchase_order(po_id: uuid.UUID, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_permission("PHARMACY_PO_APPROVE"))):
+    return await _transition_purchase_order(po_id, "APPROVED", session, current_user)
+
+
+@router.post("/purchase-orders/{po_id}/send", response_model=PurchaseOrderRead)
+async def send_purchase_order(po_id: uuid.UUID, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_permission("PHARMACY_PO_SEND"))):
+    return await _transition_purchase_order(po_id, "SENT", session, current_user)
+
+
+@router.post("/purchase-orders/{po_id}/reject", response_model=PurchaseOrderRead)
+async def reject_purchase_order(po_id: uuid.UUID, reason: Optional[str] = None, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_permission("PHARMACY_PO_APPROVE"))):
+    if not reason or not reason.strip():
+        raise HTTPException(status_code=422, detail="Rejection reason is required")
+    return await _transition_purchase_order(po_id, "REJECTED", session, current_user, reason.strip())
+
+
+@router.post("/purchase-orders/{po_id}/cancel", response_model=PurchaseOrderRead)
+async def cancel_purchase_order(po_id: uuid.UUID, reason: Optional[str] = None, session: AsyncSession = Depends(get_session), current_user: dict = Depends(require_permission("PHARMACY_PO_CANCEL"))):
+    if not reason or not reason.strip():
+        raise HTTPException(status_code=422, detail="Cancellation reason is required")
+    return await _transition_purchase_order(po_id, "CANCELLED", session, current_user, reason.strip())
+
+
+def _goods_receipt_values(receipt: GoodsReceipt) -> dict:
+    return {
+        "grn_number": receipt.grn_number,
+        "purchase_order_id": str(receipt.purchase_order_id),
+        "supplier_id": str(receipt.supplier_id),
+        "status": receipt.status,
+        "subtotal": str(receipt.subtotal),
+        "tax_amount": str(receipt.tax_amount),
+        "total_amount": str(receipt.total_amount),
+    }
+
+
+async def _load_goods_receipt(session: AsyncSession, grn_id: uuid.UUID) -> GoodsReceipt:
+    receipt = (await session.execute(
+        select(GoodsReceipt)
+        .options(selectinload(GoodsReceipt.items))
+        .where(GoodsReceipt.id == grn_id)
+    )).scalar_one_or_none()
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Goods receipt not found")
+    return receipt
+
+
+def _calculate_grn_totals(items: list[GoodsReceiptItem]) -> tuple[Decimal, Decimal, Decimal]:
+    subtotal = Decimal("0")
+    tax = Decimal("0")
+    for item in items:
+        subtotal += item.taxable_amount
+        tax += item.tax_amount
+    return _money(subtotal), _money(tax), _money(subtotal + tax)
+
+
+async def _posted_received_quantity(session: AsyncSession, po_item_id: uuid.UUID) -> Decimal:
+    result = await session.scalar(
+        select(func.coalesce(func.sum(GoodsReceiptItem.received_quantity), 0))
+        .join(GoodsReceipt, GoodsReceipt.id == GoodsReceiptItem.goods_receipt_id)
+        .where(
+            GoodsReceiptItem.purchase_order_item_id == po_item_id,
+            GoodsReceipt.status.in_(("PARTIALLY_RECEIVED", "FULLY_RECEIVED")),
+        )
+    )
+    return Decimal(str(result or 0))
+
+
+@router.get("/grn", response_model=List[GoodsReceiptRead])
+async def list_goods_receipts(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    purchase_order_id: Optional[uuid.UUID] = None,
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_permission("PHARMACY_GRN_VIEW")),
+):
+    stmt = select(GoodsReceipt).options(selectinload(GoodsReceipt.items)).order_by(GoodsReceipt.created_at.desc()).limit(limit)
+    if status_filter:
+        stmt = stmt.where(GoodsReceipt.status == status_filter.upper())
+    if purchase_order_id:
+        stmt = stmt.where(GoodsReceipt.purchase_order_id == purchase_order_id)
+    return (await session.execute(stmt)).scalars().all()
+
+
+@router.get("/grn/{grn_id}", response_model=GoodsReceiptRead)
+async def get_goods_receipt(
+    grn_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_permission("PHARMACY_GRN_VIEW")),
+):
+    return await _load_goods_receipt(session, grn_id)
+
+
+@router.post("/grn", response_model=GoodsReceiptRead, status_code=201)
+async def create_goods_receipt(
+    payload: GoodsReceiptCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_GRN_CREATE")),
+):
+    order = await session.get(PurchaseOrder, payload.purchase_order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    if order.status not in {"SENT", "PARTIALLY_RECEIVED"}:
+        raise HTTPException(status_code=409, detail="Goods receipt requires a sent or partially received purchase order")
+    if payload.received_date > datetime.now(timezone.utc).date():
+        raise HTTPException(status_code=422, detail="received_date cannot be in the future")
+    supplier = await session.get(Supplier, order.supplier_id)
+    if not supplier or not supplier.is_active:
+        raise HTTPException(status_code=422, detail="Purchase order supplier is missing or inactive")
+    if payload.supplier_invoice_number:
+        duplicate_invoice = await session.scalar(
+            select(GoodsReceipt.id).where(
+                GoodsReceipt.supplier_id == order.supplier_id,
+                GoodsReceipt.supplier_invoice_number == payload.supplier_invoice_number.strip(),
+                GoodsReceipt.supplier_invoice_date == payload.supplier_invoice_date,
+                GoodsReceipt.status.not_in(("REJECTED", "CANCELLED")),
+            )
+        )
+        if duplicate_invoice:
+            raise HTTPException(status_code=409, detail="Supplier invoice has already been received")
+    active_grn = await session.scalar(
+        select(GoodsReceipt.id).where(
+            GoodsReceipt.purchase_order_id == order.id,
+            GoodsReceipt.status == "DRAFT",
+        )
+    )
+    if active_grn:
+        raise HTTPException(status_code=409, detail="An active goods receipt already exists for this purchase order")
+    now = datetime.now(timezone.utc)
+    receipt = GoodsReceipt(
+        grn_number=f"GRN-{now:%Y%m%d}-{uuid.uuid4().hex[:8].upper()}",
+        purchase_order_id=order.id,
+        supplier_id=order.supplier_id,
+        supplier_invoice_number=payload.supplier_invoice_number,
+        supplier_invoice_date=payload.supplier_invoice_date,
+        received_date=payload.received_date,
+        received_by_user_id=uuid.UUID(current_user["sub"]),
+        status="DRAFT",
+        notes=payload.notes,
+        created_by_user_id=uuid.UUID(current_user["sub"]),
+        updated_by_user_id=uuid.UUID(current_user["sub"]),
+    )
+    session.add(receipt)
+    await session.flush()
+    record_audit(session, current_user=current_user, action="CREATE", resource_type="goods_receipt", resource_id=receipt.id, new_value=_goods_receipt_values(receipt))
+    await session.commit()
+    return await _load_goods_receipt(session, receipt.id)
+
+
+@router.post("/grn/{grn_id}/items", response_model=GoodsReceiptItemRead, status_code=201)
+async def receive_goods_receipt_item(
+    grn_id: uuid.UUID,
+    payload: GoodsReceiptItemCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_GRN_RECEIVE")),
+):
+    receipt = await _load_goods_receipt(session, grn_id)
+    if receipt.status != "DRAFT":
+        raise HTTPException(status_code=409, detail="Only draft goods receipts can receive items")
+    po_item = await session.get(PurchaseOrderItem, payload.purchase_order_item_id)
+    if not po_item or po_item.purchase_order_id != receipt.purchase_order_id:
+        raise HTTPException(status_code=422, detail="Purchase order item does not belong to this purchase order")
+    product = await session.get(MedicineProduct, po_item.medicine_product_id)
+    if not product or not product.is_active:
+        raise HTTPException(status_code=422, detail="Medicine product is missing or inactive")
+    if payload.manufacturing_date and payload.manufacturing_date > receipt.received_date:
+        raise HTTPException(status_code=422, detail="Manufacturing date cannot be after the received date")
+    if payload.expiry_date <= receipt.received_date:
+        raise HTTPException(status_code=422, detail="Expiry date must be after the received date")
+    if payload.manufacturing_date and payload.expiry_date <= payload.manufacturing_date:
+        raise HTTPException(status_code=422, detail="Expiry date must be after the manufacturing date")
+    duplicate_batch = await session.scalar(
+        select(GoodsReceiptItem.id).where(
+            GoodsReceiptItem.medicine_product_id == po_item.medicine_product_id,
+            GoodsReceiptItem.batch_number == payload.batch_number.strip(),
+            GoodsReceiptItem.expiry_date == payload.expiry_date,
+        )
+    )
+    if duplicate_batch:
+        raise HTTPException(status_code=409, detail="This batch and expiry already exists for the medicine product")
+    already_received = await _posted_received_quantity(session, po_item.id)
+    draft_received = sum((item.received_quantity for item in receipt.items if item.purchase_order_item_id == po_item.id), Decimal("0"))
+    remaining = po_item.ordered_quantity - already_received - draft_received
+    if payload.received_quantity > remaining:
+        raise HTTPException(status_code=409, detail="Received quantity exceeds the remaining purchase order quantity")
+    base = _money(payload.received_quantity * po_item.unit_purchase_price)
+    tax = _money(base * po_item.gst_percent / Decimal("100"))
+    item = GoodsReceiptItem(
+        goods_receipt_id=receipt.id,
+        purchase_order_item_id=po_item.id,
+        medicine_product_id=po_item.medicine_product_id,
+        batch_number=payload.batch_number.strip(),
+        manufacturing_date=payload.manufacturing_date,
+        expiry_date=payload.expiry_date,
+        received_quantity=payload.received_quantity,
+        free_quantity=payload.free_quantity,
+        purchase_rate=po_item.unit_purchase_price,
+        mrp=po_item.mrp,
+        gst_percent=po_item.gst_percent,
+        taxable_amount=base,
+        tax_amount=tax,
+        line_total=_money(base + tax),
+        receiving_notes=payload.receiving_notes,
+    )
+    session.add(item)
+    receipt.subtotal, receipt.tax_amount, receipt.total_amount = _calculate_grn_totals([*receipt.items, item])
+    receipt.updated_by_user_id = uuid.UUID(current_user["sub"])
+    await session.flush()
+    record_audit(session, current_user=current_user, action="RECEIVE", resource_type="goods_receipt_item", resource_id=item.id, new_value={"grn_id": str(receipt.id), "po_item_id": str(po_item.id), "received_quantity": str(item.received_quantity)})
+    await session.commit()
+    return item
+
+
+@router.post("/grn/{grn_id}/finalize", response_model=GoodsReceiptRead)
+async def finalize_goods_receipt(
+    grn_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_GRN_FINALIZE")),
+):
+    receipt = await _load_goods_receipt(session, grn_id)
+    if receipt.status != "DRAFT":
+        raise HTTPException(status_code=409, detail="Only draft goods receipts can be finalized")
+    receipt_items = (await session.execute(
+        select(GoodsReceiptItem).where(GoodsReceiptItem.goods_receipt_id == receipt.id)
+    )).scalars().all()
+    if not receipt_items:
+        raise HTTPException(status_code=422, detail="Goods receipt must contain at least one item")
+    order = (await session.execute(
+        select(PurchaseOrder)
+        .options(selectinload(PurchaseOrder.items))
+        .where(PurchaseOrder.id == receipt.purchase_order_id)
+    )).scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    grouped: dict[uuid.UUID, Decimal] = {}
+    for item in receipt_items:
+        grouped[item.purchase_order_item_id] = grouped.get(item.purchase_order_item_id, Decimal("0")) + item.received_quantity
+    complete = True
+    po_items = (await session.execute(
+        select(PurchaseOrderItem).where(PurchaseOrderItem.purchase_order_id == order.id)
+    )).scalars().all()
+    po_items_by_id = {item.id: item for item in po_items}
+    for po_item_id, received_now in grouped.items():
+        po_item = po_items_by_id.get(po_item_id)
+        if not po_item:
+            raise HTTPException(status_code=422, detail="Goods receipt item is not linked to this purchase order")
+        prior = await _posted_received_quantity(session, po_item_id)
+        total_received = prior + received_now
+        po_item.received_quantity = total_received
+        complete = complete and total_received >= po_item.ordered_quantity
+    receipt.status = "FULLY_RECEIVED" if complete and len(grouped) == len(order.items) else "PARTIALLY_RECEIVED"
+    order.status = "FULLY_RECEIVED" if receipt.status == "FULLY_RECEIVED" else "PARTIALLY_RECEIVED"
+    receipt.updated_by_user_id = uuid.UUID(current_user["sub"])
+    record_audit(session, current_user=current_user, action="FINALIZE", resource_type="goods_receipt", resource_id=receipt.id, new_value=_goods_receipt_values(receipt))
+    await session.commit()
+    return await _load_goods_receipt(session, receipt.id)
+
+
+@router.post("/grn/{grn_id}/reject", response_model=GoodsReceiptRead)
+async def reject_goods_receipt(
+    grn_id: uuid.UUID,
+    reason: Optional[str] = None,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_GRN_CANCEL")),
+):
+    receipt = await _load_goods_receipt(session, grn_id)
+    if receipt.status not in {"DRAFT", "PARTIALLY_RECEIVED"}:
+        raise HTTPException(status_code=409, detail="Goods receipt cannot be rejected in its current state")
+    if not reason or not reason.strip():
+        raise HTTPException(status_code=422, detail="Rejection reason is required")
+    receipt.status = "REJECTED"
+    record_audit(session, current_user=current_user, action="REJECT", resource_type="goods_receipt", resource_id=receipt.id, reason=reason.strip(), new_value=_goods_receipt_values(receipt))
+    await session.commit()
+    return await _load_goods_receipt(session, receipt.id)
+
+
+@router.post("/grn/{grn_id}/cancel", response_model=GoodsReceiptRead)
+async def cancel_goods_receipt(
+    grn_id: uuid.UUID,
+    reason: Optional[str] = None,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_GRN_CANCEL")),
+):
+    receipt = await _load_goods_receipt(session, grn_id)
+    if receipt.status not in {"DRAFT", "PARTIALLY_RECEIVED"}:
+        raise HTTPException(status_code=409, detail="Goods receipt cannot be cancelled in its current state")
+    if not reason or not reason.strip():
+        raise HTTPException(status_code=422, detail="Cancellation reason is required")
+    receipt.status = "CANCELLED"
+    record_audit(session, current_user=current_user, action="CANCEL", resource_type="goods_receipt", resource_id=receipt.id, reason=reason.strip(), new_value=_goods_receipt_values(receipt))
+    await session.commit()
+    return await _load_goods_receipt(session, receipt.id)
+
+
+def _supplier_values(item: Supplier | None) -> dict | None:
+    if item is None:
+        return None
+    return {
+        "supplier_code": item.supplier_code,
+        "supplier_name": item.supplier_name,
+        "gstin": item.gstin,
+        "drug_license_no": item.drug_license_no,
+        "address_line1": item.address_line1,
+        "address_line2": item.address_line2,
+        "city": item.city,
+        "state": item.state,
+        "postal_code": item.postal_code,
+        "country": item.country,
+        "contact_person": item.contact_person,
+        "phone": item.phone,
+        "email": item.email,
+        "payment_terms": item.payment_terms,
+        "credit_days": item.credit_days,
+        "is_active": item.is_active,
+        "notes": item.notes,
+    }
+
+
+@router.get("/suppliers", response_model=List[SupplierRead])
+async def list_suppliers(
+    q: str = Query("", max_length=100),
+    include_inactive: bool = False,
+    limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_permission("PHARMACY_SUPPLIER_VIEW")),
+):
+    stmt = select(Supplier)
+    if not include_inactive:
+        stmt = stmt.where(Supplier.is_active == True)  # noqa: E712
+    term = q.strip()
+    if term:
+        like = f"%{term}%"
+        stmt = stmt.where(or_(Supplier.supplier_code.ilike(like), Supplier.supplier_name.ilike(like)))
+    return (await session.execute(stmt.order_by(Supplier.supplier_name).limit(limit))).scalars().all()
+
+
+@router.get("/suppliers/{supplier_id}", response_model=SupplierRead)
+async def get_supplier(
+    supplier_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_permission("PHARMACY_SUPPLIER_VIEW")),
+):
+    item = await session.get(Supplier, supplier_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return item
+
+
+@router.post("/suppliers", response_model=SupplierRead, status_code=201)
+async def create_supplier(
+    payload: SupplierCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_SUPPLIER_MANAGE")),
+):
+    code = payload.supplier_code.strip().upper()
+    name = payload.supplier_name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Supplier name is required")
+    if await session.scalar(select(Supplier).where(Supplier.supplier_code == code)):
+        raise HTTPException(status_code=409, detail="Supplier code already exists")
+    if payload.credit_days is not None and payload.credit_days < 0:
+        raise HTTPException(status_code=422, detail="credit_days cannot be negative")
+    item = Supplier(supplier_code=code, supplier_name=name, **payload.model_dump(exclude={"supplier_code", "supplier_name"}))
+    session.add(item)
+    await session.flush()
+    record_audit(session, current_user=current_user, action="CREATE", resource_type="supplier", resource_id=item.id, new_value=_supplier_values(item))
+    await session.commit()
+    return item
+
+
+@router.put("/suppliers/{supplier_id}", response_model=SupplierRead)
+async def update_supplier(
+    supplier_id: uuid.UUID,
+    payload: SupplierUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_SUPPLIER_MANAGE")),
+):
+    item = await session.get(Supplier, supplier_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    changes = payload.model_dump(exclude_unset=True)
+    if "supplier_name" in changes and not (changes["supplier_name"] or "").strip():
+        raise HTTPException(status_code=422, detail="Supplier name is required")
+    if changes.get("credit_days") is not None and changes["credit_days"] < 0:
+        raise HTTPException(status_code=422, detail="credit_days cannot be negative")
+    old_value = _supplier_values(item)
+    for field, value in changes.items():
+        setattr(item, field, value.strip() if isinstance(value, str) and field == "supplier_name" else value)
+    record_audit(session, current_user=current_user, action="UPDATE", resource_type="supplier", resource_id=item.id, old_value=old_value, new_value=_supplier_values(item))
+    await session.commit()
+    return item
+
+
+@router.post("/suppliers/{supplier_id}/deactivate", response_model=SupplierRead)
+async def deactivate_supplier(
+    supplier_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_SUPPLIER_MANAGE")),
+):
+    item = await session.get(Supplier, supplier_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    if item.is_active:
+        item.is_active = False
+        record_audit(session, current_user=current_user, action="DEACTIVATE", resource_type="supplier", resource_id=item.id, old_value={"is_active": True}, new_value={"is_active": False})
+        await session.commit()
+    return item
+
+
+@router.post("/suppliers/import", response_model=List[SupplierRead])
+async def import_suppliers(
+    items: list[SupplierImportItem],
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_SUPPLIER_MANAGE")),
+):
+    result = []
+    for payload in items:
+        code = payload.supplier_code.strip().upper()
+        if not payload.supplier_name.strip():
+            raise HTTPException(status_code=422, detail="Supplier name is required")
+        if payload.credit_days is not None and payload.credit_days < 0:
+            raise HTTPException(status_code=422, detail="credit_days cannot be negative")
+        item = await session.scalar(select(Supplier).where(Supplier.supplier_code == code))
+        old_value = _supplier_values(item)
+        values = payload.model_dump(exclude={"supplier_code", "supplier_name"})
+        if item:
+            item.supplier_name = payload.supplier_name.strip()
+            for field, value in values.items():
+                setattr(item, field, value)
+            item.is_active = True
+            action = "UPDATE"
+        else:
+            item = Supplier(supplier_code=code, supplier_name=payload.supplier_name.strip(), **values)
+            session.add(item)
+            await session.flush()
+            action = "CREATE"
+        record_audit(session, current_user=current_user, action=action, resource_type="supplier", resource_id=item.id, old_value=old_value, new_value=_supplier_values(item))
+        result.append(item)
+    await session.commit()
+    return result
 
 
 @router.get("/medicines/search", response_model=List[FormularyMedicineSearchResult])

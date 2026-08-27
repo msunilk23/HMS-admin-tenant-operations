@@ -20,6 +20,8 @@ import AppointmentsPage from '@/features/appointments/AppointmentsPage'
 import RegisterVisitPage from '@/features/reception/RegisterVisitPage'
 import ChangePasswordPage from '@/features/auth/ChangePasswordPage'
 import PharmacyPage from '@/features/pharmacy/PharmacyPage'
+import PurchaseOrderPage from '@/features/pharmacy/PurchaseOrderPage'
+import GoodsReceiptPage from '@/features/pharmacy/GoodsReceiptPage'
 import LabPage from '@/features/lab/LabPage'
 import AdminDashboard from '@/features/admin/AdminDashboard'
 import TenantsPage from '@/features/super_admin/TenantsPage'
@@ -114,6 +116,8 @@ export default function App() {
             <Route path="/doctor/prescription/:visitId" element={<RoleGuard allowed={DOCTOR}><PrescriptionPage /></RoleGuard>} />
             <Route path="/lab" element={<FeatureGuard feature="lab"><RoleGuard allowed={LAB}><LabPage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><PharmacyPage /></RoleGuard></FeatureGuard>} />
+            <Route path="/admin/pharmacy/purchase-orders" element={<RoleGuard allowed={['hospital_admin', 'store_manager']}><PurchaseOrderPage /></RoleGuard>} />
+            <Route path="/admin/pharmacy/goods-receipts" element={<RoleGuard allowed={['hospital_admin', 'store_manager']}><GoodsReceiptPage /></RoleGuard>} />
             <Route path="/billing" element={<FeatureGuard feature="billing"><RoleGuard allowed={BILLING}><BillingPage /></RoleGuard></FeatureGuard>} />
             <Route path="/indent" element={<RoleGuard allowed={ALL_STAFF}><RequisitionsPage /></RoleGuard>} />
             <Route path="/admin/doctors" element={<RoleGuard allowed={ADMIN}><DoctorsAdminPage /></RoleGuard>} />

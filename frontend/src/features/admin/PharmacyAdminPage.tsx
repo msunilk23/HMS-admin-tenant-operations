@@ -95,8 +95,15 @@ export default function PharmacyAdminPage() {
   return (
     <div className="p-6 space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Pharmacy Master Data</h1>
-        <p className="text-sm text-gray-500 mt-1">Manage controlled medicine, product, and formulary records.</p>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Pharmacy Master Data</h1>
+            <p className="text-sm text-gray-500 mt-1">Manage controlled medicine, product, and formulary records.</p>
+          </div>
+          <a href="/admin/pharmacy/purchase-orders" className="px-3 py-2 rounded-lg border border-primary text-primary text-sm font-medium hover:bg-primary/5 whitespace-nowrap">
+            Purchase Orders
+          </a>
+        </div>
       </div>
       <div className="flex gap-1 overflow-x-auto border-b border-gray-200">
         {TABS.map(item => <button key={item.id} type="button" onClick={() => { setTab(item.id); setQuery(''); setForm({}); setEditingId(null) }} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 ${tab === item.id ? 'border-primary text-primary font-semibold' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>{item.label}</button>)}

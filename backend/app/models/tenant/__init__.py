@@ -19,6 +19,9 @@ from app.models.tenant.doctor_schedule_exception import DoctorScheduleException
 from app.models.tenant.clinical_alert import ClinicalAlert
 from app.models.tenant.audit_log import AuditLog
 from app.models.tenant.token_counter import TokenCounter
+from app.models.tenant.supplier import Supplier
+from app.models.tenant.purchase_order import PurchaseOrder, PurchaseOrderItem
+from app.models.tenant.goods_receipt import GoodsReceipt, GoodsReceiptItem
 from app.models.tenant.icd10_code import ICD10Code
 from app.models.tenant.generic_medicine import GenericMedicine
 from app.models.tenant.dosage_form import DosageForm
@@ -54,6 +57,11 @@ __all__ = [
     "ClinicalAlert",
     "AuditLog",
     "TokenCounter",
+    "Supplier",
+    "PurchaseOrder",
+    "PurchaseOrderItem",
+    "GoodsReceipt",
+    "GoodsReceiptItem",
     "ICD10Code",
     "GenericMedicine",
     "DosageForm",
