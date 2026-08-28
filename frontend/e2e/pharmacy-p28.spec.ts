@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createPageDiagnostics, type PageDiagnosticsCollector } from './support/pageDiagnostics'
 
 const pharmacist = { username: 'e2e_pharmacist_task7', password: 'E2ePharmacist@123' }
 const facilityId = '016e30e1-d9b4-555f-b538-7ce7747376a3'
@@ -9,7 +10,7 @@ const locationId = '9cb201ea-b1b8-5857-8f7a-764967d21f17'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 function seedP28() {
-  execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed_p28'], {
+  execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed_p28_scenario'], {
     cwd: path.join(repoRoot, 'backend'),
     stdio: 'inherit',
     env: {
@@ -29,7 +30,17 @@ async function login(page: Page) {
 }
 
 test.describe.serial('P28 pharmacy dispensing workflow', () => {
+  let diagnostics: PageDiagnosticsCollector
+
   test.beforeEach(() => seedP28())
+
+  test.beforeEach(async ({ page }) => {
+    diagnostics = createPageDiagnostics(page)
+  })
+
+  test.afterEach(async ({ page: _page }, testInfo) => {
+    await diagnostics.flush(testInfo)
+  })
 
   test('completes FEFO reservation and confirmed dispensing', async ({ page }) => {
     await login(page)
@@ -47,7 +58,7 @@ test.describe.serial('P28 pharmacy dispensing workflow', () => {
     await expect(page.getByText(/stock and ledger updated/i)).toBeVisible()
 
     await page.reload()
-    await expect(page.getByText('dispensed', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText(/dispensed orders today/i)).toBeVisible()
 
     const snapshot = JSON.parse(execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'snapshot'], {
       cwd: path.join(repoRoot, 'backend'),

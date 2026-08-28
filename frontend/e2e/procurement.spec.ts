@@ -13,7 +13,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 function resetFixture() {
   execFileSync(process.env.PYTHON ?? 'python', [
     path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'),
-    'seed',
+    'reset_task7_scenario',
   ], {
     cwd: path.join(repoRoot, 'backend'),
     stdio: 'inherit',
@@ -40,8 +40,8 @@ test.describe('P26.14 procurement workflows', () => {
     await login(page)
     await page.goto('/admin/pharmacy/purchase-orders')
     await expect(page.getByRole('heading', { name: 'Purchase Orders' })).toBeVisible()
-    await expect(page.getByText('E2E-PO-0001')).toBeVisible()
-    await expect(page.getByText('SENT', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText(/E2E-PO-0001/)).toBeVisible()
+    await expect(page.getByText(/E2E-PO-0001[\s\S]*SENT/)).toBeVisible()
 
     await page.goto('/admin/pharmacy/goods-receipts')
     await expect(page.getByRole('heading', { name: 'Goods Receipts' })).toBeVisible()
@@ -49,7 +49,7 @@ test.describe('P26.14 procurement workflows', () => {
     await page.getByRole('button', { name: /create draft grn/i }).click()
     await expect(page.getByRole('heading', { name: 'Add received batch' })).toBeVisible()
 
-    await page.getByRole('combobox', { name: /select po item/i }).selectOption({ label: /E2E-DOLO-500/ })
+    await page.getByRole('combobox').nth(1).selectOption({ label: 'E2E-DOLO-500 · E2E Dolo 500 · ordered 10.000' })
     await page.getByPlaceholder(/received qty/i).fill('10')
     await page.getByPlaceholder(/free qty/i).fill('0')
     await page.getByPlaceholder(/batch number/i).fill('E2E-BATCH-001')
@@ -71,7 +71,7 @@ test.describe('P26.14 procurement workflows', () => {
     await page.goto('/admin/pharmacy/goods-receipts')
     await page.getByLabel(/sent purchase order/i).selectOption({ label: 'E2E-PO-0001 · SENT' })
     await page.getByRole('button', { name: /create draft grn/i }).click()
-    await page.getByRole('combobox', { name: /select po item/i }).selectOption({ label: /E2E-DOLO-500/ })
+    await page.getByRole('combobox').nth(1).selectOption({ label: 'E2E-DOLO-500 · E2E Dolo 500 · ordered 10.000' })
     await page.getByPlaceholder(/received qty/i).fill('1')
     await page.getByPlaceholder(/batch number/i).fill('E2E-EXPIRED-001')
     await page.getByLabel(/expires/i).fill('2020-01-01')

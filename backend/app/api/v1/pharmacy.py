@@ -29,6 +29,7 @@ from app.models.tenant.hospital_formulary import HospitalFormulary
 from app.models.tenant.invoice import Invoice
 from app.models.tenant.lab_order import LabOrder
 from app.models.tenant.patient import Patient
+from app.models.tenant.pharmacy_dispense import PharmacyDispense
 from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.medicine_product import MedicineProduct
 from app.models.tenant.prescription import Prescription

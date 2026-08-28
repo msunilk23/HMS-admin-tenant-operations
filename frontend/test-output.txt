@@ -1,0 +1,296 @@
+[Output too large (22KB). Full output saved to: c:\Users\sunilkumar.m\AppData\Roaming\Code\copilot-terminal-output\copilot-terminal-output-75cc75e3-b764-4e3b-a0fe-ebc7dd565dc6.txt]
+[Use readFile or grep to examine the full output.]
+
+Note: The tool simplified the command to `npm run e2e -- --reporter=line` (terminal ID=233641be-c7e8-44e6-84ed-52dd5db3a565). This is the output of running that command instead:
+
+> hospital-opd-frontend@1.0.0 e2e
+> playwright test --reporter=line
+
+E2E seed ready: e2e_doctor_task7 / E2eDoctor@123 / visit=a5a85a47-7a23-5587-97de-56daaf8b7822
+
+Running 21 tests using 1 worker
+  1) [chromium] â€º e2e\dashboard-load.spec.ts:25:3 â€º P25.19 Dashboard Load â€º hospital admin dashboard renders KPI cards 
+
+[... middle of output truncated ...]
+
+ment #4: trace (application/zip) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\dashboard-load-P25-19-Dash-7d618-PI-cards-and-service-panels-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\dashboard-load-P25-19-Dash-7d618-PI-cards-and-service-panels-chromium\trace.zip
+
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  2) [chromium] â€º e2e\dashboard-load.spec.ts:36:3 â€º P25.19 Dashboard Load â€º admin stats endpoint returns the dashboard contract 
+
+    Error: Internal Server Error
+
+    expect(received).toBeTruthy()
+
+    Received: false
+
+      37 |     const headers = await loginAs(request)
+      38 |     const response = await request.get('/api/v1/admin/stats', { headers })
+    > 39 |     expect(response.ok(), await response.text()).toBeTruthy()
+         |                                                  ^
+      40 |     const data = await response.json()
+      41 |     expect(data).toHaveProperty('total_patients')
+      42 |     expect(data).toHaveProperty('visits_today')
+        at D:\Personal\HMS\HMS-tenant\frontend\e2e\dashboard-load.spec.ts:39:50
+
+    Error Context: test-results\dashboard-load-P25-19-Dash-5918f-urns-the-dashboard-contract-chromium\error-context.md
+
+    attachment #2: trace (application/zip) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\dashboard-load-P25-19-Dash-5918f-urns-the-dashboard-contract-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\dashboard-load-P25-19-Dash-5918f-urns-the-dashboard-contract-chromium\trace.zip
+
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+â€¦rmacy dispensing workflow â€º completes FEFO reservation and confirmed dispensing
+E2E seed ready: e2e_doctor_task7 / E2eDoctor@123 / visit=a5a85a47-7a23-5587-97de-56daaf8b7822
+P28 E2E seed ready: e2e_pharmacist_task7 / E2ePharmacist@123 / facility=016e30e1-d9b4-555f-b538-7ce7747376a3 / location=9cb201ea-b1b8-5857-8f7a-764967d21f17
+
+  3) [chromium] â€º e2e\pharmacy-p28.spec.ts:34:3 â€º P28 pharmacy dispensing workflow â€º completes FEFO reservation and confirmed dispensing 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('button', { name: /validate and reserve fefo stock/i })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('button', { name: /validate and reserve fefo stock/i })
+
+
+      41 |     await page.getByLabel('Pharmacy location ID').fill(locationId)
+      42 |     await page.getByRole('button', { name: 'Start review' }).click()
+    > 43 |     await expect(page.getByRole('button', { name: /validate and reserve fefo stock/i })).toBeVisible()
+         |                                                                                          ^
+      44 |     await page.getByRole('button', { name: /validate and reserve fefo stock/i }).click()
+      45 |     await expect(page.getByText(/ready for billing/i)).toBeVisible()
+      46 |     await page.getByRole('button', { name: 'Confirm dispense' }).click()
+        at D:\Personal\HMS\HMS-tenant\frontend\e2e\pharmacy-p28.spec.ts:43:90
+
+    attachment #1: screenshot (image/png) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\pharmacy-p28-P28-pharmacy--b9125-on-and-confirmed-dispensing-chromium\test-failed-1.png
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    attachment #2: video (video/webm) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\pharmacy-p28-P28-pharmacy--b9125-on-and-confirmed-dispensing-chromium\video.webm
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    Error Context: test-results\pharmacy-p28-P28-pharmacy--b9125-on-and-confirmed-dispensing-chromium\error-context.md
+
+    attachment #4: trace (application/zip) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\pharmacy-p28-P28-pharmacy--b9125-on-and-confirmed-dispensing-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\pharmacy-p28-P28-pharmacy--b9125-on-and-confirmed-dispensing-chromium\trace.zip
+
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+â€¦iption integration â€º searches by generic and brand through the active formulary
+E2E seed ready: e2e_doctor_task7 / E2eDoctor@123 / visit=a5a85a47-7a23-5587-97de-56daaf8b7822
+
+  4) [chromium] â€º e2e\pharmacy-prescription.spec.ts:47:3 â€º P25 pharmacy prescription integration â€º searches by generic and brand through the active formulary 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('button', { name: /E2E Paracetamol.*500.*Tablet/i })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('button', { name: /E2E Paracetamol.*500.*Tablet/i })
+
+
+      49 |     const search = page.getByPlaceholder(/search formulary generic, brand or composition/i).first()
+      50 |     await search.fill('E2E Paracetamol')
+    > 51 |     await expect(page.getByRole('button', { name: /E2E Paracetamol.*500.*Tablet/i })).toBeVisible()
+         |                                                                                       ^
+      52 |     await search.fill('E2E Dolo')
+      53 |     await expect(page.getByRole('button', { name: /E2E Paracetamol.*500.*Tablet/i })).toBeVisible()
+      54 |   })
+        at D:\Personal\HMS\HMS-tenant\frontend\e2e\pharmacy-prescription.spec.ts:51:87
+
+    attachment #1: screenshot (image/png) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\pharmacy-prescription-P25--aaa27-hrough-the-active-formulary-chromium\test-failed-1.png
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    attachment #2: video (video/webm) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\pharmacy-prescription-P25--aaa27-hrough-the-active-formulary-chromium\video.webm
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    Error Context: test-results\pharmacy-prescription-P25--aaa27-hrough-the-active-formulary-chromium\error-context.md
+
+    attachment #4: trace (application/zip) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\pharmacy-prescription-P25--aaa27-hrough-the-active-formulary-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\pharmacy-prescription-P25--aaa27-hrough-the-active-formulary-chromium\trace.zip
+
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+â€¦ospital admin can view the seeded purchase order and create a GRN batch receipt
+E2E seed ready: e2e_doctor_task7 / E2eDoctor@123 / visit=a5a85a47-7a23-5587-97de-56daaf8b7822
+
+  5) [chromium] â€º e2e\procurement.spec.ts:39:3 â€º P26.14 procurement workflows â€º hospital admin can view the seeded purchase order and create a GRN batch receipt 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText('E2E-PO-0001')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByText('E2E-PO-0001')
+
+
+      41 |     await page.goto('/admin/pharmacy/purchase-orders')
+      42 |     await expect(page.getByRole('heading', { name: 'Purchase Orders' })).toBeVisible()
+    > 43 |     await expect(page.getByText('E2E-PO-0001')).toBeVisible()
+         |                                                 ^
+      44 |     await expect(page.getByText('SENT', { exact: true }).first()).toBeVisible()
+      45 |
+      46 |     await page.goto('/admin/pharmacy/goods-receipts')
+        at D:\Personal\HMS\HMS-tenant\frontend\e2e\procurement.spec.ts:43:49
+
+    attachment #1: screenshot (image/png) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\procurement-P26-14-procure-7f76e--create-a-GRN-batch-receipt-chromium\test-failed-1.png
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    attachment #2: video (video/webm) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\procurement-P26-14-procure-7f76e--create-a-GRN-batch-receipt-chromium\video.webm
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    Error Context: test-results\procurement-P26-14-procure-7f76e--create-a-GRN-batch-receipt-chromium\error-context.md
+
+    attachment #4: trace (application/zip) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\procurement-P26-14-procure-7f76e--create-a-GRN-batch-receipt-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\procurement-P26-14-procure-7f76e--create-a-GRN-batch-receipt-chromium\trace.zip
+
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+â€¦26.14 procurement workflows â€º expired batches are rejected by the receiving API
+E2E seed ready: e2e_doctor_task7 / E2eDoctor@123 / visit=a5a85a47-7a23-5587-97de-56daaf8b7822
+
+  6) [chromium] â€º e2e\procurement.spec.ts:69:3 â€º P26.14 procurement workflows â€º expired batches are rejected by the receiving API 
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.selectOption: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for getByLabel(/sent purchase order/i)
+        - locator resolved to <select class="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2">â€¦</select>
+      - attempting select option action
+        2 Ã— waiting for element to be visible and enabled
+          - did not find some options
+        - retrying select option action
+        - waiting 20ms
+        2 Ã— waiting for element to be visible and enabled
+          - did not find some options
+        - retrying select option action
+          - waiting 100ms
+        40 Ã— waiting for element to be visible and enabled
+           - did not find some options
+         - retrying select option action
+           - waiting 500ms
+
+
+      70 |     await login(page)
+      71 |     await page.goto('/admin/pharmacy/goods-receipts')
+    > 72 |     await page.getByLabel(/sent purchase order/i).selectOption({ label: 'E2E-PO-0001 Â· SENT' })
+         |                                                   ^
+      73 |     await page.getByRole('button', { name: /create draft grn/i }).click()
+      74 |     await page.getByRole('combobox', { name: /select po item/i }).selectOption({ label: /E2E-DOLO-500/ })
+      75 |     await page.getByPlaceholder(/received qty/i).fill('1')
+        at D:\Personal\HMS\HMS-tenant\frontend\e2e\procurement.spec.ts:72:51
+
+    attachment #1: screenshot (image/png) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\procurement-P26-14-procure-fc8a9-jected-by-the-receiving-API-chromium\test-failed-1.png
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    attachment #2: video (video/webm) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\procurement-P26-14-procure-fc8a9-jected-by-the-receiving-API-chromium\video.webm
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    Error Context: test-results\procurement-P26-14-procure-fc8a9-jected-by-the-receiving-API-chromium\error-context.md
+
+    attachment #4: trace (application/zip) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\procurement-P26-14-procure-fc8a9-jected-by-the-receiving-API-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\procurement-P26-14-procure-fc8a9-jected-by-the-receiving-API-chromium\trace.zip
+
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+â€¦led clinical data â€º free-text diagnosis requires a reason and is visibly marked
+E2E seed ready: e2e_doctor_task7 / E2eDoctor@123 / visit=a5a85a47-7a23-5587-97de-56daaf8b7822
+
+â€¦rches distinct medicines, fills multiple rows, and reloads prescription details
+E2E seed ready: e2e_doctor_task7 / E2eDoctor@123 / visit=a5a85a47-7a23-5587-97de-56daaf8b7822
+
+
+  7) [chromium] â€º e2e\task7.spec.ts:200:3 â€º Task 7 controlled clinical data â€º doctor searches distinct medicines, fills multiple rows, and reloads prescription details 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText(/E2E Paracetamol.*500.*Tablet/)
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByText(/E2E Paracetamol.*500.*Tablet/)
+
+
+      208 |     await page.getByRole('button', { name: /add medicine/i }).click()
+      209 |     await medicineSearch.fill('E2E Dolo')
+    > 210 |     await expect(page.getByText(/E2E Paracetamol.*500.*Tablet/)).toBeVisible()
+          |                                                                  ^
+      211 |     await page.getByRole('button', { name: /E2E Paracetamol.*500.*Tablet/i }).click()
+      212 |     await page.getByPlaceholder(/e\.g\. 500mg/i).first().fill('1')
+      213 |     await page.locator('select').nth(0).selectOption({ label: '5 days' })
+        at D:\Personal\HMS\HMS-tenant\frontend\e2e\task7.spec.ts:210:66
+
+    attachment #1: screenshot (image/png) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\task7-Task-7-controlled-cl-72794-eloads-prescription-details-chromium\test-failed-1.png
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    attachment #2: video (video/webm) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\task7-Task-7-controlled-cl-72794-eloads-prescription-details-chromium\video.webm
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    Error Context: test-results\task7-Task-7-controlled-cl-72794-eloads-prescription-details-chromium\error-context.md
+
+    attachment #4: trace (application/zip) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    test-results\task7-Task-7-controlled-cl-72794-eloads-prescription-details-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\task7-Task-7-controlled-cl-72794-eloads-prescription-details-chromium\trace.zip
+
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  7 failed
+    [chromium] â€º e2e\dashboard-load.spec.ts:25:3 â€º P25.19 Dashboard Load â€º hospital admin dashboard renders KPI cards and service panels 
+    [chromium] â€º e2e\dashboard-load.spec.ts:36:3 â€º P25.19 Dashboard Load â€º admin stats endpoint returns the dashboard contract 
+    [chromium] â€º e2e\pharmacy-p28.spec.ts:34:3 â€º P28 pharmacy dispensing workflow â€º completes FEFO reservation and confirmed dispensing 
+    [chromium] â€º e2e\pharmacy-prescription.spec.ts:47:3 â€º P25 pharmacy prescription integration â€º searches by generic and brand through the active formulary 
+    [chromium] â€º e2e\procurement.spec.ts:39:3 â€º P26.14 procurement workflows â€º hospital admin can view the seeded purchase order and create a GRN batch receipt 
+    [chromium] â€º e2e\procurement.spec.ts:69:3 â€º P26.14 procurement workflows â€º expired batches are rejected by the receiving API 
+    [chromium] â€º e2e\task7.spec.ts:200:3 â€º Task 7 controlled clinical data â€º doctor searches distinct medicines, fills multiple rows, and reloads prescription details 
+  8 did not run
+  6 passed (2.9m)
+
+Command exited with code 1

@@ -694,6 +694,8 @@ async def confirm_dispense_stock_consumption(
                 performed_by=confirmed_by,
             )
             session.add(transaction)
+            # Flush the transaction row first so FK assignment is always valid.
+            await session.flush()
             allocation.stock_transaction_id = transaction.id
         else:
             allocation.stock_transaction_id = existing_transaction.id

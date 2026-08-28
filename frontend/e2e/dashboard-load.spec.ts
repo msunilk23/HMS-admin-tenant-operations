@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
+import { createPageDiagnostics, type PageDiagnosticsCollector } from './support/pageDiagnostics'
 
 const admin = {
   username: 'e2e_admin_task7',
@@ -22,13 +23,23 @@ async function login(page: Page) {
 }
 
 test.describe('P25.19 Dashboard Load', () => {
+  let diagnostics: PageDiagnosticsCollector
+
+  test.beforeEach(async ({ page }) => {
+    diagnostics = createPageDiagnostics(page)
+  })
+
+  test.afterEach(async ({ page: _page }, testInfo) => {
+    await diagnostics.flush(testInfo)
+  })
+
   test('hospital admin dashboard renders KPI cards and service panels', async ({ page }) => {
     await login(page)
     await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible()
     await expect(page.getByText('Total Patients', { exact: true })).toBeVisible()
     await expect(page.getByText('OPD Visits Today', { exact: true })).toBeVisible()
     await expect(page.getByText('Total Staff', { exact: true })).toBeVisible()
-    await expect(page.getByText('Revenue Today', { exact: true })).toBeVisible()
+    await expect(page.getByText('Revenue Today', { exact: true }).first()).toBeVisible()
     await expect(page.getByText('Pharmacy', { exact: true }).first()).toBeVisible()
     await expect(page.getByText('Could not load dashboard data.', { exact: true })).toHaveCount(0)
   })

@@ -34,6 +34,7 @@ from app.models.tenant.pharmacy_location import PharmacyLocation
 from app.models.tenant.inventory_batch import InventoryBatch
 from app.models.tenant.stock_transaction import StockTransaction
 from app.models.tenant.pharmacy_dispense import PharmacyDispense, PharmacyDispenseAllocation, PharmacyDispenseItem, PharmacyStockReservation
+from app.models.tenant.requisition import Requisition
 
 __all__ = [
     "Department",
@@ -81,4 +82,5 @@ __all__ = [
     "PharmacyDispenseItem",
     "PharmacyDispenseAllocation",
     "PharmacyStockReservation",
+    "Requisition",
 ]
