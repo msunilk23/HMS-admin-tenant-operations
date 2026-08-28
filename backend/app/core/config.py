@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     QUEUE_SLA_NURSE_MINUTES: int = 15
     QUEUE_SLA_DOCTOR_MINUTES: int = 20
     SCHEDULE_MAX_CAPACITY: int = 100
+    PHARMACY_RESERVATION_TTL_MINUTES: int = 15
 
     # CORS
     ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]

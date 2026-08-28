@@ -33,6 +33,7 @@ from app.models.tenant.route import Route
 from app.models.tenant.pharmacy_location import PharmacyLocation
 from app.models.tenant.inventory_batch import InventoryBatch
 from app.models.tenant.stock_transaction import StockTransaction
+from app.models.tenant.pharmacy_dispense import PharmacyDispense, PharmacyDispenseAllocation, PharmacyDispenseItem, PharmacyStockReservation
 
 __all__ = [
     "Department",
@@ -76,4 +77,8 @@ __all__ = [
     "PharmacyLocation",
     "InventoryBatch",
     "StockTransaction",
+    "PharmacyDispense",
+    "PharmacyDispenseItem",
+    "PharmacyDispenseAllocation",
+    "PharmacyStockReservation",
 ]

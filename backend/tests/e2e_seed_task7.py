@@ -29,6 +29,9 @@ RECEPTIONIST_PASSWORD = "E2eReception@123"
 ADMIN_USERNAME = "e2e_admin_task7"
 ADMIN_EMAIL = "e2e-admin-task7@example.test"
 ADMIN_PASSWORD = "E2eAdmin@123"
+PHARMACIST_USERNAME = "e2e_pharmacist_task7"
+PHARMACIST_EMAIL = "e2e-pharmacist-task7@example.test"
+PHARMACIST_PASSWORD = "E2ePharmacist@123"
 HOSPITAL_B_DOCTOR_USERNAME = "e2e_doctor_task7_b"
 HOSPITAL_B_DOCTOR_EMAIL = "e2e-doctor-task7-b@example.test"
 HOSPITAL_B_DOCTOR_PASSWORD = "E2eDoctorB@123"
@@ -38,6 +41,7 @@ TENANT_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-tenant-b")
 DOCTOR_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor")
 RECEPTIONIST_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-receptionist")
 ADMIN_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-admin")
+PHARMACIST_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-pharmacist")
 HOSPITAL_B_DOCTOR_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-b")
 DOCTOR_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-profile")
 HOSPITAL_B_DOCTOR_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-profile-b")
@@ -73,6 +77,16 @@ FORMULARY_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/formulary/
 SUPPLIER_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/supplier/cipla/task7")
 PO_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/purchase-order/task7")
 PO_ITEM_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/purchase-order-item/task7")
+PHARMACY_LOCATION_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/pharmacy-location/task7")
+P28_EARLY_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-early-batch/task7")
+P28_LATER_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-later-batch/task7")
+P28_GRN_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-grn/task7")
+P28_GRN_ITEM_EARLY_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-grn-item-early/task7")
+P28_GRN_ITEM_LATER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-grn-item-later/task7")
+P28_PRESCRIPTION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-prescription/task7")
+P28_PRESCRIPTION_ITEM_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-prescription-item/task7")
+P28_QUEUE_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-queue/task7")
+FACILITY_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-facility-a")
 
 
 def _serialize_row(row):
@@ -112,14 +126,16 @@ async def seed():
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_tables(), checkfirst=False))
         await conn.execute(text(f'SET search_path TO "{SCHEMA_B}", public'))
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_tables(), checkfirst=False))
-        await conn.execute(text('DELETE FROM public.users WHERE id IN (:doctor_id, :receptionist_id, :admin_id, :doctor_b_id) OR username IN (:doctor_username, :receptionist_username, :admin_username, :doctor_b_username)'), {
+        await conn.execute(text('DELETE FROM public.users WHERE id IN (:doctor_id, :receptionist_id, :admin_id, :pharmacist_id, :doctor_b_id) OR username IN (:doctor_username, :receptionist_username, :admin_username, :pharmacist_username, :doctor_b_username)'), {
             "doctor_id": DOCTOR_USER_ID,
             "receptionist_id": RECEPTIONIST_USER_ID,
             "admin_id": ADMIN_USER_ID,
+            "pharmacist_id": PHARMACIST_USER_ID,
             "doctor_b_id": HOSPITAL_B_DOCTOR_USER_ID,
             "doctor_username": DOCTOR_USERNAME,
             "receptionist_username": RECEPTIONIST_USERNAME,
             "admin_username": ADMIN_USERNAME,
+            "pharmacist_username": PHARMACIST_USERNAME,
             "doctor_b_username": HOSPITAL_B_DOCTOR_USERNAME,
         })
         await conn.execute(text('DELETE FROM public.tenants WHERE id IN (:id_a, :id_b) OR schema_name IN (:schema_a, :schema_b)'), {
@@ -136,8 +152,9 @@ async def seed():
         user_a = User(id=DOCTOR_USER_ID, tenant_id=TENANT_A_ID, tenant_name=SCHEMA_A, email=DOCTOR_EMAIL, username=DOCTOR_USERNAME, hashed_password=hash_password(DOCTOR_PASSWORD), full_name="E2E Doctor A", role="doctor", is_active=True, must_change_password=False)
         receptionist_a = User(id=RECEPTIONIST_USER_ID, tenant_id=TENANT_A_ID, tenant_name=SCHEMA_A, email=RECEPTIONIST_EMAIL, username=RECEPTIONIST_USERNAME, hashed_password=hash_password(RECEPTIONIST_PASSWORD), full_name="E2E Receptionist A", role="receptionist", is_active=True, must_change_password=False)
         admin_a = User(id=ADMIN_USER_ID, tenant_id=TENANT_A_ID, tenant_name=SCHEMA_A, email=ADMIN_EMAIL, username=ADMIN_USERNAME, hashed_password=hash_password(ADMIN_PASSWORD), full_name="E2E Admin A", role="hospital_admin", is_active=True, must_change_password=False)
+        pharmacist_a = User(id=PHARMACIST_USER_ID, tenant_id=TENANT_A_ID, tenant_name=SCHEMA_A, email=PHARMACIST_EMAIL, username=PHARMACIST_USERNAME, hashed_password=hash_password(PHARMACIST_PASSWORD), full_name="E2E Pharmacist A", role="pharmacist", is_active=True, must_change_password=False)
         user_b = User(id=HOSPITAL_B_DOCTOR_USER_ID, tenant_id=TENANT_B_ID, tenant_name=SCHEMA_B, email=HOSPITAL_B_DOCTOR_EMAIL, username=HOSPITAL_B_DOCTOR_USERNAME, hashed_password=hash_password(HOSPITAL_B_DOCTOR_PASSWORD), full_name="E2E Doctor B", role="doctor", is_active=True, must_change_password=False)
-        session.add_all([tenant_a, tenant_b, user_a, receptionist_a, admin_a, user_b])
+        session.add_all([tenant_a, tenant_b, user_a, receptionist_a, admin_a, pharmacist_a, user_b])
         await session.commit()
         session.add_all([
             TenantFeature(id=uuid.uuid4(), tenant_id=TENANT_A_ID, feature="billing", enabled=True),
@@ -196,13 +213,47 @@ async def seed():
     print(f"E2E seed ready: {DOCTOR_USERNAME} / {DOCTOR_PASSWORD} / visit={VISIT_ID}")
 
 
+async def seed_p28():
+    await seed()
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    facility_id = FACILITY_A_ID
+    now = datetime.now(timezone.utc)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+    maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+    async with maker() as session:
+        await session.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        visit = await session.get(Visit, VISIT_ID)
+        visit.status = "CONSULTATION_COMPLETED"
+        location = PharmacyLocation(id=PHARMACY_LOCATION_A_ID, tenant_id=TENANT_A_ID, facility_id=facility_id, location_code="E2E-P28", location_name="E2E P28 Pharmacy", location_type="PHARMACY", active=True)
+        prescription = Prescription(id=P28_PRESCRIPTION_ID, visit_id=VISIT_ID, uhid="E2E-T7-PATIENT", status="finalized", version=1, medicines=[{"name": "E2E Dolo", "dose": "1 tablet", "frequency": "once daily", "duration": "10 days", "route": "oral"}])
+        prescription.items.append(PrescriptionItem(id=P28_PRESCRIPTION_ITEM_ID, medicine_product_id=PRODUCT_A_ID, medicine="E2E Dolo", strength="500", quantity="10", final_quantity="10", auto_quantity="10", route="oral", frequency="once daily", duration="10 days"))
+        queue = PharmacyQueue(id=P28_QUEUE_ID, prescription_id=P28_PRESCRIPTION_ID, uhid="E2E-T7-PATIENT", status="pending")
+        early = InventoryBatch(id=P28_EARLY_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=facility_id, pharmacy_location_id=PHARMACY_LOCATION_A_ID, medicine_id=PRODUCT_A_ID, batch_number="P28-EARLY", expiry_date=datetime(2027, 6, 30, tzinfo=timezone.utc).date(), purchase_rate=Decimal("10"), mrp=Decimal("12"), received_quantity=Decimal("6"), available_quantity=Decimal("6"), reserved_quantity=Decimal("0"), supplier_id=SUPPLIER_A_ID, goods_receipt_id=P28_GRN_ID, goods_receipt_item_id=P28_GRN_ITEM_EARLY_ID, status="ACTIVE")
+        later = InventoryBatch(id=P28_LATER_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=facility_id, pharmacy_location_id=PHARMACY_LOCATION_A_ID, medicine_id=PRODUCT_A_ID, batch_number="P28-LATER", expiry_date=datetime(2028, 2, 28, tzinfo=timezone.utc).date(), purchase_rate=Decimal("10"), mrp=Decimal("12"), received_quantity=Decimal("20"), available_quantity=Decimal("20"), reserved_quantity=Decimal("0"), supplier_id=SUPPLIER_A_ID, goods_receipt_id=P28_GRN_ID, goods_receipt_item_id=P28_GRN_ITEM_LATER_ID, status="ACTIVE")
+        session.add(location)
+        await session.flush()
+        session.add(prescription)
+        await session.flush()
+        session.add_all([queue, early, later])
+        await session.flush()
+        session.add_all([
+            StockTransaction(tenant_id=TENANT_A_ID, facility_id=facility_id, pharmacy_location_id=PHARMACY_LOCATION_A_ID, medicine_id=PRODUCT_A_ID, inventory_batch_id=P28_EARLY_BATCH_ID, transaction_type="PURCHASE_RECEIPT", quantity=Decimal("6"), previous_balance=Decimal("0"), new_balance=Decimal("6"), reference_type="goods_receipt_item", reference_id=P28_GRN_ITEM_EARLY_ID, reason="E2E receipt", performed_by=PHARMACIST_USER_ID),
+            StockTransaction(tenant_id=TENANT_A_ID, facility_id=facility_id, pharmacy_location_id=PHARMACY_LOCATION_A_ID, medicine_id=PRODUCT_A_ID, inventory_batch_id=P28_LATER_BATCH_ID, transaction_type="PURCHASE_RECEIPT", quantity=Decimal("20"), previous_balance=Decimal("0"), new_balance=Decimal("20"), reference_type="goods_receipt_item", reference_id=P28_GRN_ITEM_LATER_ID, reason="E2E receipt", performed_by=PHARMACIST_USER_ID),
+        ])
+        await session.commit()
+    await engine.dispose()
+    print(f"P28 E2E seed ready: {PHARMACIST_USERNAME} / {PHARMACIST_PASSWORD} / facility={facility_id} / location={PHARMACY_LOCATION_A_ID}")
+
+
 async def cleanup():
     from app.core.config import settings
     engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA_A}" CASCADE'))
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA_B}" CASCADE'))
-        await conn.execute(delete(User).where(User.id.in_([DOCTOR_USER_ID, RECEPTIONIST_USER_ID, ADMIN_USER_ID, HOSPITAL_B_DOCTOR_USER_ID])))
+        await conn.execute(delete(User).where(User.id.in_([DOCTOR_USER_ID, RECEPTIONIST_USER_ID, ADMIN_USER_ID, PHARMACIST_USER_ID, HOSPITAL_B_DOCTOR_USER_ID])))
         await conn.execute(delete(TenantFeature).where(TenantFeature.tenant_id.in_([TENANT_A_ID, TENANT_B_ID])))
         await conn.execute(delete(Tenant).where(Tenant.id.in_([TENANT_A_ID, TENANT_B_ID])))
     await engine.dispose()
@@ -352,6 +403,32 @@ async def snapshot(visit_id: uuid.UUID = VISIT_ID):
             )
         ).scalars().all()
 
+        p28_dispense = await session.execute(text("SELECT id, status FROM pharmacy_dispenses WHERE prescription_id = :prescription_id"), {"prescription_id": P28_PRESCRIPTION_ID})
+        p28_dispense_row = p28_dispense.first()
+        p28 = None
+        if p28_dispense_row:
+            p28_allocations = (await session.execute(text("""
+                SELECT b.batch_number, a.allocated_quantity, a.confirmed_dispensed_quantity,
+                       b.available_quantity, b.reserved_quantity, a.status
+                FROM pharmacy_dispense_allocations a
+                JOIN inventory_batches b ON b.id = a.inventory_batch_id
+                JOIN pharmacy_dispense_items di ON di.id = a.dispense_item_id
+                WHERE di.dispense_id = :dispense_id
+                ORDER BY b.batch_number
+            """), {"dispense_id": p28_dispense_row.id})).mappings().all()
+            p28_ledger = (await session.execute(text("""
+                SELECT quantity FROM stock_transactions
+                WHERE reference_type = 'pharmacy_dispense'
+                  AND reference_id IN (
+                    SELECT a.id FROM pharmacy_dispense_allocations a
+                    JOIN pharmacy_dispense_items di ON di.id = a.dispense_item_id
+                    WHERE di.dispense_id = :dispense_id
+                  )
+                ORDER BY quantity
+            """), {"dispense_id": p28_dispense_row.id})).scalars().all()
+            p28_item = (await session.execute(text("SELECT prescribed_quantity, internal_confirmed_quantity, outside_purchase_quantity FROM pharmacy_dispense_items WHERE dispense_id = :dispense_id"), {"dispense_id": p28_dispense_row.id})).mappings().first()
+            p28 = {"status": p28_dispense_row.status, "item": dict(p28_item) if p28_item else None, "allocations": [dict(row) for row in p28_allocations], "ledger_quantities": [str(value) for value in p28_ledger]}
+
     await engine.dispose()
 
     payload["state"] = {
@@ -366,6 +443,7 @@ async def snapshot(visit_id: uuid.UUID = VISIT_ID):
         "inventory_table": inventory_table,
         "inventory_quantity": float(inventory_quantity) if inventory_quantity is not None else None,
         "audit_records": [_serialize_row(row) for row in audit_rows],
+        "p28": p28,
     }
     print(json.dumps(payload, default=str))
 
@@ -374,6 +452,8 @@ if __name__ == "__main__":
     command = sys.argv[1]
     if command == "seed":
         asyncio.run(seed())
+    elif command == "seed_p28":
+        asyncio.run(seed_p28())
     elif command == "cleanup":
         asyncio.run(cleanup())
     elif command == "snapshot":

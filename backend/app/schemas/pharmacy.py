@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import List, Optional
 
 from pydantic import BaseModel
@@ -16,6 +17,7 @@ class PharmacyQueueRead(BaseModel):
     # Joined
     patient_name: Optional[str] = None
     medicines: Optional[list] = None      # from prescription
+    dispense_id: Optional[uuid.UUID] = None
 
     model_config = {"from_attributes": True}
 
@@ -23,6 +25,68 @@ class PharmacyQueueRead(BaseModel):
 class PharmacyStatusUpdate(BaseModel):
     status: str   # pending | called | dispensing | dispensed | partially_dispensed | out_of_stock | cancelled
     notes: Optional[str] = None
+
+
+class PharmacyDispenseStart(BaseModel):
+    facility_id: uuid.UUID
+    pharmacy_location_id: uuid.UUID
+
+
+class PharmacyDispenseRead(BaseModel):
+    id: uuid.UUID
+    prescription_id: uuid.UUID
+    pharmacy_queue_id: Optional[uuid.UUID] = None
+    facility_id: uuid.UUID
+    pharmacy_location_id: uuid.UUID
+    prescription_version: int
+    visit_id: uuid.UUID
+    patient_id: uuid.UUID
+    status: str
+    billing_status: str
+
+    model_config = {"from_attributes": True}
+
+
+class OutsidePurchaseItem(BaseModel):
+    dispense_item_id: uuid.UUID
+    quantity: Decimal
+    reason: str
+
+
+class OutsidePurchaseCreate(BaseModel):
+    items: list[OutsidePurchaseItem]
+
+
+class PharmacySubstitutionCreate(BaseModel):
+    dispense_item_id: uuid.UUID
+    dispensed_medicine_product_id: uuid.UUID
+    substitution_reason: str
+
+
+class PharmacyDispenseConfirm(BaseModel):
+    billing_authorized: bool
+
+
+class PharmacyAllocationRequest(BaseModel):
+    requested_quantities: dict[uuid.UUID, Decimal] | None = None
+
+
+class PharmacyReservationRelease(BaseModel):
+    reason: str
+
+
+class PharmacyReservationRead(BaseModel):
+    id: uuid.UUID
+    inventory_batch_id: uuid.UUID
+    dispense_id: uuid.UUID
+    dispense_item_id: uuid.UUID
+    quantity: Decimal
+    status: str
+    expires_at: datetime
+    released_at: Optional[datetime] = None
+    release_reason: Optional[str] = None
+
+    model_config = {"from_attributes": True}
 
 
 class SupplierRead(BaseModel):

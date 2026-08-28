@@ -37,7 +37,7 @@ from app.models.tenant.supplier import Supplier
 from app.models.tenant.purchase_order import PurchaseOrder, PurchaseOrderItem
 from app.models.tenant.visit import Visit, VisitStatus
 from app.schemas.invoice import InvoiceRead, PharmacyBillCreate
-from app.schemas.pharmacy import FormularyMedicineSearchResult, PharmacyQueueRead, PharmacyStatusUpdate, SupplierCreate, SupplierImportItem, SupplierRead, SupplierUpdate
+from app.schemas.pharmacy import FormularyMedicineSearchResult, OutsidePurchaseCreate, PharmacyAllocationRequest, PharmacyDispenseConfirm, PharmacyDispenseRead, PharmacyDispenseStart, PharmacyQueueRead, PharmacyReservationRead, PharmacyReservationRelease, PharmacyStatusUpdate, PharmacySubstitutionCreate, SupplierCreate, SupplierImportItem, SupplierRead, SupplierUpdate
 from app.schemas.purchase_order import PurchaseOrderCreate, PurchaseOrderRead, PurchaseOrderUpdate
 from app.schemas.goods_receipt import GoodsReceiptCreate, GoodsReceiptItemCreate, GoodsReceiptItemRead, GoodsReceiptRead
 from app.schemas.inventory import InventoryBalanceRead, InventoryBatchRead, InventoryReconciliationRead, PharmacyLocationRead, StockAdjustmentCreate, StockTransactionRead
@@ -49,6 +49,7 @@ from app.services.inventory_service import create_inventory_from_grn_item, recor
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
 from app.services.audit_service import record_audit
+from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, propose_pharmacy_allocations, release_stock_reservation, start_pharmacy_dispense, validate_pharmacy_dispense
 
 logger = logging.getLogger(__name__)
 
@@ -940,7 +941,7 @@ async def search_formulary_medicines(
 async def list_pharmacy_queue(
     status_filter: Optional[str] = Query(None, alias="status"),
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_role("pharmacist", "nurse", "receptionist", "hospital_admin")),
+    _: dict = Depends(require_permission("PHARMACY_QUEUE_VIEW")),
 ):
     """Returns pharmacy queue items, optionally filtered by status."""
     stmt = select(PharmacyQueue).order_by(PharmacyQueue.updated_at.asc())
@@ -970,7 +971,7 @@ async def update_pharmacy_status(
     pq_id: uuid.UUID,
     payload: PharmacyStatusUpdate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("pharmacist", "nurse", "receptionist", "hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_QUEUE_STATUS_UPDATE")),
 ):
     pq = await session.get(PharmacyQueue, pq_id)
     if not pq:
@@ -1028,6 +1029,265 @@ async def update_pharmacy_status(
             if patient:
                 item.patient_name = f"{patient.first_name} {patient.last_name}"
     return item
+
+
+@router.post("/{pq_id}/start", response_model=PharmacyQueueRead)
+async def start_pharmacy_queue_item(
+    pq_id: uuid.UUID,
+    payload: PharmacyDispenseStart,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_DISPENSE_START")),
+):
+    try:
+        dispense = await start_pharmacy_dispense(
+            session,
+            queue_id=pq_id,
+            tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=payload.facility_id,
+            pharmacy_location_id=payload.pharmacy_location_id,
+            started_by=uuid.UUID(str(current_user["sub"])),
+        )
+        record_audit(
+            session,
+            current_user=current_user,
+            action="START",
+            resource_type="pharmacy_dispense",
+            resource_id=dispense.id,
+            patient_id=dispense.patient_id,
+            visit_id=dispense.visit_id,
+            new_value={"status": dispense.status, "pharmacy_queue_id": str(pq_id)},
+        )
+        await session.commit()
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    queue = await session.get(PharmacyQueue, pq_id)
+    result = PharmacyQueueRead.model_validate(queue)
+    result.dispense_id = dispense.id
+    return result
+
+
+@router.post("/dispenses/{dispense_id}/validate", response_model=PharmacyDispenseRead)
+async def validate_pharmacy_dispense_route(
+    dispense_id: uuid.UUID,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_DISPENSE_VALIDATE")),
+):
+    try:
+        dispense = await validate_pharmacy_dispense(
+            session,
+            dispense_id=dispense_id,
+            tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=facility_id,
+            validated_by=uuid.UUID(str(current_user["sub"])),
+        )
+        record_audit(
+            session,
+            current_user=current_user,
+            action="VALIDATE",
+            resource_type="pharmacy_dispense",
+            resource_id=dispense.id,
+            patient_id=dispense.patient_id,
+            visit_id=dispense.visit_id,
+            new_value={"status": dispense.status, "prescription_version": dispense.prescription_version},
+        )
+        await session.commit()
+        return dispense
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/dispenses/{dispense_id}/outside-purchase", response_model=PharmacyDispenseRead)
+async def record_outside_purchase(
+    dispense_id: uuid.UUID,
+    payload: OutsidePurchaseCreate,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_DISPENSE_OUTSIDE_PURCHASE")),
+):
+    try:
+        dispense = await confirm_outside_purchase_fulfillment(
+            session,
+            dispense_id=dispense_id,
+            tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=facility_id,
+            quantities={item.dispense_item_id: item.quantity for item in payload.items},
+            confirmed_by=uuid.UUID(str(current_user["sub"])),
+        )
+        record_audit(
+            session,
+            current_user=current_user,
+            action="OUTSIDE_PURCHASE",
+            resource_type="pharmacy_dispense",
+            resource_id=dispense.id,
+            patient_id=dispense.patient_id,
+            visit_id=dispense.visit_id,
+            new_value={"status": dispense.status, "fulfillment_mode": dispense.fulfillment_mode},
+        )
+        await session.commit()
+        return dispense
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/dispenses/{dispense_id}/substitution", response_model=PharmacyDispenseRead)
+async def approve_substitution(
+    dispense_id: uuid.UUID,
+    payload: PharmacySubstitutionCreate,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_DISPENSE_SUBSTITUTE")),
+):
+    try:
+        item = await approve_pharmacy_substitution(
+            session,
+            dispense_id=dispense_id,
+            dispense_item_id=payload.dispense_item_id,
+            tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=facility_id,
+            dispensed_medicine_product_id=payload.dispensed_medicine_product_id,
+            substitution_reason=payload.substitution_reason,
+            approved_by=uuid.UUID(str(current_user["sub"])),
+        )
+        dispense = await session.get(PharmacyDispense, dispense_id)
+        record_audit(
+            session,
+            current_user=current_user,
+            action="SUBSTITUTION_APPROVED",
+            resource_type="pharmacy_dispense_item",
+            resource_id=item.id,
+            patient_id=dispense.patient_id if dispense else None,
+            visit_id=dispense.visit_id if dispense else None,
+            new_value={"dispensed_medicine_product_id": str(item.dispensed_medicine_product_id), "reason": item.substitution_reason},
+        )
+        await session.commit()
+        return dispense
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/dispenses/{dispense_id}/confirm", response_model=PharmacyDispenseRead)
+async def confirm_pharmacy_dispense(
+    dispense_id: uuid.UUID,
+    payload: PharmacyDispenseConfirm,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_DISPENSE_CONFIRM")),
+):
+    try:
+        dispense = await confirm_dispense_stock_consumption(
+            session,
+            dispense_id=dispense_id,
+            tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=facility_id,
+            confirmed_by=uuid.UUID(str(current_user["sub"])),
+            billing_authorized=payload.billing_authorized,
+        )
+        record_audit(
+            session,
+            current_user=current_user,
+            action="CONFIRM",
+            resource_type="pharmacy_dispense",
+            resource_id=dispense.id,
+            patient_id=dispense.patient_id,
+            visit_id=dispense.visit_id,
+            new_value={"status": dispense.status, "billing_authorized": payload.billing_authorized},
+        )
+        await session.commit()
+        return dispense
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/dispenses/{dispense_id}/allocation-proposal", response_model=PharmacyDispenseRead)
+async def propose_dispense_allocation(
+    dispense_id: uuid.UUID,
+    payload: PharmacyAllocationRequest,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_DISPENSE_ALLOCATE")),
+):
+    try:
+        dispense = await propose_pharmacy_allocations(
+            session, dispense_id=dispense_id, tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=facility_id, proposed_by=uuid.UUID(str(current_user["sub"])),
+            requested_quantities=payload.requested_quantities,
+        )
+        record_audit(session, current_user=current_user, action="ALLOCATE", resource_type="pharmacy_dispense", resource_id=dispense.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"status": dispense.status})
+        await session.commit()
+        return dispense
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/dispenses/{dispense_id}/reserve", response_model=List[PharmacyReservationRead])
+async def reserve_dispense_stock(
+    dispense_id: uuid.UUID,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_STOCK_RESERVE")),
+):
+    try:
+        reservations = await create_stock_reservations(
+            session, dispense_id=dispense_id, tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=facility_id, reserved_by=uuid.UUID(str(current_user["sub"])),
+        )
+        dispense = await session.get(PharmacyDispense, dispense_id)
+        record_audit(session, current_user=current_user, action="RESERVE", resource_type="pharmacy_dispense", resource_id=dispense_id, patient_id=dispense.patient_id if dispense else None, visit_id=dispense.visit_id if dispense else None, new_value={"reservation_count": len(reservations)})
+        await session.commit()
+        return reservations
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/reservations/{reservation_id}/release", response_model=PharmacyReservationRead)
+async def release_dispense_reservation(
+    reservation_id: uuid.UUID,
+    payload: PharmacyReservationRelease,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_STOCK_RESERVATION_RELEASE")),
+):
+    try:
+        reservation = await release_stock_reservation(
+            session, reservation_id=reservation_id, tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=facility_id, released_by=uuid.UUID(str(current_user["sub"])), reason=payload.reason,
+        )
+        record_audit(session, current_user=current_user, action="RESERVATION_RELEASE", resource_type="pharmacy_stock_reservation", resource_id=reservation.id, new_value={"status": reservation.status, "reason": reservation.release_reason})
+        await session.commit()
+        return reservation
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/dispenses/{dispense_id}/fulfill-internally", response_model=PharmacyDispenseRead)
+async def fulfill_dispense_internally(
+    dispense_id: uuid.UUID,
+    partial: bool = False,
+    facility_id: uuid.UUID = Query(...),
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_DISPENSE_FULFILL")),
+):
+    try:
+        service = confirm_partial_internal_fulfillment if partial else confirm_full_internal_fulfillment
+        dispense = await service(
+            session, dispense_id=dispense_id, tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=facility_id, confirmed_by=uuid.UUID(str(current_user["sub"])),
+        )
+        record_audit(session, current_user=current_user, action="FULFILL", resource_type="pharmacy_dispense", resource_id=dispense.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"status": dispense.status, "fulfillment_mode": dispense.fulfillment_mode})
+        await session.commit()
+        return dispense
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 # ── Background task ───────────────────────────────────────────────────────────

@@ -130,7 +130,6 @@ async def _sync_inventory_batch_balance(
         )
     )
     batch.available_quantity = _to_decimal(result or 0)
-    batch.reserved_quantity = Decimal("0")
     await session.commit()
     return batch
 
@@ -279,14 +278,19 @@ async def get_location_medicine_balance(
         select(func.count(StockTransaction.id)).where(*filters)
     )
 
-    balance = _to_decimal(ledger_result or 0) if has_ledger and int(has_ledger) > 0 else _to_decimal(batch_total or 0)
+    on_hand = _to_decimal(ledger_result or 0) if has_ledger and int(has_ledger) > 0 else _to_decimal(batch_total or 0)
+    reserved_result = await session.scalar(
+        select(func.coalesce(func.sum(InventoryBatch.reserved_quantity), Decimal("0"))).where(*batch_filters)
+    )
+    reserved = _to_decimal(reserved_result or 0)
+    balance = on_hand - reserved
     return {
         "tenant_id": str(tenant_id) if tenant_id is not None else None,
         "facility_id": str(facility_id) if facility_id is not None else None,
         "pharmacy_location_id": str(pharmacy_location_id),
         "medicine_id": str(medicine_id),
-        "on_hand": balance,
-        "reserved": Decimal("0"),
+        "on_hand": on_hand,
+        "reserved": reserved,
         "available": balance,
     }
 

@@ -341,11 +341,12 @@ export interface PharmacyQueueItem {
   prescription_id: UUID
   patient_id?: UUID
   visit_id?: UUID
-  status: 'pending' | 'preparing' | 'ready' | 'partial' | 'dispensed' | 'cancelled'
+  status: 'pending' | 'called' | 'dispensing' | 'dispensed' | 'partially_dispensed' | 'out_of_stock' | 'cancelled'
   notes?: string
   updated_at: string
   patient_name?: string
   medicines?: { name: string; dose: string; frequency: string; duration: string; route: string }[]
+  dispense_id?: UUID
 }
 
 export interface ClinicalAlert {

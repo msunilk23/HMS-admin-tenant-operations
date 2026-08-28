@@ -32,6 +32,8 @@ class PrescriptionItem(Base):
     final_quantity: Mapped[Optional[str]] = mapped_column(String(50))
     quantity_override_flag: Mapped[bool] = mapped_column(default=False, nullable=False)
     quantity_override_reason: Mapped[Optional[str]] = mapped_column(Text)
+    no_substitution: Mapped[bool] = mapped_column(default=False, nullable=False)
+    no_substitution_reason: Mapped[Optional[str]] = mapped_column(Text)
     dosage_form: Mapped[Optional[str]] = mapped_column(String(100))
     timing_relative_to_food: Mapped[Optional[str]] = mapped_column(String(50))
     instructions: Mapped[Optional[str]] = mapped_column(Text)
@@ -49,6 +51,7 @@ class Prescription(Base, TimestampMixin):
     doctor_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("doctors.id"), nullable=True, index=True)
     uhid: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="finalized")
+    version: Mapped[int] = mapped_column(nullable=False, default=1)
     # Legacy compatibility for downstream code that still expects a medicine list JSON payload.
     medicines: Mapped[Optional[list]] = mapped_column(JSONB)
     instructions: Mapped[Optional[str]] = mapped_column(Text)
