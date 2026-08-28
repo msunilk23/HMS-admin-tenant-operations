@@ -54,6 +54,7 @@ function runBackendCommand(repoRoot: string, args: string[]): void {
 }
 
 export default async function globalSetup() {
+  process.env.E2E_ENVIRONMENT = 'E2E'
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
   const backendHealthUrl = process.env.E2E_BACKEND_HEALTH_URL ?? 'http://127.0.0.1:8000/health'
   const openApiUrl = process.env.E2E_BACKEND_OPENAPI_URL ?? 'http://127.0.0.1:8000/api/openapi.json'

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export default async function globalTeardown() {
+  process.env.E2E_ENVIRONMENT = 'E2E'
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
   execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'cleanup'], {
     cwd: path.join(repoRoot, 'backend'),

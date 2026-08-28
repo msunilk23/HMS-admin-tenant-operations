@@ -45,7 +45,7 @@ test.describe.serial('P28 pharmacy dispensing workflow', () => {
   test('completes FEFO reservation and confirmed dispensing', async ({ page }) => {
     await login(page)
     await page.goto('/pharmacy')
-    await expect(page.getByText('E2E Patient', { exact: true })).toBeVisible()
+    await expect(page.getByText('P28 Patient', { exact: true })).toBeVisible()
     await expect(page.getByText('E2E Dolo', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Dispense' }).click()
     await page.getByLabel('Facility ID').fill(facilityId)

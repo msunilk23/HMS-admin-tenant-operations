@@ -49,6 +49,10 @@ HOSPITAL_B_DOCTOR_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-prof
 DEPARTMENT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-department")
 HOSPITAL_B_DEPARTMENT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-department-b")
 PATIENT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-patient")
+PRESCRIPTION_PATIENT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-prescription-patient")
+PRESCRIPTION_VISIT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-prescription-visit")
+P28_PATIENT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p28-patient")
+P28_VISIT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p28-visit")
 HOSPITAL_B_PATIENT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-patient-b")
 VISIT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-visit")
 HOSPITAL_B_VISIT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-visit-b")
@@ -92,6 +96,11 @@ FACILITY_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-facility-a")
 
 def _assert_destructive_reset_allowed(database_url: str, command: str) -> None:
     allow = os.getenv("E2E_ALLOW_DESTRUCTIVE_RESET", "").lower() == "true"
+    environment = os.getenv("E2E_ENVIRONMENT", "").lower()
+    if environment not in {"e2e", "test"}:
+        raise SystemExit(
+            f"Refusing '{command}': E2E_ENVIRONMENT must be explicitly set to E2E or TEST."
+        )
     if not allow:
         raise SystemExit(
             f"Refusing '{command}': set E2E_ALLOW_DESTRUCTIVE_RESET=true for explicit E2E reset operations."
@@ -184,6 +193,10 @@ async def seed():
         doctor = Doctor(id=DOCTOR_ID, user_id=DOCTOR_USER_ID, full_name="E2E Doctor", specialization="General Medicine", department_id=DEPARTMENT_ID, consultation_fee=0, is_active=True)
         patient = Patient(id=PATIENT_ID, uhid="E2E-T7-PATIENT", first_name="E2E", last_name="Patient", gender="female", phone="9000000007")
         visit = Visit(id=VISIT_ID, patient_id=PATIENT_ID, uhid=patient.uhid, doctor_id=DOCTOR_ID, department_id=DEPARTMENT_ID, status="IN_CONSULTATION", arrived_at=now, registered_at=now, pre_vital_completed_at=now, doctor_queue_at=now, doctor_called_at=now, consultation_started_at=now)
+        prescription_patient = Patient(id=PRESCRIPTION_PATIENT_ID, uhid="E2E-RX-PATIENT", first_name="Prescription", last_name="Patient", gender="female", phone="9000000010")
+        prescription_visit = Visit(id=PRESCRIPTION_VISIT_ID, patient_id=PRESCRIPTION_PATIENT_ID, uhid=prescription_patient.uhid, doctor_id=DOCTOR_ID, department_id=DEPARTMENT_ID, status="IN_CONSULTATION", arrived_at=now, registered_at=now, pre_vital_completed_at=now, doctor_queue_at=now, doctor_called_at=now, consultation_started_at=now)
+        p28_patient = Patient(id=P28_PATIENT_ID, uhid="E2E-P28-PATIENT", first_name="P28", last_name="Patient", gender="female", phone="9000000011")
+        p28_visit = Visit(id=P28_VISIT_ID, patient_id=P28_PATIENT_ID, uhid=p28_patient.uhid, doctor_id=DOCTOR_ID, department_id=DEPARTMENT_ID, status="CONSULTATION_COMPLETED", arrived_at=now, registered_at=now, pre_vital_completed_at=now, doctor_queue_at=now, doctor_called_at=now, consultation_started_at=now)
         vitals = Vitals(id=uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-vitals"), visit_id=VISIT_ID, uhid=patient.uhid, temperature=37.0, pulse=72, respiratory_rate=18, bp_systolic=120, bp_diastolic=80, spo2=99, pain_score=1, height=170, weight=70, bmi=24.2, blood_glucose=95, chief_complaint="E2E cough", allergies="None", known_no_allergies=True, general_condition="Stable", level_of_consciousness="Alert", nurse_notes="E2E completed pre-vitals", status="completed", recorded_by_user_id=DOCTOR_USER_ID, started_at=now, completed_at=now)
         icd_active = ICD10Code(id=ICD_A_ID, code="E2E.J06.9", description="E2E Acute upper respiratory infection", is_active=True)
         icd_inactive = ICD10Code(id=uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/icd10/inactive"), code="E2E.Z99.9", description="E2E Inactive diagnosis", is_active=False)
@@ -202,7 +215,7 @@ async def seed():
         po_a = PurchaseOrder(id=PO_A_ID, po_number="E2E-PO-0001", supplier_id=SUPPLIER_A_ID, status="SENT", subtotal=Decimal("100.00"), tax_amount=Decimal("18.00"), total_amount=Decimal("118.00"))
         po_item_a = PurchaseOrderItem(id=PO_ITEM_A_ID, purchase_order_id=PO_A_ID, medicine_product_id=PRODUCT_A_ID, ordered_quantity=Decimal("10"), unit_of_measure="tablet", unit_purchase_price=Decimal("10.00"), gst_percent=Decimal("18"), taxable_amount=Decimal("100.00"), tax_amount=Decimal("18.00"), line_total=Decimal("118.00"))
         po_a.items.append(po_item_a)
-        session.add_all([department, doctor, patient, visit, vitals, icd_active, icd_inactive, generic_a, form_a, route_a, manufacturer_a, product_a, product_a_capsule, med_table, med_capsule, med_inactive, supplier_a])
+        session.add_all([department, doctor, patient, visit, prescription_patient, prescription_visit, p28_patient, p28_visit, vitals, icd_active, icd_inactive, generic_a, form_a, route_a, manufacturer_a, product_a, product_a_capsule, med_table, med_capsule, med_inactive, supplier_a])
         await session.flush()
         session.add_all([po_a, formulary_a, formulary_a_capsule])
         await session.commit()
@@ -237,6 +250,7 @@ async def seed_p28():
 async def reset_task7_scenario():
     from app.core.config import settings
 
+    _assert_destructive_reset_allowed(settings.DATABASE_URL, "reset_task7_scenario")
     engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
     now = datetime.now(timezone.utc)
     async with engine.begin() as conn:
@@ -247,11 +261,10 @@ async def reset_task7_scenario():
                 "DELETE FROM pharmacy_stock_reservations "
                 "WHERE dispense_id IN ("
                 "  SELECT pd.id FROM pharmacy_dispenses pd "
-                "  WHERE pd.prescription_id = :p28_prescription_id "
-                "     OR pd.prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
+                "  WHERE pd.prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
                 ")"
             ),
-            {"visit_id": VISIT_ID, "p28_prescription_id": P28_PRESCRIPTION_ID},
+            {"visit_id": VISIT_ID},
         )
         await conn.execute(
             text(
@@ -259,119 +272,46 @@ async def reset_task7_scenario():
                 "WHERE dispense_item_id IN ("
                 "  SELECT pdi.id FROM pharmacy_dispense_items pdi "
                 "  JOIN pharmacy_dispenses pd ON pd.id = pdi.dispense_id "
-                "  WHERE pd.prescription_id = :p28_prescription_id "
-                "     OR pd.prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
+                "  WHERE pd.prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
                 ")"
             ),
-            {"visit_id": VISIT_ID, "p28_prescription_id": P28_PRESCRIPTION_ID},
+            {"visit_id": VISIT_ID},
         )
         await conn.execute(
             text(
                 "DELETE FROM pharmacy_dispense_items "
                 "WHERE dispense_id IN ("
                 "  SELECT id FROM pharmacy_dispenses "
-                "  WHERE prescription_id = :p28_prescription_id "
-                "     OR prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
+                "  WHERE prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
                 ")"
             ),
-            {"visit_id": VISIT_ID, "p28_prescription_id": P28_PRESCRIPTION_ID},
+            {"visit_id": VISIT_ID},
         )
         await conn.execute(
             text(
                 "DELETE FROM pharmacy_dispenses "
-                "WHERE prescription_id = :p28_prescription_id "
-                "   OR prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
+                "WHERE prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
             ),
-            {"visit_id": VISIT_ID, "p28_prescription_id": P28_PRESCRIPTION_ID},
-        )
-        await conn.execute(
-            text(
-                "DELETE FROM stock_transactions "
-                "WHERE reference_type = 'pharmacy_dispense' "
-                "   OR reference_id IN (:p28_grn_item_early_id, :p28_grn_item_later_id)"
-            ),
-            {"p28_grn_item_early_id": P28_GRN_ITEM_EARLY_ID, "p28_grn_item_later_id": P28_GRN_ITEM_LATER_ID},
+            {"visit_id": VISIT_ID},
         )
         await conn.execute(
             text(
                 "DELETE FROM pharmacy_queue "
-                "WHERE prescription_id = :p28_prescription_id "
-                "   OR prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
+                "WHERE prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
             ),
-            {"visit_id": VISIT_ID, "p28_prescription_id": P28_PRESCRIPTION_ID},
+            {"visit_id": VISIT_ID},
         )
         await conn.execute(
             text(
                 "DELETE FROM prescription_items "
-                "WHERE prescription_id = :p28_prescription_id "
-                "   OR prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
+                "WHERE prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"
             ),
-            {"visit_id": VISIT_ID, "p28_prescription_id": P28_PRESCRIPTION_ID},
+            {"visit_id": VISIT_ID},
         )
-        await conn.execute(
-            text("DELETE FROM prescriptions WHERE id = :p28_prescription_id OR visit_id = :visit_id"),
-            {"visit_id": VISIT_ID, "p28_prescription_id": P28_PRESCRIPTION_ID},
-        )
+        await conn.execute(text("DELETE FROM prescriptions WHERE visit_id = :visit_id"), {"visit_id": VISIT_ID})
         await conn.execute(text("DELETE FROM consultations WHERE visit_id = :visit_id"), {"visit_id": VISIT_ID})
         await conn.execute(text("DELETE FROM invoices WHERE visit_id = :visit_id"), {"visit_id": VISIT_ID})
         await conn.execute(text("DELETE FROM audit_logs WHERE visit_id = :visit_id"), {"visit_id": VISIT_ID})
-
-        await conn.execute(
-            text(
-                "DELETE FROM inventory_batches "
-                "WHERE id IN (:p28_early_batch_id, :p28_later_batch_id) "
-                "   OR goods_receipt_item_id IN (:p28_grn_item_early_id, :p28_grn_item_later_id) "
-                "   OR batch_number LIKE 'E2E-BATCH-%' "
-                "   OR batch_number LIKE 'E2E-EXPIRED-%'"
-            ),
-            {
-                "p28_early_batch_id": P28_EARLY_BATCH_ID,
-                "p28_later_batch_id": P28_LATER_BATCH_ID,
-                "p28_grn_item_early_id": P28_GRN_ITEM_EARLY_ID,
-                "p28_grn_item_later_id": P28_GRN_ITEM_LATER_ID,
-            },
-        )
-        await conn.execute(
-            text(
-                "DELETE FROM goods_receipt_items "
-                "WHERE goods_receipt_id IN (SELECT id FROM goods_receipts WHERE purchase_order_id = :purchase_order_id) "
-                "   OR id IN (:p28_grn_item_early_id, :p28_grn_item_later_id)"
-            ),
-            {
-                "purchase_order_id": PO_A_ID,
-                "p28_grn_item_early_id": P28_GRN_ITEM_EARLY_ID,
-                "p28_grn_item_later_id": P28_GRN_ITEM_LATER_ID,
-            },
-        )
-        await conn.execute(
-            text(
-                "DELETE FROM goods_receipts WHERE purchase_order_id = :purchase_order_id OR id = :p28_grn_id"
-            ),
-            {"purchase_order_id": PO_A_ID, "p28_grn_id": P28_GRN_ID},
-        )
-        await conn.execute(
-            text(
-                "UPDATE purchase_order_items "
-                "SET received_quantity = 0 "
-                "WHERE purchase_order_id = :purchase_order_id"
-            ),
-            {"purchase_order_id": PO_A_ID},
-        )
-        await conn.execute(
-            text(
-                "UPDATE purchase_orders "
-                "SET status = 'SENT', approved_by_user_id = NULL, approved_at = NULL, "
-                "sent_at = NULL, updated_by_user_id = NULL "
-                "WHERE id = :purchase_order_id"
-            ),
-            {"purchase_order_id": PO_A_ID},
-        )
-        await conn.execute(
-            text(
-                "DELETE FROM pharmacy_locations WHERE id = :location_id"
-            ),
-            {"location_id": PHARMACY_LOCATION_A_ID},
-        )
         await conn.execute(
             text(
                 "UPDATE visits SET "
@@ -403,8 +343,60 @@ async def reset_task7_scenario():
     print("Task7 scenario reset complete")
 
 
+async def reset_prescription_scenario():
+    from app.core.config import settings
+
+    _assert_destructive_reset_allowed(settings.DATABASE_URL, "reset_prescription_scenario")
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        await conn.execute(text("DELETE FROM prescription_items WHERE prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"), {"visit_id": PRESCRIPTION_VISIT_ID})
+        await conn.execute(text("DELETE FROM pharmacy_queue WHERE prescription_id IN (SELECT id FROM prescriptions WHERE visit_id = :visit_id)"), {"visit_id": PRESCRIPTION_VISIT_ID})
+        await conn.execute(text("DELETE FROM prescriptions WHERE visit_id = :visit_id"), {"visit_id": PRESCRIPTION_VISIT_ID})
+    await engine.dispose()
+    print("Prescription scenario reset complete")
+
+
+async def reset_procurement_scenario():
+    from app.core.config import settings
+
+    _assert_destructive_reset_allowed(settings.DATABASE_URL, "reset_procurement_scenario")
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        await conn.execute(text("DELETE FROM stock_transactions WHERE inventory_batch_id IN (SELECT id FROM inventory_batches WHERE batch_number LIKE 'E2E-BATCH-%' OR batch_number LIKE 'E2E-EXPIRED-%')"))
+        await conn.execute(text("DELETE FROM inventory_batches WHERE batch_number LIKE 'E2E-BATCH-%' OR batch_number LIKE 'E2E-EXPIRED-%'"))
+        await conn.execute(text("DELETE FROM goods_receipt_items WHERE goods_receipt_id IN (SELECT id FROM goods_receipts WHERE purchase_order_id = :po)"), {"po": PO_A_ID})
+        await conn.execute(text("DELETE FROM goods_receipts WHERE purchase_order_id = :po"), {"po": PO_A_ID})
+        await conn.execute(text("UPDATE purchase_order_items SET received_quantity = 0 WHERE purchase_order_id = :po"), {"po": PO_A_ID})
+        await conn.execute(text("UPDATE purchase_orders SET status = 'SENT', approved_by_user_id = NULL, approved_at = NULL, sent_at = NULL, updated_by_user_id = NULL WHERE id = :po"), {"po": PO_A_ID})
+    await engine.dispose()
+    print("Procurement scenario reset complete")
+
+
+async def reset_p28_scenario():
+    from app.core.config import settings
+
+    _assert_destructive_reset_allowed(settings.DATABASE_URL, "reset_p28_scenario")
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        await conn.execute(text("DELETE FROM pharmacy_stock_reservations WHERE dispense_id IN (SELECT id FROM pharmacy_dispenses WHERE prescription_id = :rx)"), {"rx": P28_PRESCRIPTION_ID})
+        await conn.execute(text("DELETE FROM pharmacy_dispense_allocations WHERE dispense_item_id IN (SELECT id FROM pharmacy_dispense_items WHERE dispense_id IN (SELECT id FROM pharmacy_dispenses WHERE prescription_id = :rx))"), {"rx": P28_PRESCRIPTION_ID})
+        await conn.execute(text("DELETE FROM pharmacy_dispense_items WHERE dispense_id IN (SELECT id FROM pharmacy_dispenses WHERE prescription_id = :rx)"), {"rx": P28_PRESCRIPTION_ID})
+        await conn.execute(text("DELETE FROM pharmacy_dispenses WHERE prescription_id = :rx"), {"rx": P28_PRESCRIPTION_ID})
+        await conn.execute(text("DELETE FROM pharmacy_queue WHERE prescription_id = :rx"), {"rx": P28_PRESCRIPTION_ID})
+        await conn.execute(text("DELETE FROM prescription_items WHERE prescription_id = :rx"), {"rx": P28_PRESCRIPTION_ID})
+        await conn.execute(text("DELETE FROM prescriptions WHERE id = :rx"), {"rx": P28_PRESCRIPTION_ID})
+        await conn.execute(text("DELETE FROM stock_transactions WHERE reference_type = 'pharmacy_dispense' OR reference_id IN (:early, :later)"), {"early": P28_GRN_ITEM_EARLY_ID, "later": P28_GRN_ITEM_LATER_ID})
+        await conn.execute(text("DELETE FROM inventory_batches WHERE id IN (:early, :later)"), {"early": P28_EARLY_BATCH_ID, "later": P28_LATER_BATCH_ID})
+        await conn.execute(text("DELETE FROM pharmacy_locations WHERE id = :location"), {"location": PHARMACY_LOCATION_A_ID})
+    await engine.dispose()
+    print("P28 scenario reset complete")
+
+
 async def seed_p28_scenario():
-    await reset_task7_scenario()
+    await reset_p28_scenario()
     from app.core.config import settings
 
     engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
@@ -414,12 +406,12 @@ async def seed_p28_scenario():
     maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
     async with maker() as session:
         await session.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
-        visit = await session.get(Visit, VISIT_ID)
+        visit = await session.get(Visit, P28_VISIT_ID)
         visit.status = "CONSULTATION_COMPLETED"
         location = PharmacyLocation(id=PHARMACY_LOCATION_A_ID, tenant_id=TENANT_A_ID, facility_id=facility_id, location_code="E2E-P28", location_name="E2E P28 Pharmacy", location_type="PHARMACY", active=True)
-        prescription = Prescription(id=P28_PRESCRIPTION_ID, visit_id=VISIT_ID, uhid="E2E-T7-PATIENT", status="finalized", version=1, medicines=[{"name": "E2E Dolo", "dose": "1 tablet", "frequency": "once daily", "duration": "10 days", "route": "oral"}])
+        prescription = Prescription(id=P28_PRESCRIPTION_ID, visit_id=P28_VISIT_ID, uhid="E2E-P28-PATIENT", status="finalized", version=1, medicines=[{"name": "E2E Dolo", "dose": "1 tablet", "frequency": "once daily", "duration": "10 days", "route": "oral"}])
         prescription.items.append(PrescriptionItem(id=P28_PRESCRIPTION_ITEM_ID, medicine_product_id=PRODUCT_A_ID, medicine="E2E Dolo", strength="500", quantity="10", final_quantity="10", auto_quantity="10", route="oral", frequency="once daily", duration="10 days"))
-        queue = PharmacyQueue(id=P28_QUEUE_ID, prescription_id=P28_PRESCRIPTION_ID, uhid="E2E-T7-PATIENT", status="pending")
+        queue = PharmacyQueue(id=P28_QUEUE_ID, prescription_id=P28_PRESCRIPTION_ID, uhid="E2E-P28-PATIENT", status="pending")
         early = InventoryBatch(id=P28_EARLY_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=facility_id, pharmacy_location_id=PHARMACY_LOCATION_A_ID, medicine_id=PRODUCT_A_ID, batch_number="P28-EARLY", expiry_date=datetime(2027, 6, 30, tzinfo=timezone.utc).date(), purchase_rate=Decimal("10"), mrp=Decimal("12"), received_quantity=Decimal("6"), available_quantity=Decimal("6"), reserved_quantity=Decimal("0"), supplier_id=SUPPLIER_A_ID, goods_receipt_id=P28_GRN_ID, goods_receipt_item_id=P28_GRN_ITEM_EARLY_ID, status="ACTIVE")
         later = InventoryBatch(id=P28_LATER_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=facility_id, pharmacy_location_id=PHARMACY_LOCATION_A_ID, medicine_id=PRODUCT_A_ID, batch_number="P28-LATER", expiry_date=datetime(2028, 2, 28, tzinfo=timezone.utc).date(), purchase_rate=Decimal("10"), mrp=Decimal("12"), received_quantity=Decimal("20"), available_quantity=Decimal("20"), reserved_quantity=Decimal("0"), supplier_id=SUPPLIER_A_ID, goods_receipt_id=P28_GRN_ID, goods_receipt_item_id=P28_GRN_ITEM_LATER_ID, status="ACTIVE")
         session.add(location)
@@ -645,6 +637,12 @@ if __name__ == "__main__":
         asyncio.run(seed())
     elif command == "reset_task7_scenario":
         asyncio.run(reset_task7_scenario())
+    elif command == "reset_prescription_scenario":
+        asyncio.run(reset_prescription_scenario())
+    elif command == "reset_procurement_scenario":
+        asyncio.run(reset_procurement_scenario())
+    elif command == "reset_p28_scenario":
+        asyncio.run(reset_p28_scenario())
     elif command == "seed_p28":
         asyncio.run(seed_p28())
     elif command == "seed_p28_scenario":

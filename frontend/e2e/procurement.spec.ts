@@ -13,7 +13,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 function resetFixture() {
   execFileSync(process.env.PYTHON ?? 'python', [
     path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'),
-    'reset_task7_scenario',
+    'reset_procurement_scenario',
   ], {
     cwd: path.join(repoRoot, 'backend'),
     stdio: 'inherit',

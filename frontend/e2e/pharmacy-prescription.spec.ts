@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const doctor = {
   username: 'e2e_doctor_task7',
   password: 'E2eDoctor@123',
-  visitId: 'a5a85a47-7a23-5587-97de-56daaf8b7822',
+  visitId: '0d608e02-7583-50a6-a153-d4a45deb866c',
 }
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -14,7 +14,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 function resetFixture() {
   execFileSync(process.env.PYTHON ?? 'python', [
     path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'),
-    'reset_task7_scenario',
+    'reset_prescription_scenario',
   ], {
     cwd: path.join(repoRoot, 'backend'),
     stdio: 'inherit',
