@@ -25,6 +25,7 @@ def canonical_invoice_snapshot(invoice: dict) -> dict:
             "receipt_number": invoice.get("receipt_number"),
             "source": invoice.get("source"),
             "pharmacy_queue_id": str(invoice["pharmacy_queue_id"]) if invoice.get("pharmacy_queue_id") else None,
+            "pharmacy_dispense_id": str(invoice["pharmacy_dispense_id"]) if invoice.get("pharmacy_dispense_id") else None,
             "created_at": invoice["created_at"].astimezone(timezone.utc).isoformat() if invoice.get("created_at") else None,
             "paid_at": invoice["paid_at"].astimezone(timezone.utc).isoformat() if invoice.get("paid_at") else None,
         },

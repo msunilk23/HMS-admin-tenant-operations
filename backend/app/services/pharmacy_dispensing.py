@@ -30,6 +30,52 @@ def _decimal_quantity(value: Any) -> Decimal:
     return quantity
 
 
+def prepare_billable_pharmacy_line_items(
+    line_items: list[dict[str, Any]],
+    dispense_items: list[PharmacyDispenseItem],
+    already_billed_quantities: dict[uuid.UUID, Decimal] | None = None,
+) -> list[dict[str, Any]]:
+    """Keep only hospital-supplied quantity and remove outside-purchase lines."""
+    already_billed_quantities = already_billed_quantities or {}
+    by_id = {item.id: item for item in dispense_items}
+    by_name: dict[str, list[PharmacyDispenseItem]] = {}
+    for item in dispense_items:
+        by_name.setdefault(item.prescribed_name_snapshot.strip().casefold(), []).append(item)
+
+    billable: list[dict[str, Any]] = []
+    used_ids: set[uuid.UUID] = set()
+    for line in line_items:
+        dispense_item_id = line.get("dispense_item_id")
+        item = by_id.get(uuid.UUID(str(dispense_item_id))) if dispense_item_id else None
+        if item is None and not dispense_item_id:
+            matches = by_name.get(str(line.get("name", "")).strip().casefold(), [])
+            item = matches[0] if len(matches) == 1 else None
+        if item is None:
+            raise ValueError("Each pharmacy billing line must identify one dispense item")
+        if item.id in used_ids:
+            raise ValueError("A dispense item cannot appear on multiple billing lines")
+        used_ids.add(item.id)
+
+        internal_quantity = Decimal(str(item.internal_confirmed_quantity or 0))
+        internal_quantity -= already_billed_quantities.get(item.prescription_item_id, Decimal("0"))
+        if internal_quantity <= 0:
+            continue
+        requested_quantity = Decimal(str(line.get("qty", 0)))
+        if requested_quantity <= 0:
+            raise ValueError("Billing quantity must be positive")
+        quantity = min(requested_quantity, internal_quantity)
+        billable_line = dict(line)
+        billable_line["dispense_item_id"] = str(item.id)
+        billable_line["prescription_item_id"] = str(item.prescription_item_id)
+        billable_line["qty"] = float(quantity)
+        billable_line["total"] = float(quantity * Decimal(str(line.get("mrp", 0))))
+        billable.append(billable_line)
+
+    if not billable:
+        raise ValueError("No hospital-supplied pharmacy quantity is billable")
+    return billable
+
+
 async def _scoped_location(
     session: AsyncSession,
     *,
@@ -358,6 +404,52 @@ async def release_stock_reservation(
     return reservation
 
 
+async def release_dispense_reservations(
+    session: AsyncSession,
+    *,
+    dispense_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    facility_id: uuid.UUID,
+    released_by: uuid.UUID | None = None,
+    reason: str = "Pharmacy billing cancelled",
+) -> PharmacyDispense:
+    dispense = await session.scalar(select(PharmacyDispense).where(
+        PharmacyDispense.id == dispense_id,
+        PharmacyDispense.tenant_id == tenant_id,
+        PharmacyDispense.facility_id == facility_id,
+    ).with_for_update())
+    if dispense is None:
+        raise ValueError("Pharmacy dispense not found")
+    if dispense.status in {"CONFIRMED", "CANCELLED", "EXPIRED"}:
+        return dispense
+    reservations = (await session.execute(select(PharmacyStockReservation).where(
+        PharmacyStockReservation.dispense_id == dispense.id,
+        PharmacyStockReservation.status == "ACTIVE",
+    ))).scalars().all()
+    for reservation in reservations:
+        await release_stock_reservation(
+            session,
+            reservation_id=reservation.id,
+            tenant_id=tenant_id,
+            facility_id=facility_id,
+            released_by=released_by,
+            reason=reason,
+            status="CANCELLED",
+        )
+    dispense.status = "CANCELLED"
+    dispense.billing_status = "CANCELLED"
+    dispense.cancelled_at = datetime.now(timezone.utc)
+    dispense.cancelled_by = released_by
+    dispense.cancellation_reason = reason
+    dispense.updated_by = released_by
+    if dispense.pharmacy_queue_id is not None:
+        queue = await session.scalar(select(PharmacyQueue).where(PharmacyQueue.id == dispense.pharmacy_queue_id))
+        if queue is not None:
+            queue.status = "cancelled"
+    await session.flush()
+    return dispense
+
+
 async def expire_stock_reservations(
     session: AsyncSession,
     *,
@@ -595,13 +687,49 @@ async def approve_pharmacy_substitution(
     return item
 
 
+async def validate_billable_dispense_quantities(
+    session: AsyncSession,
+    *,
+    dispense_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    facility_id: uuid.UUID,
+    requested_total_quantity: Decimal | float | int,
+) -> Decimal:
+    """Validate that declared billing quantity never exceeds confirmed hospital-supplied quantity."""
+    dispense = await session.scalar(select(PharmacyDispense).where(
+        PharmacyDispense.id == dispense_id,
+        PharmacyDispense.tenant_id == tenant_id,
+        PharmacyDispense.facility_id == facility_id,
+    ))
+    if dispense is None:
+        raise ValueError("Pharmacy dispense not found")
+
+    items = (await session.execute(select(PharmacyDispenseItem).where(
+        PharmacyDispenseItem.dispense_id == dispense.id,
+    ))).scalars().all()
+    if not items:
+        raise ValueError("Pharmacy dispense has no items")
+
+    confirmed_total = sum((item.internal_confirmed_quantity for item in items), Decimal("0"))
+    outside_total = sum((item.outside_purchase_quantity for item in items), Decimal("0"))
+    requested_total = Decimal(str(requested_total_quantity))
+
+    if requested_total <= 0:
+        raise ValueError("Billing quantity must be positive")
+    if requested_total > confirmed_total + Decimal("0.000001"):
+        if outside_total > 0:
+            raise ValueError("Outside-purchase quantities cannot be billed as hospital-supplied items")
+        raise ValueError("Billable quantity exceeds confirmed hospital-supplied quantity")
+    return confirmed_total
+
+
 async def confirm_dispense_stock_consumption(
     session: AsyncSession,
     *,
     dispense_id: uuid.UUID,
     tenant_id: uuid.UUID,
     facility_id: uuid.UUID,
-    confirmed_by: uuid.UUID,
+    confirmed_by: uuid.UUID | None,
     billing_authorized: bool,
 ) -> PharmacyDispense:
     """Consume active reservations after an external billing authorization."""
@@ -618,6 +746,7 @@ async def confirm_dispense_stock_consumption(
     if dispense is None:
         raise ValueError("Pharmacy dispense not found")
     if dispense.status == "CONFIRMED":
+        dispense.billing_status = "AUTHORIZED"
         return dispense
     if dispense.status not in {"READY_FOR_BILLING", "PARTIALLY_FULFILLED"}:
         raise ValueError("Pharmacy dispense is not ready for confirmation")
@@ -701,6 +830,7 @@ async def confirm_dispense_stock_consumption(
             allocation.stock_transaction_id = existing_transaction.id
 
     dispense.status = "CONFIRMED"
+    dispense.billing_status = "AUTHORIZED"
     dispense.completed_at = datetime.now(timezone.utc)
     dispense.completed_by = confirmed_by
     dispense.updated_by = confirmed_by

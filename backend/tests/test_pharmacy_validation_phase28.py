@@ -19,7 +19,7 @@ from app.models.tenant.prescription import Prescription, PrescriptionItem
 from app.models.tenant.stock_transaction import StockTransaction
 from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit
-from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, propose_pharmacy_allocations, release_stock_reservation, start_pharmacy_dispense, validate_pharmacy_dispense
+from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, prepare_billable_pharmacy_line_items, propose_pharmacy_allocations, release_stock_reservation, start_pharmacy_dispense, validate_billable_dispense_quantities, validate_pharmacy_dispense
 
 
 @compiles(JSONB, "sqlite")
@@ -288,6 +288,119 @@ async def test_outside_purchase_completes_fulfillment_without_stock_movement(val
 
 
 @pytest.mark.asyncio
+async def test_billable_quantity_rejects_outside_purchase_and_overbilling(validation_session):
+    tenant_id = uuid.uuid4()
+    facility_id = uuid.uuid4()
+    patient = Patient(uhid="P28-005", first_name="Billable", last_name="Patient", gender="M", phone="9000000005")
+    validation_session.add(patient)
+    await validation_session.flush()
+    visit = Visit(patient_id=patient.id, uhid=patient.uhid, status="CONSULTATION_COMPLETED")
+    validation_session.add(visit)
+    await validation_session.flush()
+    prescription = Prescription(visit_id=visit.id, uhid=patient.uhid, status="finalized", version=1)
+    item = PrescriptionItem(medicine="Billable Medicine", quantity="10", final_quantity="10")
+    prescription.items.append(item)
+    validation_session.add(prescription)
+    await validation_session.flush()
+    dispense = PharmacyDispense(
+        tenant_id=tenant_id, facility_id=facility_id, pharmacy_location_id=uuid.uuid4(),
+        prescription_id=prescription.id, prescription_version=1, visit_id=visit.id,
+        patient_id=patient.id, status="READY_FOR_BILLING",
+    )
+    validation_session.add(dispense)
+    await validation_session.flush()
+    bill_only_item = PharmacyDispenseItem(
+        dispense_id=dispense.id, prescription_item_id=item.id,
+        prescribed_name_snapshot="Billable Medicine", prescribed_quantity=Decimal("10"),
+        internal_confirmed_quantity=Decimal("6"), outside_purchase_quantity=Decimal("0"), status="PARTIAL",
+    )
+    validation_session.add(bill_only_item)
+    await validation_session.commit()
+
+    with pytest.raises(ValueError, match="Billable quantity exceeds confirmed hospital-supplied quantity"):
+        await validate_billable_dispense_quantities(
+            validation_session,
+            dispense_id=dispense.id,
+            tenant_id=tenant_id,
+            facility_id=facility_id,
+            requested_total_quantity=Decimal("7"),
+        )
+
+    outside_dispense = PharmacyDispense(
+        tenant_id=tenant_id, facility_id=facility_id, pharmacy_location_id=uuid.uuid4(),
+        prescription_id=prescription.id, prescription_version=1, visit_id=visit.id,
+        patient_id=patient.id, status="READY_FOR_BILLING",
+    )
+    validation_session.add(outside_dispense)
+    await validation_session.flush()
+    outside_item = PharmacyDispenseItem(
+        dispense_id=outside_dispense.id, prescription_item_id=item.id,
+        prescribed_name_snapshot="Outside Purchase Medicine", prescribed_quantity=Decimal("4"),
+        internal_confirmed_quantity=Decimal("0"), outside_purchase_quantity=Decimal("4"), status="PARTIAL",
+    )
+    validation_session.add(outside_item)
+    await validation_session.commit()
+
+    with pytest.raises(ValueError, match="Outside-purchase quantities cannot be billed"):
+        await validate_billable_dispense_quantities(
+            validation_session,
+            dispense_id=outside_dispense.id,
+            tenant_id=tenant_id,
+            facility_id=facility_id,
+            requested_total_quantity=Decimal("10"),
+        )
+
+    confirmed = await validate_billable_dispense_quantities(
+        validation_session,
+        dispense_id=dispense.id,
+        tenant_id=tenant_id,
+        facility_id=facility_id,
+        requested_total_quantity=Decimal("6"),
+    )
+    assert confirmed == Decimal("6")
+
+
+def test_prepare_billable_lines_excludes_outside_purchase_quantity():
+    dispense_id = uuid.uuid4()
+    item = PharmacyDispenseItem(
+        id=uuid.uuid4(), dispense_id=dispense_id, prescription_item_id=uuid.uuid4(),
+        prescribed_name_snapshot="Mixed Medicine", prescribed_quantity=Decimal("10"),
+        internal_confirmed_quantity=Decimal("6"), outside_purchase_quantity=Decimal("4"),
+    )
+    outside_only = PharmacyDispenseItem(
+        id=uuid.uuid4(), dispense_id=dispense_id, prescription_item_id=uuid.uuid4(),
+        prescribed_name_snapshot="Outside Medicine", prescribed_quantity=Decimal("4"),
+        internal_confirmed_quantity=Decimal("0"), outside_purchase_quantity=Decimal("4"),
+    )
+
+    lines = prepare_billable_pharmacy_line_items([
+        {"name": "Mixed Medicine", "qty": 10, "mrp": 5, "gst_pct": 0, "dis_pct": 0, "total": 50},
+        {"name": "Outside Medicine", "qty": 4, "mrp": 8, "gst_pct": 0, "dis_pct": 0, "total": 32},
+    ], [item, outside_only])
+
+    assert len(lines) == 1
+    assert lines[0]["dispense_item_id"] == str(item.id)
+    assert lines[0]["qty"] == 6.0
+    assert lines[0]["total"] == 30.0
+
+
+def test_prepare_billable_lines_excludes_quantity_billed_by_previous_dispense():
+    item = PharmacyDispenseItem(
+        id=uuid.uuid4(), dispense_id=uuid.uuid4(), prescription_item_id=uuid.uuid4(),
+        prescribed_name_snapshot="Repeated Medicine", prescribed_quantity=Decimal("10"),
+        internal_confirmed_quantity=Decimal("10"), outside_purchase_quantity=Decimal("0"),
+    )
+
+    lines = prepare_billable_pharmacy_line_items([
+        {"name": "Repeated Medicine", "qty": 10, "mrp": 5, "gst_pct": 0, "dis_pct": 0, "total": 50},
+    ], [item], {item.prescription_item_id: Decimal("6")})
+
+    assert len(lines) == 1
+    assert lines[0]["qty"] == 4.0
+    assert lines[0]["prescription_item_id"] == str(item.prescription_item_id)
+
+
+@pytest.mark.asyncio
 async def test_no_substitution_policy_rejects_replacement(validation_session):
     tenant_id = uuid.uuid4()
     facility_id = uuid.uuid4()
@@ -382,6 +495,7 @@ async def test_confirm_dispense_consumes_reservation_and_is_idempotent(validatio
 
     assert confirmed.id == repeated.id
     assert confirmed.status == "CONFIRMED"
+    assert confirmed.billing_status == "AUTHORIZED"
     assert batch.available_quantity == Decimal("0")
     assert batch.reserved_quantity == Decimal("0")
     assert reservation.status == "CONSUMED"

@@ -24,6 +24,7 @@ from app.models.tenant.document import DOCUMENT_TYPE_INVOICE
 from app.models.tenant.invoice import Invoice, Payment, Refund, invoice_status_for_payment
 from app.models.tenant.patient import Patient
 from app.models.tenant.pharmacy_queue import PharmacyQueue
+from app.models.tenant.pharmacy_dispense import PharmacyDispense
 from app.models.tenant.visit import Visit, VisitStatus
 from app.schemas.document import DocumentVersionRead
 from app.schemas.invoice import InvoiceCreate, InvoicePayment, InvoiceRead, PaymentRead, RefundCreate
@@ -38,6 +39,7 @@ from app.services.document_service import (
 from app.services.document_storage import LocalFileDocumentStorage
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
+from app.services.pharmacy_dispensing import confirm_dispense_stock_consumption
 from app.websocket.manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -122,6 +124,7 @@ def _invoice_to_snapshot(invoice: Invoice, visit: Visit | None, patient: Patient
             "receipt_number": invoice.receipt_number,
             "source": invoice.source,
             "pharmacy_queue_id": invoice.pharmacy_queue_id,
+            "pharmacy_dispense_id": invoice.pharmacy_dispense_id,
             "created_at": invoice.created_at,
             "paid_at": invoice.paid_at,
             "patient_id": patient.id if patient else None,
@@ -775,6 +778,19 @@ async def razorpay_webhook(request: Request):
                         "Webhook: Marked pharmacy queue %s as dispensed",
                         invoice.pharmacy_queue_id,
                     )
+
+            if invoice.source == "pharmacy_dispense" and invoice.pharmacy_dispense_id:
+                dispense = await session.get(PharmacyDispense, invoice.pharmacy_dispense_id)
+                if dispense is None:
+                    raise ValueError("Pharmacy dispense linked to invoice was not found")
+                await confirm_dispense_stock_consumption(
+                    session,
+                    dispense_id=dispense.id,
+                    tenant_id=dispense.tenant_id,
+                    facility_id=dispense.facility_id,
+                    confirmed_by=None,
+                    billing_authorized=True,
+                )
 
             await session.commit()
             logger.info(

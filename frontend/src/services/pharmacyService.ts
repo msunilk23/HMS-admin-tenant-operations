@@ -2,6 +2,7 @@ import apiClient from './apiClient'
 import type { PharmacyQueueItem } from '@/types/common'
 
 export interface PharmacyLineItem {
+  dispense_item_id?: string
   name: string
   mfr: string
   batch: string
@@ -75,4 +76,10 @@ export const pharmacyService = {
 
   confirmDispense: (dispenseId: string, facilityId: string, billing_authorized: boolean) =>
     apiClient.post<PharmacyDispense>(`/pharmacy/dispenses/${dispenseId}/confirm`, { billing_authorized }, { params: { facility_id: facilityId } }).then(r => r.data),
+
+  listDispenseItems: (dispenseId: string, facilityId: string) =>
+    apiClient.get<PharmacyDispenseItem[]>(`/pharmacy/dispenses/${dispenseId}/items`, { params: { facility_id: facilityId } }).then(r => r.data),
+
+  cancelDispense: (dispenseId: string, facilityId: string, reason: string) =>
+    apiClient.post<PharmacyDispense>(`/pharmacy/dispenses/${dispenseId}/cancel`, { reason }, { params: { facility_id: facilityId } }).then(r => r.data),
 }

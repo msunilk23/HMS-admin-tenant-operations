@@ -36,6 +36,7 @@ class PharmacyDispenseRead(BaseModel):
     id: uuid.UUID
     prescription_id: uuid.UUID
     pharmacy_queue_id: Optional[uuid.UUID] = None
+    invoice_id: Optional[uuid.UUID] = None
     facility_id: uuid.UUID
     pharmacy_location_id: uuid.UUID
     prescription_version: int
@@ -43,6 +44,18 @@ class PharmacyDispenseRead(BaseModel):
     patient_id: uuid.UUID
     status: str
     billing_status: str
+
+    model_config = {"from_attributes": True}
+
+
+class PharmacyDispenseItemRead(BaseModel):
+    id: uuid.UUID
+    prescription_item_id: uuid.UUID
+    prescribed_name_snapshot: str
+    prescribed_quantity: Decimal
+    internal_confirmed_quantity: Decimal
+    outside_purchase_quantity: Decimal
+    status: str
 
     model_config = {"from_attributes": True}
 

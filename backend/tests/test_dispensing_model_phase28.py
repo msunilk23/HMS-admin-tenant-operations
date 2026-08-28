@@ -1,5 +1,6 @@
 from sqlalchemy import inspect
 
+from app.models.tenant.invoice import Invoice
 from app.models.tenant.pharmacy_dispense import (
     PharmacyDispense,
     PharmacyDispenseAllocation,
@@ -42,6 +43,13 @@ def test_p28_dispensing_tables_and_constraints():
     assert any(
         constraint.name == "ck_pharmacy_dispense_items_fulfillment_limit"
         for constraint in PharmacyDispenseItem.__table__.constraints
+    )
+
+    assert "pharmacy_dispense_id" in Invoice.__table__.c
+    assert "invoice_id" in PharmacyDispense.__table__.c
+    assert any(
+        constraint.name == "uq_invoices_pharmacy_dispense"
+        for constraint in Invoice.__table__.constraints
     )
 
 

@@ -29,7 +29,7 @@ from app.models.tenant.hospital_formulary import HospitalFormulary
 from app.models.tenant.invoice import Invoice
 from app.models.tenant.lab_order import LabOrder
 from app.models.tenant.patient import Patient
-from app.models.tenant.pharmacy_dispense import PharmacyDispense
+from app.models.tenant.pharmacy_dispense import PharmacyDispense, PharmacyDispenseItem
 from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.medicine_product import MedicineProduct
 from app.models.tenant.prescription import Prescription
@@ -38,7 +38,7 @@ from app.models.tenant.supplier import Supplier
 from app.models.tenant.purchase_order import PurchaseOrder, PurchaseOrderItem
 from app.models.tenant.visit import Visit, VisitStatus
 from app.schemas.invoice import InvoiceRead, PharmacyBillCreate
-from app.schemas.pharmacy import FormularyMedicineSearchResult, OutsidePurchaseCreate, PharmacyAllocationRequest, PharmacyDispenseConfirm, PharmacyDispenseRead, PharmacyDispenseStart, PharmacyQueueRead, PharmacyReservationRead, PharmacyReservationRelease, PharmacyStatusUpdate, PharmacySubstitutionCreate, SupplierCreate, SupplierImportItem, SupplierRead, SupplierUpdate
+from app.schemas.pharmacy import FormularyMedicineSearchResult, OutsidePurchaseCreate, PharmacyAllocationRequest, PharmacyDispenseConfirm, PharmacyDispenseItemRead, PharmacyDispenseRead, PharmacyDispenseStart, PharmacyQueueRead, PharmacyReservationRead, PharmacyReservationRelease, PharmacyStatusUpdate, PharmacySubstitutionCreate, SupplierCreate, SupplierImportItem, SupplierRead, SupplierUpdate
 from app.schemas.purchase_order import PurchaseOrderCreate, PurchaseOrderRead, PurchaseOrderUpdate
 from app.schemas.goods_receipt import GoodsReceiptCreate, GoodsReceiptItemCreate, GoodsReceiptItemRead, GoodsReceiptRead
 from app.schemas.inventory import InventoryBalanceRead, InventoryBatchRead, InventoryReconciliationRead, PharmacyLocationRead, StockAdjustmentCreate, StockTransactionRead
@@ -50,7 +50,7 @@ from app.services.inventory_service import create_inventory_from_grn_item, recor
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
 from app.services.audit_service import record_audit
-from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, propose_pharmacy_allocations, release_stock_reservation, start_pharmacy_dispense, validate_pharmacy_dispense
+from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, prepare_billable_pharmacy_line_items, propose_pharmacy_allocations, release_dispense_reservations, release_stock_reservation, start_pharmacy_dispense, validate_billable_dispense_quantities, validate_pharmacy_dispense
 
 logger = logging.getLogger(__name__)
 
@@ -974,6 +974,19 @@ async def update_pharmacy_status(
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_permission("PHARMACY_QUEUE_STATUS_UPDATE")),
 ):
+    tenant_id = uuid.UUID(str(current_user["tenant_id"]))
+    dispense = (await session.execute(
+        select(PharmacyDispense).where(
+            PharmacyDispense.pharmacy_queue_id == pq_id,
+            PharmacyDispense.tenant_id == tenant_id,
+        ).with_for_update()
+    )).scalar_one_or_none()
+
+    if dispense is not None and dispense.invoice_id is not None:
+        existing_invoice = await session.get(Invoice, dispense.invoice_id)
+        if existing_invoice is not None:
+            return existing_invoice
+
     pq = await session.get(PharmacyQueue, pq_id)
     if not pq:
         raise HTTPException(status_code=404, detail="Pharmacy queue item not found")
@@ -1205,6 +1218,50 @@ async def confirm_pharmacy_dispense(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.get("/dispenses/{dispense_id}/items", response_model=List[PharmacyDispenseItemRead])
+async def list_pharmacy_dispense_items(
+    dispense_id: uuid.UUID,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_role("pharmacist", "hospital_admin")),
+):
+    dispense = await session.scalar(select(PharmacyDispense).where(
+        PharmacyDispense.id == dispense_id,
+        PharmacyDispense.tenant_id == uuid.UUID(str(_["tenant_id"])),
+        PharmacyDispense.facility_id == facility_id,
+    ))
+    if dispense is None:
+        raise HTTPException(status_code=404, detail="Pharmacy dispense not found")
+    return (await session.execute(select(PharmacyDispenseItem).where(
+        PharmacyDispenseItem.dispense_id == dispense.id,
+    ).order_by(PharmacyDispenseItem.created_at))).scalars().all()
+
+
+@router.post("/dispenses/{dispense_id}/cancel", response_model=PharmacyDispenseRead)
+async def cancel_pharmacy_dispense(
+    dispense_id: uuid.UUID,
+    payload: PharmacyReservationRelease,
+    facility_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_STOCK_RESERVATION_RELEASE")),
+):
+    try:
+        dispense = await release_dispense_reservations(
+            session,
+            dispense_id=dispense_id,
+            tenant_id=uuid.UUID(str(current_user["tenant_id"])),
+            facility_id=facility_id,
+            released_by=uuid.UUID(str(current_user["sub"])),
+            reason=payload.reason,
+        )
+        record_audit(session, current_user=current_user, action="CANCEL", resource_type="pharmacy_dispense", resource_id=dispense.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"status": dispense.status, "reason": payload.reason})
+        await session.commit()
+        return dispense
+    except (KeyError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/dispenses/{dispense_id}/allocation-proposal", response_model=PharmacyDispenseRead)
 async def propose_dispense_allocation(
     dispense_id: uuid.UUID,
@@ -1374,6 +1431,11 @@ async def bill_pharmacy_dispense(
     if pq.status not in allowed_billable_statuses:
         raise HTTPException(status_code=400, detail=f"Queue item is not billable in status {pq.status}")
 
+    if dispense is None:
+        raise HTTPException(status_code=400, detail="Pharmacy dispense is required before billing")
+    if dispense.status not in {"READY_FOR_BILLING", "PARTIALLY_FULFILLED"}:
+        raise HTTPException(status_code=400, detail=f"Pharmacy dispense is not ready for billing in status {dispense.status}")
+
     rx = await session.get(Prescription, pq.prescription_id)
     if not rx:
         raise HTTPException(status_code=404, detail="Prescription not found")
@@ -1402,29 +1464,68 @@ async def bill_pharmacy_dispense(
     )
     hospital_name = (hospital_name_row.scalar() or "Hospital")
 
-    # Compute totals from pharmacy line items
-    li_dicts = [line_item.model_dump() for line_item in payload.line_items]
-    subtotal = sum(li["total"] for li in li_dicts)
+    dispense_items = (await session.execute(
+        select(PharmacyDispenseItem).where(PharmacyDispenseItem.dispense_id == dispense.id)
+    )).scalars().all()
+    previous_invoices = (await session.execute(
+        select(Invoice).where(
+            Invoice.visit_id == rx.visit_id,
+            Invoice.source == "pharmacy_dispense",
+            Invoice.status.not_in(("cancelled", "refunded")),
+        )
+    )).scalars().all()
+    already_billed_quantities: dict[uuid.UUID, Decimal] = {}
+    for previous_invoice in previous_invoices:
+        for previous_line in previous_invoice.line_items or []:
+            prescription_item_id = previous_line.get("prescription_item_id")
+            if prescription_item_id:
+                key = uuid.UUID(str(prescription_item_id))
+                already_billed_quantities[key] = already_billed_quantities.get(key, Decimal("0")) + Decimal(str(previous_line.get("qty", 0)))
+    try:
+        li_dicts = prepare_billable_pharmacy_line_items(
+            [line_item.model_dump() for line_item in payload.line_items],
+            dispense_items,
+            already_billed_quantities,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Compute totals from server-filtered hospital-supplied quantities.
+    requested_total_quantity = sum(Decimal(str(li["qty"])) for li in li_dicts)
+    subtotal = sum(Decimal(str(li["total"])) for li in li_dicts)
     gst_total = sum(
-        li["qty"] * li["mrp"] * (li["gst_pct"] / 100) * (1 - li["dis_pct"] / 100)
+        Decimal(str(li["qty"])) * Decimal(str(li["mrp"])) * (Decimal(str(li["gst_pct"])) / 100) * (1 - Decimal(str(li["dis_pct"])) / 100)
         for li in li_dicts
     )
-    total = max(subtotal - payload.discount, 0.0)
+    total = max(subtotal - Decimal(str(payload.discount)), Decimal("0"))
+
+    try:
+        await validate_billable_dispense_quantities(
+            session,
+            dispense_id=dispense.id,
+            tenant_id=tenant_id,
+            facility_id=dispense.facility_id,
+            requested_total_quantity=requested_total_quantity,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     invoice = Invoice(
         id=uuid.uuid4(),
         visit_id=rx.visit_id,
         uhid=patient.uhid if patient else None,
         line_items=li_dicts,
-        subtotal=subtotal,
+        subtotal=float(subtotal),
         discount=payload.discount,
-        tax=round(gst_total, 2),
-        total=total,
-        source="pharmacy",
+        tax=float(gst_total.quantize(Decimal("0.01"))),
+        total=float(total),
+        source="pharmacy_dispense" if dispense else "pharmacy",
         pharmacy_queue_id=pq_id,
+        pharmacy_dispense_id=dispense.id,
         status="draft",
         billing_started_at=datetime.now(timezone.utc),
     )
+    dispense.invoice_id = invoice.id
     session.add(invoice)
 
     tenant = current_user.get("tenant_schema", "public")
@@ -1446,8 +1547,18 @@ async def bill_pharmacy_dispense(
             "Pharmacy bill: Set invoice to paid - status=%s, payment_method=%s, paid_at=%s",
             invoice.status, invoice.payment_method, invoice.paid_at,
         )
-        # advance queue to dispensed
-        pq.status = "dispensed"
+        try:
+            await confirm_dispense_stock_consumption(
+                session,
+                dispense_id=dispense.id,
+                tenant_id=tenant_id,
+                facility_id=dispense.facility_id,
+                confirmed_by=uuid.UUID(str(current_user["sub"])),
+                billing_authorized=True,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
         await session.commit()
         await session.refresh(invoice)
         await ws_manager.broadcast(tenant, "pharmacy:update", {
