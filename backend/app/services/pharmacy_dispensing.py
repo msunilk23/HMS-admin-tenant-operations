@@ -76,6 +76,52 @@ def prepare_billable_pharmacy_line_items(
     return billable
 
 
+async def resolve_billable_pharmacy_line_items(
+    session: AsyncSession,
+    *,
+    line_items: list[dict[str, Any]],
+    dispense_items: list[PharmacyDispenseItem],
+    tenant_id: uuid.UUID,
+    facility_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Resolve billed price and tax from the server-side batch and product records."""
+    prepared = prepare_billable_pharmacy_line_items(line_items, dispense_items)
+    items_by_id = {item.id: item for item in dispense_items}
+    resolved: list[dict[str, Any]] = []
+    for line in prepared:
+        item = items_by_id[uuid.UUID(str(line["dispense_item_id"]))]
+        batches = (await session.execute(
+            select(InventoryBatch, PharmacyDispenseAllocation).join(
+                PharmacyDispenseAllocation,
+                PharmacyDispenseAllocation.inventory_batch_id == InventoryBatch.id,
+            ).where(
+                PharmacyDispenseAllocation.dispense_item_id == item.id,
+                PharmacyDispenseAllocation.tenant_id == tenant_id,
+                PharmacyDispenseAllocation.facility_id == facility_id,
+                PharmacyDispenseAllocation.status.in_(("RESERVED", "CONSUMED")),
+                InventoryBatch.tenant_id == tenant_id,
+                InventoryBatch.facility_id == facility_id,
+            )
+        )).all()
+        if not batches:
+            raise ValueError("No allocated pharmacy batch is available for billing")
+        mrps = {batch.mrp for batch, _ in batches if batch.mrp is not None}
+        if len(mrps) != 1:
+            raise ValueError("Pharmacy batch price is missing or ambiguous")
+        mrp = next(iter(mrps))
+        product = None
+        if item.prescribed_medicine_product_id:
+            product = await session.get(MedicineProduct, item.prescribed_medicine_product_id)
+        gst_rate = product.gst_rate if product and product.gst_rate is not None else Decimal("0")
+        resolved_line = dict(line)
+        resolved_line["mrp"] = float(mrp)
+        resolved_line["gst_pct"] = float(gst_rate)
+        resolved_line["dis_pct"] = 0.0
+        resolved_line["total"] = float(Decimal(str(line["qty"])) * mrp)
+        resolved.append(resolved_line)
+    return resolved
+
+
 async def _scoped_location(
     session: AsyncSession,
     *,

@@ -12,7 +12,7 @@ from fastapi.responses import Response
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import require_role, require_feature
+from app.core.dependencies import require_permission, require_role, require_feature
 from app.core.config import settings
 from app.core.invoice_pdf_service import (
     build_invoice_pdf,
@@ -39,7 +39,7 @@ from app.services.document_service import (
 from app.services.document_storage import LocalFileDocumentStorage
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
-from app.services.pharmacy_dispensing import confirm_dispense_stock_consumption
+from app.services.pharmacy_dispensing import confirm_dispense_stock_consumption, release_dispense_reservations
 from app.websocket.manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,16 @@ router = APIRouter(dependencies=[Depends(require_feature("billing"))])
 # Public router — Razorpay webhook must be reachable without JWT
 # (Razorpay's servers call this directly; auth is via HMAC signature)
 webhook_router = APIRouter()
+
+
+async def _require_pharmacy_permission(session: AsyncSession, current_user: dict, permission: str) -> None:
+    from app.models.public.permission import Permission, RolePermission
+
+    allowed = await session.scalar(select(Permission.code).join(RolePermission, RolePermission.permission_id == Permission.id).where(
+        RolePermission.role == current_user.get("role"), Permission.code == permission, Permission.is_active == True,  # noqa: E712
+    ))
+    if allowed is None:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
 
 
 @router.get("/public-config")
@@ -153,6 +163,8 @@ async def _record_payment(
         gateway="razorpay" if payload.payment_method == "razorpay" else None,
         paid_at=datetime.now(timezone.utc),
     )
+    if invoice.source == "pharmacy_dispense":
+        record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_INITIATED", resource_type="invoice", resource_id=invoice.id, visit_id=invoice.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(invoice.pharmacy_dispense_id), "payment_method": payload.payment_method, "amount": amount})
     visit = await session.get(Visit, invoice.visit_id)
     session.add(payment)
     invoice.paid_amount = float(invoice.paid_amount) + amount
@@ -162,6 +174,8 @@ async def _record_payment(
         invoice.paid_at = payment.paid_at
         invoice.billing_completed_at = payment.paid_at
         invoice.receipt_number = invoice.receipt_number or f"RCT-{datetime.now(timezone.utc):%Y%m%d}-{str(invoice.id)[:8].upper()}"
+        if invoice.source == "pharmacy_dispense":
+            record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_COMPLETED", resource_type="invoice", resource_id=invoice.id, visit_id=invoice.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(invoice.pharmacy_dispense_id), "paid_amount": str(invoice.paid_amount), "payment_method": payload.payment_method})
     record_audit(
         session,
         current_user=current_user,
@@ -178,6 +192,55 @@ async def _record_payment(
         },
     )
     return payment
+
+
+async def _authorize_linked_pharmacy_dispense(
+    invoice: Invoice,
+    session: AsyncSession,
+    *,
+    confirmed_by: uuid.UUID | None = None,
+    current_user: dict | None = None,
+) -> None:
+    """Authorize a linked pharmacy dispense after the invoice is fully paid."""
+    if invoice.status != "paid" or not invoice.pharmacy_dispense_id:
+        return
+    dispense = await session.get(PharmacyDispense, invoice.pharmacy_dispense_id)
+    if dispense is None:
+        raise HTTPException(status_code=409, detail="Pharmacy dispense linked to invoice was not found")
+    if dispense.status == "CONFIRMED" and dispense.billing_status == "AUTHORIZED":
+        return
+    try:
+        await confirm_dispense_stock_consumption(
+            session,
+            dispense_id=dispense.id,
+            tenant_id=dispense.tenant_id,
+            facility_id=dispense.facility_id,
+            confirmed_by=confirmed_by,
+            billing_authorized=True,
+        )
+        record_audit(
+            session,
+            current_user=current_user,
+            action="PHARMACY_DISPENSE_AUTHORIZED",
+            resource_type="pharmacy_dispense",
+            resource_id=dispense.id,
+            patient_id=dispense.patient_id,
+            visit_id=dispense.visit_id,
+            new_value={"invoice_id": str(invoice.id), "status": dispense.status, "billing_status": dispense.billing_status},
+        )
+        if dispense.status == "CONFIRMED":
+            record_audit(
+                session,
+                current_user=current_user,
+                action="PHARMACY_DISPENSE_CONFIRMED",
+                resource_type="pharmacy_dispense",
+                resource_id=dispense.id,
+                patient_id=dispense.patient_id,
+                visit_id=dispense.visit_id,
+                new_value={"invoice_id": str(invoice.id), "status": dispense.status},
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("", response_model=InvoiceRead, status_code=status.HTTP_201_CREATED)
@@ -262,7 +325,15 @@ async def pay_invoice(
     invoice = await session.get(Invoice, invoice_id)
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.source == "pharmacy_dispense":
+        await _require_pharmacy_permission(session, current_user, "PHARMACY_BILLING_PAYMENT")
     await _record_payment(invoice, payload, session, current_user)
+    await _authorize_linked_pharmacy_dispense(
+        invoice,
+        session,
+        confirmed_by=uuid.UUID(str(current_user["sub"])),
+        current_user=current_user,
+    )
 
     # Transition visit based on billing type:
     # pre_billing (upfront at reception) → registered (now visible to nurse)
@@ -304,7 +375,10 @@ async def record_invoice_payment(
     invoice = await session.get(Invoice, invoice_id)
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.source == "pharmacy_dispense":
+        await _require_pharmacy_permission(session, _, "PHARMACY_BILLING_PAYMENT")
     payment = await _record_payment(invoice, payload, session, _)
+    await _authorize_linked_pharmacy_dispense(invoice, session, current_user=_)
     await session.commit()
     await session.refresh(payment)
     return payment
@@ -440,6 +514,8 @@ async def refund_invoice(
     invoice = await session.get(Invoice, invoice_id)
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.source == "pharmacy_dispense":
+        await _require_pharmacy_permission(session, _, "PHARMACY_BILLING_PAYMENT")
     if invoice.status != "paid":
         raise HTTPException(status_code=400, detail="Only fully paid invoices can be refunded")
     if payload.amount is not None and payload.amount != float(invoice.paid_amount):
@@ -465,6 +541,62 @@ async def refund_invoice(
     return invoice
 
 
+@router.post("/{invoice_id}/cancel", response_model=InvoiceRead)
+async def cancel_invoice(
+    invoice_id: uuid.UUID,
+    payload: RefundCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("billing_officer", "hospital_admin")),
+):
+    """Cancel an unpaid invoice and release any linked Pharmacy reservation."""
+    invoice = await session.get(Invoice, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.source == "pharmacy_dispense":
+        await _require_pharmacy_permission(session, current_user, "PHARMACY_BILLING_CANCEL")
+    if invoice.status in ("paid", "refunded"):
+        raise HTTPException(status_code=409, detail="Paid invoices must use the refund workflow")
+    if invoice.status == "cancelled":
+        return invoice
+    old_status = invoice.status
+
+    if invoice.pharmacy_dispense_id:
+        dispense = await session.get(PharmacyDispense, invoice.pharmacy_dispense_id)
+        if dispense is None:
+            raise HTTPException(status_code=409, detail="Pharmacy dispense linked to invoice was not found")
+        try:
+            await release_dispense_reservations(
+                session,
+                dispense_id=dispense.id,
+                tenant_id=dispense.tenant_id,
+                facility_id=dispense.facility_id,
+                released_by=uuid.UUID(str(current_user["sub"])),
+                reason=payload.reason,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    invoice.status = "cancelled"
+    record_audit(
+        session,
+        current_user=current_user,
+        action="CANCEL",
+        resource_type="invoice",
+        resource_id=invoice.id,
+        visit_id=invoice.visit_id,
+        old_value={"status": old_status},
+        new_value={"status": "cancelled"},
+        reason=payload.reason,
+    )
+    if invoice.source == "pharmacy_dispense":
+        record_audit(session, current_user=current_user, action="PHARMACY_BILLING_CANCELLED", resource_type="invoice", resource_id=invoice.id, visit_id=invoice.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(invoice.pharmacy_dispense_id), "old_status": old_status, "new_status": "cancelled", "reason": payload.reason})
+        record_audit(session, current_user=current_user, action="PHARMACY_RESERVATION_RELEASED_FOR_BILLING_CANCELLATION", resource_type="pharmacy_dispense", resource_id=invoice.pharmacy_dispense_id, visit_id=invoice.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(invoice.pharmacy_dispense_id), "reason": payload.reason})
+    await session.commit()
+    await session.refresh(invoice)
+    return invoice
+
+
 @router.post("/{invoice_id}/sync-payment", response_model=InvoiceRead)
 async def sync_razorpay_payment(
     invoice_id: uuid.UUID,
@@ -479,6 +611,8 @@ async def sync_razorpay_payment(
     invoice = await session.get(Invoice, invoice_id)
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.source == "pharmacy_dispense":
+        await _require_pharmacy_permission(session, current_user, "PHARMACY_BILLING_VERIFY")
     if invoice.status == "paid":
         # Invoice already paid — keep the OPD lifecycle canonical and do not mutate
         # visit.status through legacy billing-state repair logic.
@@ -494,6 +628,8 @@ async def sync_razorpay_payment(
     invoice.payment_method = payment.get("method", "razorpay")
     invoice.status = "paid"
     invoice.paid_at = datetime.now(timezone.utc)
+
+    await _authorize_linked_pharmacy_dispense(invoice, session, current_user=current_user)
 
     visit = await session.get(Visit, invoice.visit_id)
     if visit and visit.status == VisitStatus.CONSULTATION_COMPLETED.value:
@@ -601,6 +737,12 @@ async def admit_patient_manually(
     invoice.payment_method = "cash"
     invoice.status = "paid"
     invoice.paid_at = datetime.now(timezone.utc)
+
+    await _authorize_linked_pharmacy_dispense(
+        invoice,
+        session,
+        confirmed_by=uuid.UUID(str(current_user["sub"])),
+    )
 
     visit = await session.get(Visit, invoice.visit_id)
     if visit and visit.status == VisitStatus.CONSULTATION_COMPLETED.value:
@@ -732,6 +874,8 @@ async def razorpay_webhook(request: Request):
             invoice.paid_at = datetime.now(timezone.utc)
             invoice.paid_amount = invoice.total
             invoice.receipt_number = invoice.receipt_number or f"RCT-{datetime.now(timezone.utc):%Y%m%d}-{str(invoice.id)[:8].upper()}"
+            if invoice.source == "pharmacy_dispense":
+                record_audit(session, current_user=None, action="PHARMACY_PAYMENT_COMPLETED", resource_type="invoice", resource_id=invoice.id, visit_id=invoice.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(invoice.pharmacy_dispense_id), "paid_amount": str(invoice.paid_amount), "payment_method": payment_method})
 
             if payment_id:
                 existing_payment = (await session.execute(
@@ -779,18 +923,7 @@ async def razorpay_webhook(request: Request):
                         invoice.pharmacy_queue_id,
                     )
 
-            if invoice.source == "pharmacy_dispense" and invoice.pharmacy_dispense_id:
-                dispense = await session.get(PharmacyDispense, invoice.pharmacy_dispense_id)
-                if dispense is None:
-                    raise ValueError("Pharmacy dispense linked to invoice was not found")
-                await confirm_dispense_stock_consumption(
-                    session,
-                    dispense_id=dispense.id,
-                    tenant_id=dispense.tenant_id,
-                    facility_id=dispense.facility_id,
-                    confirmed_by=None,
-                    billing_authorized=True,
-                )
+            await _authorize_linked_pharmacy_dispense(invoice, session)
 
             await session.commit()
             logger.info(

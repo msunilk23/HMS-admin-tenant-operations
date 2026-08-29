@@ -50,7 +50,7 @@ from app.services.inventory_service import create_inventory_from_grn_item, recor
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
 from app.services.audit_service import record_audit
-from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, prepare_billable_pharmacy_line_items, propose_pharmacy_allocations, release_dispense_reservations, release_stock_reservation, start_pharmacy_dispense, validate_billable_dispense_quantities, validate_pharmacy_dispense
+from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, prepare_billable_pharmacy_line_items, propose_pharmacy_allocations, release_dispense_reservations, release_stock_reservation, resolve_billable_pharmacy_line_items, start_pharmacy_dispense, validate_billable_dispense_quantities, validate_pharmacy_dispense
 
 logger = logging.getLogger(__name__)
 
@@ -1223,7 +1223,7 @@ async def list_pharmacy_dispense_items(
     dispense_id: uuid.UUID,
     facility_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_role("pharmacist", "hospital_admin")),
+    _: dict = Depends(require_permission("PHARMACY_BILLING_VIEW")),
 ):
     dispense = await session.scalar(select(PharmacyDispense).where(
         PharmacyDispense.id == dispense_id,
@@ -1243,7 +1243,7 @@ async def cancel_pharmacy_dispense(
     payload: PharmacyReservationRelease,
     facility_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_permission("PHARMACY_STOCK_RESERVATION_RELEASE")),
+    current_user: dict = Depends(require_permission("PHARMACY_BILLING_CANCEL")),
 ):
     try:
         dispense = await release_dispense_reservations(
@@ -1411,7 +1411,7 @@ async def bill_pharmacy_dispense(
     payload: PharmacyBillCreate,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("pharmacist", "hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_BILLING_CREATE")),
 ):
     """
     Create an invoice for pharmacy dispense and optionally trigger Razorpay order.
@@ -1423,6 +1423,20 @@ async def bill_pharmacy_dispense(
         "Pharmacy bill: Start - pq_id=%s, payment_method=%s, discount=%.2f",
         pq_id, payload.payment_method, payload.discount,
     )
+
+    tenant_id = uuid.UUID(str(current_user["tenant_id"]))
+    dispense = (await session.execute(
+        select(PharmacyDispense).where(
+            PharmacyDispense.pharmacy_queue_id == pq_id,
+            PharmacyDispense.tenant_id == tenant_id,
+        ).with_for_update()
+    )).scalar_one_or_none()
+    if dispense is not None and dispense.invoice_id is not None:
+        existing_invoice = await session.get(Invoice, dispense.invoice_id)
+        if existing_invoice is not None:
+            record_audit(session, current_user=current_user, action="PHARMACY_INVOICE_REUSED", resource_type="invoice", resource_id=existing_invoice.id, new_value={"invoice_id": str(existing_invoice.id), "pharmacy_dispense_id": str(dispense.id), "reason": "idempotent retry"})
+            await session.commit()
+            return existing_invoice
     
     pq = await session.get(PharmacyQueue, pq_id)
     if not pq:
@@ -1464,9 +1478,9 @@ async def bill_pharmacy_dispense(
     )
     hospital_name = (hospital_name_row.scalar() or "Hospital")
 
-    dispense_items = (await session.execute(
+    dispense_items = list((await session.execute(
         select(PharmacyDispenseItem).where(PharmacyDispenseItem.dispense_id == dispense.id)
-    )).scalars().all()
+    )).scalars().all())
     previous_invoices = (await session.execute(
         select(Invoice).where(
             Invoice.visit_id == rx.visit_id,
@@ -1487,17 +1501,26 @@ async def bill_pharmacy_dispense(
             dispense_items,
             already_billed_quantities,
         )
+        li_dicts = await resolve_billable_pharmacy_line_items(
+            session,
+            line_items=li_dicts,
+            dispense_items=dispense_items,
+            tenant_id=tenant_id,
+            facility_id=dispense.facility_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Compute totals from server-filtered hospital-supplied quantities.
     requested_total_quantity = sum(Decimal(str(li["qty"])) for li in li_dicts)
     subtotal = sum(Decimal(str(li["total"])) for li in li_dicts)
-    gst_total = sum(
+    gst_total = sum((
         Decimal(str(li["qty"])) * Decimal(str(li["mrp"])) * (Decimal(str(li["gst_pct"])) / 100) * (1 - Decimal(str(li["dis_pct"])) / 100)
         for li in li_dicts
-    )
-    total = max(subtotal - Decimal(str(payload.discount)), Decimal("0"))
+    ), Decimal("0"))
+    if payload.discount != 0:
+        raise HTTPException(status_code=400, detail="Pharmacy discounts require an approved server-side billing policy")
+    total = subtotal
 
     try:
         await validate_billable_dispense_quantities(
@@ -1527,6 +1550,7 @@ async def bill_pharmacy_dispense(
     )
     dispense.invoice_id = invoice.id
     session.add(invoice)
+    record_audit(session, current_user=current_user, action="PHARMACY_INVOICE_CREATED", resource_type="invoice", resource_id=invoice.id, patient_id=visit.patient_id, visit_id=visit.id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(dispense.id), "queue_id": str(pq_id), "total": float(total), "line_count": len(li_dicts)})
 
     tenant = current_user.get("tenant_schema", "public")
     
@@ -1542,6 +1566,8 @@ async def bill_pharmacy_dispense(
         invoice.status = "paid"
         invoice.paid_at = datetime.now(timezone.utc)
         invoice.billing_completed_at = invoice.paid_at
+        record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_INITIATED", resource_type="invoice", resource_id=invoice.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(dispense.id), "payment_method": "cash", "amount": float(invoice.total)})
+        record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_COMPLETED", resource_type="invoice", resource_id=invoice.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(dispense.id), "payment_method": "cash", "amount": float(invoice.total)})
         
         logger.info(
             "Pharmacy bill: Set invoice to paid - status=%s, payment_method=%s, paid_at=%s",
@@ -1556,6 +1582,8 @@ async def bill_pharmacy_dispense(
                 confirmed_by=uuid.UUID(str(current_user["sub"])),
                 billing_authorized=True,
             )
+            record_audit(session, current_user=current_user, action="PHARMACY_DISPENSE_AUTHORIZED", resource_type="pharmacy_dispense", resource_id=dispense.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"invoice_id": str(invoice.id), "billing_status": dispense.billing_status, "status": dispense.status})
+            record_audit(session, current_user=current_user, action="PHARMACY_DISPENSE_CONFIRMED", resource_type="pharmacy_dispense", resource_id=dispense.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"invoice_id": str(invoice.id), "status": dispense.status})
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -1607,13 +1635,14 @@ async def bill_pharmacy_dispense(
         # online — create Razorpay order and broadcast payment request to POS kiosk
         await ensure_feature_enabled("razorpay", current_user, session)
         logger.info("Pharmacy bill: Processing ONLINE payment for invoice %s", invoice.id)
+        record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_INITIATED", resource_type="invoice", resource_id=invoice.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(dispense.id), "payment_method": "online", "amount": float(invoice.total)})
         
         await session.commit()
         await session.refresh(invoice)
         logger.info("Pharmacy bill: Committed invoice to DB, now creating Razorpay order")
         
         rz_order = create_razorpay_order(
-            amount_rupees=total,
+            amount_rupees=float(total),
             receipt=str(invoice.id)[:40],
             notes={"tenant_schema": tenant, "source": "pharmacy"},
         )
@@ -1680,7 +1709,7 @@ async def bill_pharmacy_dispense(
 async def verify_pharmacy_payment(
     pq_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("pharmacist", "hospital_admin")),
+    current_user: dict = Depends(require_permission("PHARMACY_BILLING_VERIFY")),
 ):
     """
     Verify if Razorpay payment was captured for a pharmacy dispense.
@@ -1700,6 +1729,7 @@ async def verify_pharmacy_payment(
     )).scalar_one_or_none()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found for this pharmacy order")
+    record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_VERIFICATION_ATTEMPTED", resource_type="invoice", resource_id=invoice.id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(invoice.pharmacy_dispense_id), "queue_id": str(pq_id)})
 
     # If already dispensed, no need to verify
     if pq.status == "dispensed":
@@ -1707,17 +1737,34 @@ async def verify_pharmacy_payment(
 
     # If invoice already paid, just advance the queue (shouldn't happen but check)
     if invoice.status == "paid":
+        dispense = await session.get(PharmacyDispense, invoice.pharmacy_dispense_id) if invoice.pharmacy_dispense_id else None
+        if dispense is not None:
+            try:
+                await confirm_dispense_stock_consumption(
+                    session,
+                    dispense_id=dispense.id,
+                    tenant_id=dispense.tenant_id,
+                    facility_id=dispense.facility_id,
+                    confirmed_by=uuid.UUID(str(current_user["sub"])),
+                    billing_authorized=True,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         if pq.status != "dispensed":
             pq.status = "dispensed"
-            await session.commit()
+        await session.commit()
         return {"success": True, "status": "dispensed"}
 
     # Check if Razorpay order exists and has payment
     if not invoice.razorpay_order_id:
+        record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_VERIFICATION_FAILED", resource_type="invoice", resource_id=invoice.id, new_value={"invoice_id": str(invoice.id), "reason": "No Razorpay order created"})
+        await session.commit()
         return {"success": False, "status": "pending", "reason": "No Razorpay order created"}
 
     payment = fetch_order_payments(invoice.razorpay_order_id)
     if not payment:
+        record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_VERIFICATION_FAILED", resource_type="invoice", resource_id=invoice.id, new_value={"invoice_id": str(invoice.id), "reason": "No captured payment found"})
+        await session.commit()
         return {"success": False, "status": "pending", "reason": "No captured payment found on Razorpay"}
 
     # Payment captured! Mark invoice and queue as paid/dispensed
@@ -1725,6 +1772,20 @@ async def verify_pharmacy_payment(
     invoice.payment_method = payment.get("method", "razorpay")
     invoice.status = "paid"
     invoice.paid_at = datetime.now(timezone.utc)
+    dispense = await session.get(PharmacyDispense, invoice.pharmacy_dispense_id) if invoice.pharmacy_dispense_id else None
+    if dispense is not None:
+        try:
+            await confirm_dispense_stock_consumption(
+                session,
+                dispense_id=dispense.id,
+                tenant_id=dispense.tenant_id,
+                facility_id=dispense.facility_id,
+                confirmed_by=uuid.UUID(str(current_user["sub"])),
+                billing_authorized=True,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_VERIFICATION_SUCCEEDED", resource_type="invoice", resource_id=invoice.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(dispense.id), "payment_id": invoice.razorpay_payment_id})
     pq.status = "dispensed"
 
     # Pharmacy queue is treated as a domain-specific workflow, not a visit-state mutation.

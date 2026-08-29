@@ -16,7 +16,7 @@ class AuditLog(Base):
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column()  # None for system actions
     tenant_schema: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    action: Mapped[str] = mapped_column(String(20), nullable=False)  # CREATE | UPDATE | DELETE | READ
+    action: Mapped[str] = mapped_column(String(64), nullable=False)  # CREATE | UPDATE | DELETE | READ
     resource_type: Mapped[str] = mapped_column(String(100), nullable=False)
     resource_id: Mapped[Optional[str]] = mapped_column(String(100))
     patient_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)

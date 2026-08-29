@@ -77,6 +77,9 @@ export const pharmacyService = {
   confirmDispense: (dispenseId: string, facilityId: string, billing_authorized: boolean) =>
     apiClient.post<PharmacyDispense>(`/pharmacy/dispenses/${dispenseId}/confirm`, { billing_authorized }, { params: { facility_id: facilityId } }).then(r => r.data),
 
+  verifyPayment: (pqId: string) =>
+    apiClient.patch<{ success: boolean; status: string; reason?: string }>(`/pharmacy/${pqId}/verify-payment`).then(r => r.data),
+
   listDispenseItems: (dispenseId: string, facilityId: string) =>
     apiClient.get<PharmacyDispenseItem[]>(`/pharmacy/dispenses/${dispenseId}/items`, { params: { facility_id: facilityId } }).then(r => r.data),
 

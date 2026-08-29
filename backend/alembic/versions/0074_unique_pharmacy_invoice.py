@@ -14,6 +14,10 @@ def upgrade() -> None:
     inspector = inspect(bind)
     if "invoices" not in inspector.get_table_names():
         return
+    if "pharmacy_dispense_id" not in {
+        column["name"] for column in inspector.get_columns("invoices")
+    }:
+        return
     existing = {
         constraint.get("name")
         for constraint in inspector.get_unique_constraints("invoices")
@@ -30,6 +34,10 @@ def downgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
     if "invoices" not in inspector.get_table_names():
+        return
+    if "pharmacy_dispense_id" not in {
+        column["name"] for column in inspector.get_columns("invoices")
+    }:
         return
     existing = {
         constraint.get("name")

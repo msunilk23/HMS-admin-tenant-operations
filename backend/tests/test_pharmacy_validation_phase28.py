@@ -19,7 +19,7 @@ from app.models.tenant.prescription import Prescription, PrescriptionItem
 from app.models.tenant.stock_transaction import StockTransaction
 from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit
-from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, prepare_billable_pharmacy_line_items, propose_pharmacy_allocations, release_stock_reservation, start_pharmacy_dispense, validate_billable_dispense_quantities, validate_pharmacy_dispense
+from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, prepare_billable_pharmacy_line_items, propose_pharmacy_allocations, release_dispense_reservations, release_stock_reservation, resolve_billable_pharmacy_line_items, start_pharmacy_dispense, validate_billable_dispense_quantities, validate_pharmacy_dispense
 
 
 @compiles(JSONB, "sqlite")
@@ -401,6 +401,65 @@ def test_prepare_billable_lines_excludes_quantity_billed_by_previous_dispense():
 
 
 @pytest.mark.asyncio
+async def test_resolve_billable_lines_uses_allocated_batch_mrp(validation_session):
+    tenant_id = uuid.uuid4()
+    facility_id = uuid.uuid4()
+    location = PharmacyLocation(
+        tenant_id=tenant_id, facility_id=facility_id, location_code="P29-PRICE",
+        location_name="Price Pharmacy", location_type="PHARMACY", active=True,
+    )
+    patient = Patient(uhid="P29-PRICE", first_name="Price", last_name="Patient", gender="M", phone="9000000029")
+    validation_session.add_all([location, patient])
+    await validation_session.flush()
+    visit = Visit(patient_id=patient.id, uhid=patient.uhid, status="CONSULTATION_COMPLETED")
+    validation_session.add(visit)
+    await validation_session.flush()
+    prescription = Prescription(visit_id=visit.id, uhid=patient.uhid, status="finalized", version=1)
+    prescription_item = PrescriptionItem(medicine="Server Priced Medicine", quantity="6", final_quantity="6")
+    prescription.items.append(prescription_item)
+    validation_session.add(prescription)
+    await validation_session.flush()
+    dispense = PharmacyDispense(
+        tenant_id=tenant_id, facility_id=facility_id, pharmacy_location_id=location.id,
+        prescription_id=prescription.id, prescription_version=1, visit_id=visit.id,
+        patient_id=patient.id, status="READY_FOR_BILLING",
+    )
+    validation_session.add(dispense)
+    await validation_session.flush()
+    item = PharmacyDispenseItem(
+        dispense_id=dispense.id, prescription_item_id=prescription_item.id,
+        prescribed_name_snapshot="Server Priced Medicine", prescribed_quantity=Decimal("6"),
+        internal_confirmed_quantity=Decimal("6"), outside_purchase_quantity=Decimal("0"),
+    )
+    batch = InventoryBatch(
+        tenant_id=tenant_id, facility_id=facility_id, pharmacy_location_id=location.id,
+        medicine_id=uuid.uuid4(), batch_number="PRICE-BATCH", expiry_date=date(2027, 1, 1),
+        purchase_rate=Decimal("40"), mrp=Decimal("55"), received_quantity=Decimal("6"),
+        available_quantity=Decimal("0"), reserved_quantity=Decimal("6"), status="ACTIVE",
+    )
+    validation_session.add_all([item, batch])
+    await validation_session.flush()
+    allocation = PharmacyDispenseAllocation(
+        dispense_item_id=item.id, tenant_id=tenant_id, facility_id=facility_id,
+        pharmacy_location_id=location.id, inventory_batch_id=batch.id,
+        allocated_quantity=Decimal("6"), confirmed_dispensed_quantity=Decimal("6"), status="RESERVED",
+    )
+    validation_session.add(allocation)
+    await validation_session.commit()
+
+    lines = await resolve_billable_pharmacy_line_items(
+        validation_session,
+        line_items=[{"name": "Server Priced Medicine", "qty": 6, "mrp": 999, "gst_pct": 99, "dis_pct": 20, "total": 9999}],
+        dispense_items=[item], tenant_id=tenant_id, facility_id=facility_id,
+    )
+
+    assert lines[0]["mrp"] == 55.0
+    assert lines[0]["gst_pct"] == 0.0
+    assert lines[0]["dis_pct"] == 0.0
+    assert lines[0]["total"] == 330.0
+
+
+@pytest.mark.asyncio
 async def test_no_substitution_policy_rejects_replacement(validation_session):
     tenant_id = uuid.uuid4()
     facility_id = uuid.uuid4()
@@ -516,3 +575,48 @@ async def test_confirm_dispense_requires_billing_authorization(validation_sessio
             validation_session, dispense_id=uuid.uuid4(), tenant_id=uuid.uuid4(),
             facility_id=uuid.uuid4(), confirmed_by=uuid.uuid4(), billing_authorized=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_cancel_dispense_releases_reservations_without_stock_deduction(validation_session):
+    tenant_id = uuid.uuid4()
+    facility_id = uuid.uuid4()
+    patient = Patient(uhid="P29-CANCEL", first_name="Cancel", last_name="Patient", gender="M", phone="9000000030")
+    validation_session.add(patient)
+    await validation_session.flush()
+    visit = Visit(patient_id=patient.id, uhid=patient.uhid, status="CONSULTATION_COMPLETED")
+    validation_session.add(visit)
+    await validation_session.flush()
+    prescription = Prescription(visit_id=visit.id, uhid=patient.uhid, status="finalized", version=1)
+    prescription_item = PrescriptionItem(medicine="Cancel Medicine", quantity="2", final_quantity="2")
+    prescription.items.append(prescription_item)
+    validation_session.add(prescription)
+    await validation_session.flush()
+    location = PharmacyLocation(tenant_id=tenant_id, facility_id=facility_id, location_code="P29-C", location_name="Cancel Pharmacy", location_type="PHARMACY", active=True)
+    validation_session.add(location)
+    await validation_session.flush()
+    dispense = PharmacyDispense(tenant_id=tenant_id, facility_id=facility_id, pharmacy_location_id=location.id, prescription_id=prescription.id, prescription_version=1, visit_id=visit.id, patient_id=patient.id, status="READY_FOR_BILLING")
+    validation_session.add(dispense)
+    await validation_session.flush()
+    queue = PharmacyQueue(prescription_id=prescription.id, uhid=patient.uhid, status="dispensing")
+    validation_session.add(queue)
+    dispense.pharmacy_queue_id = queue.id
+    await validation_session.flush()
+    batch = InventoryBatch(tenant_id=tenant_id, facility_id=facility_id, pharmacy_location_id=location.id, medicine_id=uuid.uuid4(), batch_number="CANCEL-BATCH", expiry_date=date(2027, 1, 1), purchase_rate=Decimal("5"), mrp=Decimal("6"), received_quantity=Decimal("2"), available_quantity=Decimal("0"), reserved_quantity=Decimal("2"), status="ACTIVE")
+    validation_session.add(batch)
+    await validation_session.flush()
+    item = PharmacyDispenseItem(dispense_id=dispense.id, prescription_item_id=prescription_item.id, prescribed_name_snapshot="Cancel Medicine", prescribed_quantity=Decimal("2"), internal_confirmed_quantity=Decimal("2"), status="FULFILLED")
+    validation_session.add(item)
+    await validation_session.flush()
+    reservation = PharmacyStockReservation(tenant_id=tenant_id, facility_id=facility_id, pharmacy_location_id=location.id, dispense_id=dispense.id, dispense_item_id=item.id, inventory_batch_id=batch.id, quantity=Decimal("2"), status="ACTIVE", reserved_at=datetime.now(timezone.utc), expires_at=datetime.now(timezone.utc) + timedelta(minutes=15))
+    validation_session.add(reservation)
+    await validation_session.commit()
+
+    result = await release_dispense_reservations(validation_session, dispense_id=dispense.id, tenant_id=tenant_id, facility_id=facility_id, reason="Payment abandoned")
+
+    assert result.status == "CANCELLED"
+    assert result.billing_status == "CANCELLED"
+    assert reservation.status == "CANCELLED"
+    assert batch.available_quantity == Decimal("0")
+    assert batch.reserved_quantity == Decimal("0")
+    assert await validation_session.scalar(select(func.count()).select_from(StockTransaction)) == 0

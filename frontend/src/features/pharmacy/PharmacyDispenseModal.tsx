@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle2, ClipboardList, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ClipboardList, CreditCard, X } from 'lucide-react'
 import { pharmacyService, type PharmacyDispense } from '@/services/pharmacyService'
 import type { PharmacyQueueItem } from '@/types/common'
 
@@ -16,6 +16,8 @@ export default function PharmacyDispenseModal({ item, onClose, onDone }: Props) 
   const [locationId, setLocationId] = useState('')
   const [dispense, setDispense] = useState<PharmacyDispense | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'online'>('cash')
+  const [invoice, setInvoice] = useState<{ id: string; status: string; total: number; razorpay_order_id?: string } | null>(null)
   const itemsQuery = useQuery({
     queryKey: ['pharmacy-dispense-items', dispense?.id, facilityId],
     queryFn: () => pharmacyService.listDispenseItems(dispense?.id ?? '', facilityId),
@@ -63,10 +65,46 @@ export default function PharmacyDispenseModal({ item, onClose, onDone }: Props) 
     onError: value => setError(value instanceof Error ? value.message : 'Unable to prepare fulfillment'),
   })
 
-  const confirmMutation = useMutation({
-    mutationFn: () => pharmacyService.confirmDispense(dispense?.id ?? '', facilityId, true),
-    onSuccess: result => { setDispense(result); setError(null); qc.invalidateQueries({ queryKey: ['pharmacy'] }) },
-    onError: value => setError(value instanceof Error ? value.message : 'Unable to confirm dispensing'),
+  const billMutation = useMutation({
+    mutationFn: () => {
+      if (!dispense?.id) throw new Error('Start the dispense first')
+      const lineItems = (itemsQuery.data ?? []).map(item => ({
+        dispense_item_id: item.id,
+        name: item.prescribed_name_snapshot,
+        mfr: '',
+        batch: '',
+        expiry: '',
+        qty: Number(item.internal_confirmed_quantity),
+        mrp: 0,
+        gst_pct: 0,
+        dis_pct: 0,
+        total: 0,
+      }))
+      return pharmacyService.bill(item.id, { line_items: lineItems, discount: 0, payment_method: paymentMethod })
+    },
+    onSuccess: result => {
+      setInvoice(result)
+      setError(null)
+      if (result.status === 'paid') {
+        setDispense(current => current ? { ...current, status: 'CONFIRMED', billing_status: 'AUTHORIZED' } : current)
+      }
+      qc.invalidateQueries({ queryKey: ['pharmacy'] })
+    },
+    onError: value => setError(value instanceof Error ? value.message : 'Unable to create pharmacy invoice'),
+  })
+
+  const verifyMutation = useMutation({
+    mutationFn: () => pharmacyService.verifyPayment(item.id),
+    onSuccess: result => {
+      if (result.success) {
+        setInvoice(current => current ? { ...current, status: 'paid' } : current)
+        setDispense(current => current ? { ...current, status: 'CONFIRMED', billing_status: 'AUTHORIZED' } : current)
+        qc.invalidateQueries({ queryKey: ['pharmacy'] })
+      } else {
+        setError(result.reason ?? 'Payment is not captured yet')
+      }
+    },
+    onError: value => setError(value instanceof Error ? value.message : 'Unable to verify payment'),
   })
 
   const cancelMutation = useMutation({
@@ -122,13 +160,15 @@ export default function PharmacyDispenseModal({ item, onClose, onDone }: Props) 
             )) : <p className="px-4 py-8 text-center text-sm text-slate-500">Prescription items will appear after intake validation.</p>}
           </div>
 
-          {dispense && <div className="flex items-center gap-3 rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900"><CheckCircle2 className="h-5 w-5 shrink-0" aria-hidden="true" /> Dispense {dispense.status.toLowerCase().replaceAll('_', ' ')}. {dispense.status === 'CONFIRMED' ? 'Stock and ledger updated.' : 'Stock is unchanged until confirmed dispensing.'}</div>}
+          {dispense && <div className="flex items-center gap-3 rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900"><CheckCircle2 className="h-5 w-5 shrink-0" aria-hidden="true" /> Dispense {dispense.status.toLowerCase().replaceAll('_', ' ')}. {dispense.status === 'CONFIRMED' ? 'Stock and ledger updated.' : 'Stock is unchanged until confirmed payment.'}</div>}
+          {dispense && (dispense.status === 'READY_FOR_BILLING' || dispense.status === 'PARTIALLY_FULFILLED') && !invoice && <div className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white px-4 py-3"><div><p className="text-sm font-semibold text-slate-900">Pharmacy payment</p><p className="text-xs text-slate-500">Only hospital-supplied quantities will be invoiced.</p></div><label className="flex items-center gap-2 text-sm text-slate-700"><CreditCard className="h-4 w-4" aria-hidden="true" /><select value={paymentMethod} onChange={event => setPaymentMethod(event.target.value as 'cash' | 'online')} className="rounded-md border border-slate-300 px-2 py-1.5"><option value="cash">Cash</option><option value="online">Online</option></select></label></div>}
+          {invoice && <div className="flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><span>Invoice {invoice.status === 'paid' ? 'paid' : 'awaiting payment'}: ₹{Number(invoice.total).toFixed(2)}</span>{invoice.status !== 'paid' && <button onClick={() => verifyMutation.mutate()} disabled={verifyMutation.isPending} className="rounded-md border border-amber-400 px-3 py-1.5 font-semibold hover:bg-amber-100 disabled:opacity-50">{verifyMutation.isPending ? 'Checking…' : 'Verify payment'}</button>}</div>}
           {error && <div className="flex items-center gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertCircle className="h-5 w-5 shrink-0" aria-hidden="true" /> {error}</div>}
         </div>
 
         <footer className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
           <button onClick={close} className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-          {!dispense ? <button onClick={() => startMutation.mutate()} disabled={!facilityId || !locationId || startMutation.isPending} className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50">{startMutation.isPending ? 'Starting…' : 'Start review'}</button> : dispense.status === 'DRAFT' || dispense.status === 'VALIDATED' ? <button onClick={() => prepareMutation.mutate()} disabled={prepareMutation.isPending || validateMutation.isPending} className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50">{prepareMutation.isPending ? 'Preparing stock…' : 'Validate and reserve FEFO stock'}</button> : dispense.status === 'READY_FOR_BILLING' || dispense.status === 'PARTIALLY_FULFILLED' ? <><button onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending} className="rounded-md border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Cancel billing</button><button onClick={() => confirmMutation.mutate()} disabled={confirmMutation.isPending} className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">{confirmMutation.isPending ? 'Confirming…' : 'Confirm dispense'}</button></> : <button onClick={onDone} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Close workspace</button>}
+          {!dispense ? <button onClick={() => startMutation.mutate()} disabled={!facilityId || !locationId || startMutation.isPending} className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50">{startMutation.isPending ? 'Starting…' : 'Start review'}</button> : dispense.status === 'DRAFT' || dispense.status === 'VALIDATED' ? <button onClick={() => prepareMutation.mutate()} disabled={prepareMutation.isPending || validateMutation.isPending} className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50">{prepareMutation.isPending ? 'Preparing stock…' : 'Validate and reserve FEFO stock'}</button> : dispense.status === 'READY_FOR_BILLING' || dispense.status === 'PARTIALLY_FULFILLED' ? <><button onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending || billMutation.isPending} className="rounded-md border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Cancel billing</button>{!invoice ? <button onClick={() => billMutation.mutate()} disabled={billMutation.isPending || itemsQuery.isLoading} className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">{billMutation.isPending ? 'Creating invoice…' : 'Create invoice'}</button> : invoice.status === 'paid' ? <button onClick={onDone} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Close workspace</button> : <button onClick={() => verifyMutation.mutate()} disabled={verifyMutation.isPending} className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50">{verifyMutation.isPending ? 'Checking…' : 'Check payment'}</button>}</> : <button onClick={onDone} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Close workspace</button>}
         </footer>
       </section>
     </div>

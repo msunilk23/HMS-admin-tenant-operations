@@ -51,6 +51,14 @@ def test_p28_dispensing_tables_and_constraints():
         constraint.name == "uq_invoices_pharmacy_dispense"
         for constraint in Invoice.__table__.constraints
     )
+    assert any(
+        foreign_key.target_fullname == "pharmacy_dispenses.id"
+        for foreign_key in Invoice.__table__.c.pharmacy_dispense_id.foreign_keys
+    )
+    assert any(
+        foreign_key.target_fullname == "invoices.id"
+        for foreign_key in PharmacyDispense.__table__.c.invoice_id.foreign_keys
+    )
 
 
 def test_prescription_has_version_and_no_substitution_policy():
