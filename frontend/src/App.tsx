@@ -11,6 +11,7 @@ import NurseVitalsPage from '@/features/nurse/NurseVitalsPage'
 import RosterPage from '@/features/nurse/RosterPage'
 import ConsultationPage from '@/features/doctor/ConsultationPage'
 import PrescriptionPage from '@/features/doctor/PrescriptionPage'
+import LabResultsPage from '@/features/doctor/LabResultsPage'
 import BillingPage from '@/features/billing/BillingPage'
 import PosScreen from '@/features/billing/PosScreen'
 import DoctorsAdminPage from '@/features/admin/DoctorsAdminPage'
@@ -114,6 +115,7 @@ export default function App() {
             <Route path="/doctor/consultation" element={<RoleGuard allowed={DOCTOR}><ConsultationPage /></RoleGuard>} />
             <Route path="/doctor/consultation/:visitId" element={<RoleGuard allowed={DOCTOR}><ConsultationPage /></RoleGuard>} />
             <Route path="/doctor/prescription/:visitId" element={<RoleGuard allowed={DOCTOR}><PrescriptionPage /></RoleGuard>} />
+            <Route path="/doctor/lab-results" element={<RoleGuard allowed={DOCTOR}><LabResultsPage /></RoleGuard>} />
             <Route path="/lab" element={<FeatureGuard feature="lab"><RoleGuard allowed={LAB}><LabPage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><PharmacyPage /></RoleGuard></FeatureGuard>} />
             <Route path="/admin/pharmacy/purchase-orders" element={<RoleGuard allowed={['hospital_admin', 'store_manager']}><PurchaseOrderPage /></RoleGuard>} />

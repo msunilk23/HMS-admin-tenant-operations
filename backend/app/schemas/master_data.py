@@ -238,3 +238,43 @@ class MedicineImportItem(BaseModel):
     strength: Optional[str] = None
     dosage_form: Optional[str] = None
     instructions: Optional[str] = None
+
+
+class LabTestMasterRead(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    category: Optional[str] = None
+    sample_type: Optional[str] = None
+    description: Optional[str] = None
+    price: float
+    unit: Optional[str] = None
+    reference_range: Optional[str] = None
+    is_active: bool
+    model_config = {"from_attributes": True}
+
+
+class LabTestMasterCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=200)
+    category: Optional[str] = Field(default=None, max_length=100)
+    sample_type: Optional[str] = Field(default=None, max_length=100)
+    description: Optional[str] = None
+    price: float = Field(ge=0.0)
+    unit: Optional[str] = Field(default=None, max_length=50)
+    reference_range: Optional[str] = Field(default=None, max_length=200)
+
+
+class LabTestMasterUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    category: Optional[str] = Field(default=None, max_length=100)
+    sample_type: Optional[str] = Field(default=None, max_length=100)
+    description: Optional[str] = None
+    price: Optional[float] = Field(default=None, ge=0.0)
+    unit: Optional[str] = Field(default=None, max_length=50)
+    reference_range: Optional[str] = Field(default=None, max_length=200)
+    is_active: Optional[bool] = None
+
+
+class LabTestMasterImportItem(LabTestMasterCreate):
+    pass

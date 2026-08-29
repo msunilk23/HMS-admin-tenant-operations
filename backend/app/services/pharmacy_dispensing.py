@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.tenant.inventory_batch import InventoryBatch
+from app.models.tenant.invoice import Invoice, Refund
 from app.models.tenant.pharmacy_dispense import PharmacyDispense, PharmacyDispenseAllocation, PharmacyDispenseItem, PharmacyStockReservation
 from app.models.tenant.stock_transaction import StockTransaction
 from app.models.tenant.pharmacy_location import PharmacyLocation
@@ -466,8 +467,29 @@ async def release_dispense_reservations(
     ).with_for_update())
     if dispense is None:
         raise ValueError("Pharmacy dispense not found")
-    if dispense.status in {"CONFIRMED", "CANCELLED", "EXPIRED"}:
+    if dispense.status == "CONFIRMED":
+        raise ValueError("Medicine has already been dispensed. Use patient return workflow.")
+    if dispense.status in {"CANCELLED", "EXPIRED"}:
         return dispense
+
+    invoice = None
+    if dispense.invoice_id is not None:
+        invoice = await session.get(Invoice, dispense.invoice_id)
+    if invoice is not None and invoice.status == "paid" and dispense.billing_status == "AUTHORIZED":
+        invoice.status = "refunded"
+        invoice.paid_amount = 0.0
+        if not invoice.receipt_number:
+            invoice.receipt_number = f"REF-{datetime.now(timezone.utc):%Y%m%d}-{str(invoice.id)[:8].upper()}"
+        existing_refund = await session.scalar(select(Refund).where(Refund.invoice_id == invoice.id))
+        if existing_refund is None:
+            session.add(Refund(
+                id=uuid.uuid4(),
+                invoice_id=invoice.id,
+                amount=float(invoice.total),
+                reason=reason,
+                refunded_at=datetime.now(timezone.utc),
+            ))
+
     reservations = (await session.execute(select(PharmacyStockReservation).where(
         PharmacyStockReservation.dispense_id == dispense.id,
         PharmacyStockReservation.status == "ACTIVE",
@@ -504,12 +526,33 @@ async def expire_stock_reservations(
     released_by: uuid.UUID | None = None,
 ) -> int:
     current_time = now or datetime.now(timezone.utc)
-    reservations = (await session.execute(select(PharmacyStockReservation).where(
-        PharmacyStockReservation.tenant_id == tenant_id,
-        PharmacyStockReservation.status == "ACTIVE",
-        PharmacyStockReservation.expires_at <= current_time,
-    ))).scalars().all()
+    reservations = (await session.execute(
+        select(PharmacyStockReservation)
+        .where(
+            PharmacyStockReservation.tenant_id == tenant_id,
+            PharmacyStockReservation.status == "ACTIVE",
+            PharmacyStockReservation.expires_at <= current_time,
+        )
+        .order_by(PharmacyStockReservation.id)
+    )).scalars().all()
+    if not reservations:
+        return 0
+
+    released_count = 0
+    affected_dispenses: dict[uuid.UUID, PharmacyDispense] = {}
     for reservation in reservations:
+        dispense = await session.scalar(select(PharmacyDispense).where(
+            PharmacyDispense.id == reservation.dispense_id,
+            PharmacyDispense.tenant_id == tenant_id,
+        ).with_for_update())
+        if dispense is not None:
+            affected_dispenses.setdefault(reservation.dispense_id, dispense)
+        invoice = None
+        if dispense is not None and dispense.invoice_id is not None:
+            invoice = await session.get(Invoice, dispense.invoice_id)
+        if dispense is not None and dispense.billing_status == "AUTHORIZED":
+            if invoice is None or invoice.status == "paid":
+                continue
         await release_stock_reservation(
             session,
             reservation_id=reservation.id,
@@ -519,8 +562,29 @@ async def expire_stock_reservations(
             reason="Reservation expired",
             status="EXPIRED",
         )
+        released_count += 1
+
+    for dispense in affected_dispenses.values():
+        if dispense.status in {"CONFIRMED", "CANCELLED", "EXPIRED"}:
+            continue
+        invoice = None
+        if dispense.invoice_id is not None:
+            invoice = await session.get(Invoice, dispense.invoice_id)
+        if dispense.billing_status == "AUTHORIZED":
+            if invoice is None or invoice.status == "paid":
+                continue
+        dispense.status = "EXPIRED"
+        dispense.billing_status = "EXPIRED"
+        dispense.cancelled_at = datetime.now(timezone.utc)
+        dispense.cancelled_by = released_by
+        dispense.cancellation_reason = "Reservation expired"
+        dispense.updated_by = released_by
+        if dispense.pharmacy_queue_id is not None:
+            queue = await session.scalar(select(PharmacyQueue).where(PharmacyQueue.id == dispense.pharmacy_queue_id))
+            if queue is not None:
+                queue.status = "cancelled"
     await session.flush()
-    return len(reservations)
+    return released_count
 
 
 async def _confirm_internal_fulfillment(
@@ -769,6 +833,49 @@ async def validate_billable_dispense_quantities(
     return confirmed_total
 
 
+async def authorize_pharmacy_billing(
+    session: AsyncSession,
+    *,
+    dispense_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    facility_id: uuid.UUID,
+    confirmed_by: uuid.UUID | None,
+    invoice_id: uuid.UUID | None = None,
+) -> PharmacyDispense:
+    """Server-trust payment completion as billing authorization without consuming stock."""
+    dispense = await session.scalar(
+        select(PharmacyDispense).where(
+            PharmacyDispense.id == dispense_id,
+            PharmacyDispense.tenant_id == tenant_id,
+            PharmacyDispense.facility_id == facility_id,
+        ).with_for_update()
+    )
+    if dispense is None:
+        raise ValueError("Pharmacy dispense not found")
+    if dispense.status == "CONFIRMED":
+        dispense.billing_status = "AUTHORIZED"
+        return dispense
+    if dispense.status not in {"READY_FOR_BILLING", "PARTIALLY_FULFILLED"}:
+        raise ValueError("Pharmacy dispense is not ready for billing authorization")
+
+    invoice = None
+    if invoice_id is not None:
+        invoice = await session.get(Invoice, invoice_id)
+    elif dispense.invoice_id is not None:
+        invoice = await session.get(Invoice, dispense.invoice_id)
+    if invoice is None:
+        raise ValueError("Pharmacy invoice is required before billing can be authorized")
+    if invoice.status != "paid":
+        raise ValueError("Pharmacy billing must be paid before it can be authorized")
+    if float(invoice.paid_amount) < float(invoice.total):
+        raise ValueError("Pharmacy billing must be fully paid before it can be authorized")
+
+    dispense.billing_status = "AUTHORIZED"
+    dispense.updated_by = confirmed_by
+    await session.flush()
+    return dispense
+
+
 async def confirm_dispense_stock_consumption(
     session: AsyncSession,
     *,
@@ -778,7 +885,7 @@ async def confirm_dispense_stock_consumption(
     confirmed_by: uuid.UUID | None,
     billing_authorized: bool,
 ) -> PharmacyDispense:
-    """Consume active reservations after an external billing authorization."""
+    """Consume active reservations only after a paid, server-authorized billing state."""
     if not billing_authorized:
         raise ValueError("Billing authorization is required before stock consumption")
 
@@ -796,6 +903,25 @@ async def confirm_dispense_stock_consumption(
         return dispense
     if dispense.status not in {"READY_FOR_BILLING", "PARTIALLY_FULFILLED"}:
         raise ValueError("Pharmacy dispense is not ready for confirmation")
+
+    invoice = None
+    if dispense.invoice_id is not None:
+        invoice = await session.get(Invoice, dispense.invoice_id)
+
+    if dispense.billing_status != "AUTHORIZED":
+        if invoice is None:
+            raise ValueError("Pharmacy dispense has not been server-authorized for stock consumption")
+        if invoice.status != "paid":
+            raise ValueError("Pharmacy invoice must be paid before stock can be consumed")
+        if float(invoice.paid_amount) < float(invoice.total):
+            raise ValueError("Pharmacy invoice must be fully paid before stock can be consumed")
+        raise ValueError("Pharmacy dispense has not been server-authorized for stock consumption")
+
+    if invoice is not None:
+        if invoice.status != "paid":
+            raise ValueError("Pharmacy invoice must be paid before stock can be consumed")
+        if float(invoice.paid_amount) < float(invoice.total):
+            raise ValueError("Pharmacy invoice must be fully paid before stock can be consumed")
 
     allocations = (await session.execute(
         select(PharmacyDispenseAllocation).where(

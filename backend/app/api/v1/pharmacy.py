@@ -50,7 +50,7 @@ from app.services.inventory_service import create_inventory_from_grn_item, recor
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.websocket.manager import ws_manager
 from app.services.audit_service import record_audit
-from app.services.pharmacy_dispensing import approve_pharmacy_substitution, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, prepare_billable_pharmacy_line_items, propose_pharmacy_allocations, release_dispense_reservations, release_stock_reservation, resolve_billable_pharmacy_line_items, start_pharmacy_dispense, validate_billable_dispense_quantities, validate_pharmacy_dispense
+from app.services.pharmacy_dispensing import approve_pharmacy_substitution, authorize_pharmacy_billing, confirm_dispense_stock_consumption, confirm_full_internal_fulfillment, confirm_outside_purchase_fulfillment, confirm_partial_internal_fulfillment, create_stock_reservations, prepare_billable_pharmacy_line_items, propose_pharmacy_allocations, release_dispense_reservations, release_stock_reservation, resolve_billable_pharmacy_line_items, start_pharmacy_dispense, validate_billable_dispense_quantities, validate_pharmacy_dispense
 
 logger = logging.getLogger(__name__)
 
@@ -1574,16 +1574,15 @@ async def bill_pharmacy_dispense(
             invoice.status, invoice.payment_method, invoice.paid_at,
         )
         try:
-            await confirm_dispense_stock_consumption(
+            authorized = await authorize_pharmacy_billing(
                 session,
                 dispense_id=dispense.id,
                 tenant_id=tenant_id,
                 facility_id=dispense.facility_id,
                 confirmed_by=uuid.UUID(str(current_user["sub"])),
-                billing_authorized=True,
+                invoice_id=invoice.id,
             )
-            record_audit(session, current_user=current_user, action="PHARMACY_DISPENSE_AUTHORIZED", resource_type="pharmacy_dispense", resource_id=dispense.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"invoice_id": str(invoice.id), "billing_status": dispense.billing_status, "status": dispense.status})
-            record_audit(session, current_user=current_user, action="PHARMACY_DISPENSE_CONFIRMED", resource_type="pharmacy_dispense", resource_id=dispense.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"invoice_id": str(invoice.id), "status": dispense.status})
+            record_audit(session, current_user=current_user, action="PHARMACY_DISPENSE_AUTHORIZED", resource_type="pharmacy_dispense", resource_id=authorized.id, patient_id=authorized.patient_id, visit_id=authorized.visit_id, new_value={"invoice_id": str(invoice.id), "billing_status": authorized.billing_status, "status": authorized.status})
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -1740,13 +1739,13 @@ async def verify_pharmacy_payment(
         dispense = await session.get(PharmacyDispense, invoice.pharmacy_dispense_id) if invoice.pharmacy_dispense_id else None
         if dispense is not None:
             try:
-                await confirm_dispense_stock_consumption(
+                await authorize_pharmacy_billing(
                     session,
                     dispense_id=dispense.id,
                     tenant_id=dispense.tenant_id,
                     facility_id=dispense.facility_id,
                     confirmed_by=uuid.UUID(str(current_user["sub"])),
-                    billing_authorized=True,
+                    invoice_id=invoice.id,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1775,13 +1774,13 @@ async def verify_pharmacy_payment(
     dispense = await session.get(PharmacyDispense, invoice.pharmacy_dispense_id) if invoice.pharmacy_dispense_id else None
     if dispense is not None:
         try:
-            await confirm_dispense_stock_consumption(
+            await authorize_pharmacy_billing(
                 session,
                 dispense_id=dispense.id,
                 tenant_id=dispense.tenant_id,
                 facility_id=dispense.facility_id,
                 confirmed_by=uuid.UUID(str(current_user["sub"])),
-                billing_authorized=True,
+                invoice_id=invoice.id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -9,6 +9,7 @@ from app.models.tenant.dosage_form import DosageForm
 from app.models.tenant.generic_medicine import GenericMedicine
 from app.models.tenant.hospital_formulary import HospitalFormulary
 from app.models.tenant.icd10_code import ICD10Code
+from app.models.tenant.lab_test_master import LabTestMaster
 from app.models.tenant.manufacturer import Manufacturer
 from app.models.tenant.medicine_master import MedicineMaster
 from app.models.tenant.medicine_product import MedicineProduct
@@ -28,6 +29,10 @@ from app.schemas.master_data import (
     HospitalFormularyUpdate,
     ICD10ImportItem,
     ICD10Read,
+    LabTestMasterCreate,
+    LabTestMasterImportItem,
+    LabTestMasterRead,
+    LabTestMasterUpdate,
     MedicineImportItem,
     MedicineRead,
     ManufacturerCreate,
@@ -960,6 +965,194 @@ async def import_medicines(items: list[MedicineImportItem], session: AsyncSessio
             existing.is_active = True
         else:
             existing = MedicineMaster(id=uuid.uuid4(), **item.model_dump())
+            session.add(existing)
+        result.append(existing)
+    await session.commit()
+    return result
+
+
+# ======================== LAB TEST MASTER ========================
+
+def _lab_test_master_values(item: LabTestMaster | None) -> dict | None:
+    if item is None:
+        return None
+    return {
+        "code": item.code,
+        "name": item.name,
+        "category": item.category,
+        "sample_type": item.sample_type,
+        "description": item.description,
+        "price": float(item.price),
+        "unit": item.unit,
+        "reference_range": item.reference_range,
+        "is_active": item.is_active,
+    }
+
+
+@router.get("/lab-tests", response_model=list[LabTestMasterRead])
+async def search_lab_tests(
+    q: str = Query("", max_length=100),
+    limit: int = Query(20, ge=1, le=100),
+    include_inactive: bool = False,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_role("doctor", "nurse", "lab_technician", "pharmacist", "hospital_admin")),
+):
+    """Search lab tests by code, name, or category."""
+    term = q.strip()
+    stmt = select(LabTestMaster)
+    if not include_inactive:
+        stmt = stmt.where(LabTestMaster.is_active == True)  # noqa: E712
+    if term:
+        like = f"%{term}%"
+        stmt = stmt.where(
+            or_(
+                LabTestMaster.code.ilike(like),
+                LabTestMaster.name.ilike(like),
+                LabTestMaster.category.ilike(like),
+            )
+        )
+    return (await session.execute(stmt.order_by(LabTestMaster.name).limit(limit))).scalars().all()
+
+
+@router.get("/lab-tests/{test_id}", response_model=LabTestMasterRead)
+async def get_lab_test(
+    test_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_role("doctor", "nurse", "lab_technician", "pharmacist", "hospital_admin")),
+):
+    """Get a specific lab test by ID."""
+    item = await session.get(LabTestMaster, test_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Lab test not found")
+    return item
+
+
+@router.post("/lab-tests", response_model=LabTestMasterRead, status_code=201)
+async def create_lab_test(
+    payload: LabTestMasterCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
+):
+    """Create a new lab test master record."""
+    code = payload.code.strip().upper()
+    existing = await session.scalar(select(LabTestMaster).where(LabTestMaster.code == code))
+    if existing:
+        raise HTTPException(status_code=409, detail="Lab test code already exists")
+    item = LabTestMaster(
+        code=code,
+        name=payload.name.strip(),
+        category=payload.category.strip() if payload.category else None,
+        sample_type=payload.sample_type.strip() if payload.sample_type else None,
+        description=payload.description,
+        price=payload.price,
+        unit=payload.unit,
+        reference_range=payload.reference_range,
+    )
+    session.add(item)
+    await session.flush()
+    record_audit(
+        session,
+        current_user=current_user,
+        action="CREATE",
+        resource_type="lab_test_master",
+        resource_id=item.id,
+        new_value=_lab_test_master_values(item),
+    )
+    await session.commit()
+    return item
+
+
+@router.put("/lab-tests/{test_id}", response_model=LabTestMasterRead)
+async def update_lab_test(
+    test_id: uuid.UUID,
+    payload: LabTestMasterUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
+):
+    """Update a lab test master record."""
+    item = await session.get(LabTestMaster, test_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Lab test not found")
+    old_value = _lab_test_master_values(item)
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        if isinstance(value, str):
+            value = value.strip() or None
+        setattr(item, field, value)
+    record_audit(
+        session,
+        current_user=current_user,
+        action="UPDATE",
+        resource_type="lab_test_master",
+        resource_id=item.id,
+        old_value=old_value,
+        new_value=_lab_test_master_values(item),
+    )
+    await session.commit()
+    return item
+
+
+@router.post("/lab-tests/{test_id}/deactivate", response_model=LabTestMasterRead)
+async def deactivate_lab_test(
+    test_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_permission("PHARMACY_MASTER_CREATE")),
+):
+    """Deactivate a lab test (cannot be ordered by doctors, but historical records remain)."""
+    item = await session.get(LabTestMaster, test_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Lab test not found")
+    if item.is_active:
+        item.is_active = False
+        record_audit(
+            session,
+            current_user=current_user,
+            action="DEACTIVATE",
+            resource_type="lab_test_master",
+            resource_id=item.id,
+            old_value={"is_active": True},
+            new_value={"is_active": False},
+        )
+        await session.commit()
+    return item
+
+
+@router.post("/lab-tests/import", response_model=list[LabTestMasterRead])
+async def import_lab_tests(
+    items: list[LabTestMasterImportItem],
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("hospital_admin")),
+):
+    """Bulk import lab test master data."""
+    result = []
+    for item in items:
+        code = item.code.strip().upper()
+        existing = (
+            await session.execute(
+                select(LabTestMaster).where(LabTestMaster.code == code)
+            )
+        ).scalar_one_or_none()
+        if existing:
+            existing.name = item.name.strip()
+            existing.category = item.category.strip() if item.category else None
+            existing.sample_type = item.sample_type.strip() if item.sample_type else None
+            existing.description = item.description
+            existing.price = item.price
+            existing.unit = item.unit
+            existing.reference_range = item.reference_range
+            existing.is_active = True
+        else:
+            existing = LabTestMaster(
+                id=uuid.uuid4(),
+                code=code,
+                name=item.name.strip(),
+                category=item.category.strip() if item.category else None,
+                sample_type=item.sample_type.strip() if item.sample_type else None,
+                description=item.description,
+                price=item.price,
+                unit=item.unit,
+                reference_range=item.reference_range,
+            )
             session.add(existing)
         result.append(existing)
     await session.commit()

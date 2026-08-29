@@ -13,6 +13,7 @@ from app.core.dependencies import require_role, require_feature
 from app.db.engine import get_session
 from app.models.tenant.doctor import Doctor
 from app.models.tenant.lab_order import LabOrder, LabResult, LAB_STATUS_TRANSITIONS, can_transition_lab_order
+from app.models.tenant.lab_test_master import LabTestMaster
 from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit
 from app.schemas.lab import LabOrderCreate, LabOrderRead, LabResultCreate, LabResultRead
@@ -44,11 +45,37 @@ async def create_lab_order(
         raise HTTPException(status_code=404, detail="Visit not found")
 
     patient = await session.get(Patient, visit.patient_id)
+    
+    # Validate and enrich test items with metadata from master
+    enriched_tests = []
+    for test_item in payload.tests:
+        test_data = test_item.model_dump()
+        
+        # If test_id is provided, validate and capture metadata
+        if test_item.test_id:
+            test_master = await session.get(LabTestMaster, test_item.test_id)
+            if not test_master:
+                raise HTTPException(status_code=404, detail=f"Lab test not found: {test_item.test_id}")
+            if not test_master.is_active:
+                raise HTTPException(status_code=400, detail=f"Lab test is inactive: {test_master.code}")
+            
+            # Snapshot test metadata at order time for audit trail and billing
+            test_data["test_id"] = str(test_item.test_id)
+            test_data["test_code"] = test_master.code
+            test_data["test_name"] = test_master.name
+            test_data["category"] = test_master.category
+            test_data["sample_type"] = test_master.sample_type
+            test_data["price"] = float(test_master.price)  # Server-authoritative pricing
+        elif not test_item.test:
+            raise HTTPException(status_code=400, detail="Either test_id or test must be provided")
+        
+        enriched_tests.append(test_data)
+    
     order = LabOrder(
         id=uuid.uuid4(),
         visit_id=payload.visit_id,
         uhid=patient.uhid if patient else None,
-        tests=[t.model_dump() for t in payload.tests],
+        tests=enriched_tests,
         status="ordered",
     )
     session.add(order)
@@ -236,6 +263,8 @@ async def verify_lab_results(
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("lab_technician", "hospital_admin")),
 ):
+    from app.services.lab_billing_service import create_lab_invoice_if_needed
+    
     order = await session.get(LabOrder, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Lab order not found")
@@ -259,6 +288,24 @@ async def verify_lab_results(
         old_value={"status": "result_ready"},
         new_value={"status": "verified", "verified_by_user_id": current_user.get("sub")},
     )
+    
+    # Create billing invoice for lab charges if needed
+    visit = await session.get(Visit, order.visit_id)
+    try:
+        await create_lab_invoice_if_needed(
+            session,
+            lab_order_id=order_id,
+            visit_id=order.visit_id,
+            tests=order.tests or [],
+            patient_id=visit.patient_id if visit else None,
+            current_user=current_user,
+        )
+    except Exception as e:
+        # Log billing error but don't fail lab verification
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to create lab invoice for order {order_id}: {str(e)}", exc_info=True)
+    
     await session.commit()
     await session.refresh(order)
     return await _enrich_order(order, session)

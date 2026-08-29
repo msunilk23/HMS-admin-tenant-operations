@@ -93,7 +93,40 @@ def require_role(*roles: str):
 
 
 def require_permission(*permissions: str):
-    """Dependency factory for live role-permission checks."""
+    """Compatibility wrapper for dependency and direct service authorization checks."""
+    if permissions and not all(isinstance(permission, str) for permission in permissions):
+        session = permissions[0]
+        user_id = permissions[1]
+        requested_permissions = permissions[2:]
+        if not requested_permissions:
+            raise ValueError("A permission code is required")
+
+        async def _direct_check() -> bool:
+            from app.models.public.user import User
+            from app.models.public.permission import Permission, RolePermission
+
+            user = await session.get(User, str(user_id)) if user_id is not None else None
+            if user is None:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not found")
+            role = getattr(user, "role", None)
+            if not role or role == "super_admin":
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+            allowed = await session.scalar(
+                select(Permission.code)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(
+                    RolePermission.role == role,
+                    Permission.code.in_(requested_permissions),
+                    Permission.is_active == True,  # noqa: E712
+                )
+                .limit(1)
+            )
+            if allowed is None:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+            return True
+
+        return _direct_check()
 
     async def _check(
         current_user: Annotated[dict, Depends(get_current_user)],

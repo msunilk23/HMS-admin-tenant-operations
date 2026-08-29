@@ -8,6 +8,7 @@ from app.models.tenant.vitals import Vitals
 from app.models.tenant.consultation import Consultation
 from app.models.tenant.prescription import Prescription, PrescriptionItem
 from app.models.tenant.lab_order import LabOrder, LabResult
+from app.models.tenant.lab_test_master import LabTestMaster
 from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.invoice import Invoice, Payment, Refund
 from app.models.tenant.document import DocumentVersion, DocumentVersionCounter
@@ -35,6 +36,13 @@ from app.models.tenant.inventory_batch import InventoryBatch
 from app.models.tenant.stock_transaction import StockTransaction
 from app.models.tenant.pharmacy_dispense import PharmacyDispense, PharmacyDispenseAllocation, PharmacyDispenseItem, PharmacyStockReservation
 from app.models.tenant.requisition import Requisition
+from app.models.tenant.returns import PatientReturn, PatientReturnItem, SupplierReturn, SupplierReturnItem
+from app.models.tenant.p31_p34 import (
+    StockQuarantine, ProductRecall,
+    StockTransfer, StockTransferItem,
+    StockCount, CountDetail,
+    PharmacyAlert, PharmacyAuditTrail
+)
 
 __all__ = [
     "Department",
@@ -49,6 +57,7 @@ __all__ = [
     "PrescriptionItem",
     "LabOrder",
     "LabResult",
+    "LabTestMaster",
     "PharmacyQueue",
     "Invoice",
     "DocumentVersion",
@@ -83,4 +92,16 @@ __all__ = [
     "PharmacyDispenseAllocation",
     "PharmacyStockReservation",
     "Requisition",
+    "PatientReturn",
+    "PatientReturnItem",
+    "SupplierReturn",
+    "SupplierReturnItem",
+    "StockQuarantine",
+    "ProductRecall",
+    "StockTransfer",
+    "StockTransferItem",
+    "StockCount",
+    "CountDetail",
+    "PharmacyAlert",
+    "PharmacyAuditTrail",
 ]

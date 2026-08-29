@@ -18,6 +18,7 @@ from app.api.v1.pharmacy import router as pharmacy_router
 from app.api.v1.prescriptions import router as prescriptions_router
 from app.api.v1.queue import router as queue_router
 from app.api.v1.requisitions import router as requisitions_router
+from app.api.v1.returns import router as returns_router
 from app.api.v1.super_admin import router as super_admin_router
 from app.api.v1.tenants import router as tenants_router
 from app.api.v1.users import router as users_router
@@ -56,5 +57,6 @@ api_router.include_router(feedback_router, prefix="/feedback", tags=["feedback"]
 api_router.include_router(nurse_departments_router, prefix="/nurse-departments", tags=["nurse-departments"], **_tenant_guard)
 api_router.include_router(nurse_roster_router, prefix="/nurse-roster", tags=["nurse-roster"], **_tenant_guard)
 api_router.include_router(pharmacy_router, prefix="/pharmacy", tags=["pharmacy"], **_tenant_guard)
+api_router.include_router(returns_router, prefix="/returns", tags=["returns"], **_tenant_guard)
 api_router.include_router(lab_router, prefix="/lab", tags=["lab"], **_tenant_guard)
 api_router.include_router(requisitions_router, prefix="/indents", tags=["indents"], **_tenant_guard)

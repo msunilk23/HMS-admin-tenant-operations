@@ -13,6 +13,7 @@ class Invoice(Base, TimestampMixin):
     __tablename__ = "invoices"
     __table_args__ = (
         UniqueConstraint("pharmacy_dispense_id", name="uq_invoices_pharmacy_dispense"),
+        UniqueConstraint("lab_order_id", name="uq_invoices_lab_order_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -37,6 +38,7 @@ class Invoice(Base, TimestampMixin):
     source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="consultation")
     pharmacy_queue_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
     pharmacy_dispense_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("pharmacy_dispenses.id"), nullable=True, index=True)
+    lab_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("lab_orders.id"), nullable=True, index=True)
 
     @property
     def balance(self) -> float:
