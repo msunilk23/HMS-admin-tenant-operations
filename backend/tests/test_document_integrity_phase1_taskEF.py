@@ -66,12 +66,16 @@ async def _provision_schema(engine, schema: str):
     from app.models.tenant.doctor import Doctor
     from app.models.tenant.document import DocumentVersion, DocumentVersionCounter
     from app.models.tenant.invoice import Invoice
+    from app.models.tenant.lab_order import LabOrder
     from app.models.tenant.dosage_form import DosageForm
     from app.models.tenant.generic_medicine import GenericMedicine
     from app.models.tenant.manufacturer import Manufacturer
     from app.models.tenant.medicine_master import MedicineMaster
     from app.models.tenant.medicine_product import MedicineProduct
     from app.models.tenant.patient import Patient
+    from app.models.tenant.pharmacy_dispense import PharmacyDispense
+    from app.models.tenant.pharmacy_location import PharmacyLocation
+    from app.models.tenant.pharmacy_queue import PharmacyQueue
     from app.models.tenant.prescription import Prescription, PrescriptionItem
     from app.models.tenant.route import Route
     from app.models.tenant.visit import Visit
@@ -79,8 +83,9 @@ async def _provision_schema(engine, schema: str):
     tables = [
         Department.__table__, Doctor.__table__, Appointment.__table__,
         Patient.__table__, Visit.__table__, Consultation.__table__, MedicineMaster.__table__,
-        GenericMedicine.__table__, DosageForm.__table__, Route.__table__, Manufacturer.__table__, MedicineProduct.__table__, Invoice.__table__,
+        GenericMedicine.__table__, DosageForm.__table__, Route.__table__, Manufacturer.__table__, MedicineProduct.__table__, LabOrder.__table__, Invoice.__table__,
         Prescription.__table__, PrescriptionItem.__table__,
+        PharmacyLocation.__table__, PharmacyQueue.__table__, PharmacyDispense.__table__,
         DocumentVersion.__table__, DocumentVersionCounter.__table__,
         AuditLog.__table__,
     ]

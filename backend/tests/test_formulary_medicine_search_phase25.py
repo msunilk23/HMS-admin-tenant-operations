@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -28,6 +28,10 @@ def _compile_jsonb_as_json(type_, compiler, **kw):
 
 
 DOCTOR = {"sub": str(uuid.uuid4()), "role": "doctor", "tenant_schema": "tenant_a"}
+
+
+def _business_date():
+    return datetime.now(timezone.utc).date()
 
 
 @pytest_asyncio.fixture
@@ -154,11 +158,11 @@ async def test_search_excludes_future_expired_unapproved_and_inactive_records(se
             HospitalFormulary.is_approved.is_(True),
         )
     )
-    current_entry.effective_date = date.today() + timedelta(days=1)
+    current_entry.effective_date = _business_date() + timedelta(days=1)
     await session.commit()
     assert await search_formulary_medicines("", department_a.id, True, 20, session, DOCTOR) == []
     current_entry.effective_date = None
-    current_entry.expiry_date = date.today() - timedelta(days=1)
+    current_entry.expiry_date = _business_date() - timedelta(days=1)
     await session.commit()
     assert await search_formulary_medicines("", department_a.id, True, 20, session, DOCTOR) == []
 

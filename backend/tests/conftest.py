@@ -6,6 +6,7 @@ Provides fixtures for database, settings, and async session management.
 
 import os
 import pytest
+import pytest_asyncio
 from unittest.mock import patch, MagicMock
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
@@ -20,19 +21,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379")
 from app.core.config import settings
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an event loop for the test session."""
-    import asyncio
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest.fixture(scope="session")
+@pytest_asyncio.fixture
 async def async_engine():
     """Create async engine for test database."""
     engine = create_async_engine(
@@ -45,7 +34,7 @@ async def async_engine():
     await engine.dispose()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def async_session_maker(async_engine):
     """Create async session factory."""
     return async_sessionmaker(
@@ -56,7 +45,7 @@ def async_session_maker(async_engine):
     )
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def async_session(async_session_maker):
     """Provide a test async session."""
     async with async_session_maker() as session:

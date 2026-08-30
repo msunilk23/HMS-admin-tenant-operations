@@ -54,7 +54,8 @@ test.describe.serial('P28 pharmacy dispensing workflow', () => {
     await expect(page.getByRole('button', { name: /validate and reserve fefo stock/i })).toBeVisible()
     await page.getByRole('button', { name: /validate and reserve fefo stock/i }).click()
     await expect(page.getByText(/ready for billing/i)).toBeVisible()
-    await page.getByRole('button', { name: 'Confirm dispense' }).click()
+    await page.getByRole('button', { name: 'Create invoice' }).click()
+    await expect(page.getByText(/invoice paid/i)).toBeVisible()
     await expect(page.getByText(/stock and ledger updated/i)).toBeVisible()
 
     await page.reload()

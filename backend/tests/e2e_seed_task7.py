@@ -92,6 +92,23 @@ P28_PRESCRIPTION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-p
 P28_PRESCRIPTION_ITEM_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-prescription-item/task7")
 P28_QUEUE_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "https://example.test/p28-queue/task7")
 FACILITY_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-facility-a")
+P30_PATIENT_SINGLE_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-single-patient")
+P30_PATIENT_MULTI_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-patient")
+P30_SINGLE_VISIT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-single-visit")
+P30_MULTI_VISIT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-visit")
+P30_SINGLE_PRESCRIPTION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-single-prescription")
+P30_MULTI_PRESCRIPTION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-prescription")
+P30_SINGLE_ITEM_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-single-item")
+P30_MULTI_ITEM_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-item")
+P30_SINGLE_DISPENSE_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-single-dispense")
+P30_MULTI_DISPENSE_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-dispense")
+P30_SINGLE_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-single-batch")
+P30_MULTI_BATCH_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-batch-a")
+P30_MULTI_BATCH_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-batch-b")
+P30_SUPPLIER_BATCH_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-supplier-batch-a")
+P30_SUPPLIER_BATCH_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-supplier-batch-b")
+P30_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-location")
+P30_GRN_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-grn")
 
 
 def _assert_destructive_reset_allowed(database_url: str, command: str) -> None:
@@ -429,6 +446,101 @@ async def seed_p28_scenario():
     print(f"P28 E2E seed ready: {PHARMACIST_USERNAME} / {PHARMACIST_PASSWORD} / facility={facility_id} / location={PHARMACY_LOCATION_A_ID}")
 
 
+async def reset_p30_scenario():
+    from app.core.config import settings
+    _assert_destructive_reset_allowed(settings.DATABASE_URL, "reset_p30_scenario")
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    dispense_ids = [P30_SINGLE_DISPENSE_ID, P30_MULTI_DISPENSE_ID]
+    batch_ids = [P30_SINGLE_BATCH_ID, P30_MULTI_BATCH_A_ID, P30_MULTI_BATCH_B_ID, P30_SUPPLIER_BATCH_A_ID, P30_SUPPLIER_BATCH_B_ID]
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        await conn.execute(text("DELETE FROM patient_return_batch_allocations WHERE patient_return_item_id IN (SELECT id FROM patient_return_items WHERE return_id IN (SELECT id FROM patient_returns WHERE dispense_id = ANY(:ids)))"), {"ids": dispense_ids})
+        await conn.execute(text("DELETE FROM patient_return_items WHERE return_id IN (SELECT id FROM patient_returns WHERE dispense_id = ANY(:ids))"), {"ids": dispense_ids})
+        await conn.execute(text("DELETE FROM patient_returns WHERE dispense_id = ANY(:ids)"), {"ids": dispense_ids})
+        await conn.execute(text("DELETE FROM supplier_return_items WHERE supplier_return_id IN (SELECT id FROM supplier_returns WHERE goods_receipt_id = :grn)"), {"grn": P30_GRN_ID})
+        await conn.execute(text("DELETE FROM supplier_returns WHERE goods_receipt_id = :grn"), {"grn": P30_GRN_ID})
+        await conn.execute(text("DELETE FROM stock_transactions WHERE inventory_batch_id = ANY(:ids)"), {"ids": batch_ids})
+        await conn.execute(text("DELETE FROM pharmacy_dispense_allocations WHERE dispense_item_id IN (SELECT id FROM pharmacy_dispense_items WHERE dispense_id = ANY(:ids))"), {"ids": dispense_ids})
+        await conn.execute(text("DELETE FROM pharmacy_dispense_items WHERE dispense_id = ANY(:ids)"), {"ids": dispense_ids})
+        await conn.execute(text("DELETE FROM pharmacy_dispenses WHERE id = ANY(:ids)"), {"ids": dispense_ids})
+        await conn.execute(text("DELETE FROM prescription_items WHERE prescription_id IN (:single, :multi)"), {"single": P30_SINGLE_PRESCRIPTION_ID, "multi": P30_MULTI_PRESCRIPTION_ID})
+        await conn.execute(text("DELETE FROM prescriptions WHERE id IN (:single, :multi)"), {"single": P30_SINGLE_PRESCRIPTION_ID, "multi": P30_MULTI_PRESCRIPTION_ID})
+        await conn.execute(text("DELETE FROM inventory_batches WHERE id = ANY(:ids)"), {"ids": batch_ids})
+        await conn.execute(text("DELETE FROM goods_receipts WHERE id = :id"), {"id": P30_GRN_ID})
+        await conn.execute(text("DELETE FROM visits WHERE id IN (:single, :multi)"), {"single": P30_SINGLE_VISIT_ID, "multi": P30_MULTI_VISIT_ID})
+        await conn.execute(text("DELETE FROM patients WHERE id IN (:single, :multi)"), {"single": P30_PATIENT_SINGLE_ID, "multi": P30_PATIENT_MULTI_ID})
+        await conn.execute(text("DELETE FROM pharmacy_locations WHERE id = :id"), {"id": P30_LOCATION_ID})
+    await engine.dispose()
+
+
+async def seed_p30_scenario():
+    await reset_p30_scenario()
+    from app.core.config import settings
+    now = datetime.now(timezone.utc)
+    expiry = (now.replace(year=now.year + 1)).date()
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+    async with maker() as session:
+        await session.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        location = PharmacyLocation(id=P30_LOCATION_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, location_code="E2E-P30", location_name="E2E P30 Pharmacy", location_type="PHARMACY", active=True)
+        single_patient = Patient(id=P30_PATIENT_SINGLE_ID, uhid="E2E-P30-SINGLE", first_name="P30", last_name="Single", gender="female", phone="9000000030")
+        multi_patient = Patient(id=P30_PATIENT_MULTI_ID, uhid="E2E-P30-MULTI", first_name="P30", last_name="Multi", gender="male", phone="9000000031")
+        single_visit = Visit(id=P30_SINGLE_VISIT_ID, patient_id=P30_PATIENT_SINGLE_ID, uhid=single_patient.uhid, doctor_id=DOCTOR_ID, department_id=DEPARTMENT_ID, status="CONSULTATION_COMPLETED", arrived_at=now, registered_at=now)
+        multi_visit = Visit(id=P30_MULTI_VISIT_ID, patient_id=P30_PATIENT_MULTI_ID, uhid=multi_patient.uhid, doctor_id=DOCTOR_ID, department_id=DEPARTMENT_ID, status="CONSULTATION_COMPLETED", arrived_at=now, registered_at=now)
+        session.add_all([location, single_patient, multi_patient, single_visit, multi_visit])
+        await session.flush()
+        single_rx = Prescription(id=P30_SINGLE_PRESCRIPTION_ID, visit_id=P30_SINGLE_VISIT_ID, uhid=single_patient.uhid, status="finalized", version=1)
+        multi_rx = Prescription(id=P30_MULTI_PRESCRIPTION_ID, visit_id=P30_MULTI_VISIT_ID, uhid=multi_patient.uhid, status="finalized", version=1)
+        session.add_all([single_rx, multi_rx])
+        await session.flush()
+        session.add_all([
+            PrescriptionItem(id=P30_SINGLE_ITEM_ID, prescription_id=P30_SINGLE_PRESCRIPTION_ID, medicine_product_id=PRODUCT_A_ID, medicine="P30 Single Medicine", quantity="5", final_quantity="5"),
+            PrescriptionItem(id=P30_MULTI_ITEM_ID, prescription_id=P30_MULTI_PRESCRIPTION_ID, medicine_product_id=PRODUCT_A_ID, medicine="P30 Multi Medicine", quantity="6", final_quantity="6"),
+        ])
+        single_dispense = PharmacyDispense(id=P30_SINGLE_DISPENSE_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, prescription_id=P30_SINGLE_PRESCRIPTION_ID, prescription_version=1, visit_id=P30_SINGLE_VISIT_ID, patient_id=P30_PATIENT_SINGLE_ID, status="CONFIRMED", completed_at=now)
+        multi_dispense = PharmacyDispense(id=P30_MULTI_DISPENSE_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, prescription_id=P30_MULTI_PRESCRIPTION_ID, prescription_version=1, visit_id=P30_MULTI_VISIT_ID, patient_id=P30_PATIENT_MULTI_ID, status="CONFIRMED", completed_at=now)
+        session.add_all([single_dispense, multi_dispense])
+        await session.flush()
+        single_item = PharmacyDispenseItem(id=uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-single-dispense-item"), dispense_id=P30_SINGLE_DISPENSE_ID, prescription_item_id=P30_SINGLE_ITEM_ID, prescribed_name_snapshot="P30 Single Medicine", prescribed_quantity=Decimal("5"), internal_requested_quantity=Decimal("5"), internal_confirmed_quantity=Decimal("5"), outside_purchase_quantity=Decimal("0"), status="DISPENSED")
+        multi_item = PharmacyDispenseItem(id=uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-dispense-item"), dispense_id=P30_MULTI_DISPENSE_ID, prescription_item_id=P30_MULTI_ITEM_ID, prescribed_name_snapshot="P30 Multi Medicine", prescribed_quantity=Decimal("6"), internal_requested_quantity=Decimal("6"), internal_confirmed_quantity=Decimal("6"), outside_purchase_quantity=Decimal("0"), status="DISPENSED")
+        session.add_all([single_item, multi_item])
+        batches = [
+            InventoryBatch(id=P30_SINGLE_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P30-SINGLE-BATCH", expiry_date=expiry, purchase_rate=Decimal("10"), received_quantity=Decimal("5"), available_quantity=Decimal("0"), reserved_quantity=Decimal("0"), status="ACTIVE"),
+            InventoryBatch(id=P30_MULTI_BATCH_A_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P30-MULTI-A", expiry_date=expiry, purchase_rate=Decimal("10"), received_quantity=Decimal("3"), available_quantity=Decimal("0"), reserved_quantity=Decimal("0"), status="ACTIVE"),
+            InventoryBatch(id=P30_MULTI_BATCH_B_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P30-MULTI-B", expiry_date=expiry, purchase_rate=Decimal("12"), received_quantity=Decimal("3"), available_quantity=Decimal("0"), reserved_quantity=Decimal("0"), status="ACTIVE"),
+        ]
+        grn = GoodsReceipt(id=P30_GRN_ID, grn_number="E2E-P30-GRN", purchase_order_id=PO_A_ID, supplier_id=SUPPLIER_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, status="FULLY_RECEIVED", subtotal=Decimal("160"), total_amount=Decimal("160"))
+        supplier_batches = [
+            InventoryBatch(id=P30_SUPPLIER_BATCH_A_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P30-SUP-A", expiry_date=expiry, purchase_rate=Decimal("8"), received_quantity=Decimal("10"), available_quantity=Decimal("10"), reserved_quantity=Decimal("0"), supplier_id=SUPPLIER_A_ID, goods_receipt_id=P30_GRN_ID, status="ACTIVE"),
+            InventoryBatch(id=P30_SUPPLIER_BATCH_B_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P30-SUP-B", expiry_date=expiry, purchase_rate=Decimal("9"), received_quantity=Decimal("8"), available_quantity=Decimal("8"), reserved_quantity=Decimal("0"), supplier_id=SUPPLIER_A_ID, goods_receipt_id=P30_GRN_ID, status="ACTIVE"),
+        ]
+        session.add_all([grn, *batches, *supplier_batches])
+        await session.flush()
+        session.add_all([
+            PharmacyDispenseAllocation(id=uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-single-allocation"), dispense_item_id=single_item.id, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, inventory_batch_id=P30_SINGLE_BATCH_ID, allocated_quantity=Decimal("5"), confirmed_dispensed_quantity=Decimal("5"), status="CONSUMED"),
+            PharmacyDispenseAllocation(id=uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-allocation-a"), dispense_item_id=multi_item.id, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, inventory_batch_id=P30_MULTI_BATCH_A_ID, allocated_quantity=Decimal("3"), confirmed_dispensed_quantity=Decimal("3"), status="CONSUMED"),
+            PharmacyDispenseAllocation(id=uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-multi-allocation-b"), dispense_item_id=multi_item.id, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P30_LOCATION_ID, inventory_batch_id=P30_MULTI_BATCH_B_ID, allocated_quantity=Decimal("3"), confirmed_dispensed_quantity=Decimal("3"), status="CONSUMED"),
+        ])
+        await session.commit()
+    await engine.dispose()
+    print("P30 E2E seed ready")
+
+
+async def snapshot_p30():
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    batch_ids = [P30_SINGLE_BATCH_ID, P30_MULTI_BATCH_A_ID, P30_MULTI_BATCH_B_ID, P30_SUPPLIER_BATCH_A_ID, P30_SUPPLIER_BATCH_B_ID]
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        batches = (await conn.execute(text("SELECT batch_number, available_quantity FROM inventory_batches WHERE id = ANY(:ids) ORDER BY batch_number"), {"ids": batch_ids})).mappings().all()
+        patient_returns = (await conn.execute(text("SELECT reference_key, status, total_return_quantity FROM patient_returns WHERE dispense_id IN (:single, :multi) ORDER BY reference_key"), {"single": P30_SINGLE_DISPENSE_ID, "multi": P30_MULTI_DISPENSE_ID})).mappings().all()
+        patient_allocations = (await conn.execute(text("SELECT b.batch_number, a.returned_quantity FROM patient_return_batch_allocations a JOIN inventory_batches b ON b.id = a.inventory_batch_id ORDER BY b.batch_number"))).mappings().all()
+        supplier_returns = (await conn.execute(text("SELECT reference_key, status FROM supplier_returns WHERE goods_receipt_id = :grn ORDER BY reference_key"), {"grn": P30_GRN_ID})).mappings().all()
+        ledger = (await conn.execute(text("SELECT transaction_type, b.batch_number, quantity FROM stock_transactions s JOIN inventory_batches b ON b.id = s.inventory_batch_id WHERE b.id = ANY(:ids) AND transaction_type IN ('PATIENT_RETURN_RESTOCK', 'SUPPLIER_RETURN') ORDER BY transaction_type, b.batch_number"), {"ids": batch_ids})).mappings().all()
+    await engine.dispose()
+    print(json.dumps({"batches": [{"batch_number": row["batch_number"], "available_quantity": str(row["available_quantity"])} for row in batches], "patient_returns": [dict(row) for row in patient_returns], "patient_allocations": [{"batch_number": row["batch_number"], "returned_quantity": str(row["returned_quantity"])} for row in patient_allocations], "supplier_returns": [dict(row) for row in supplier_returns], "ledger": [{"transaction_type": row["transaction_type"], "batch_number": row["batch_number"], "quantity": str(row["quantity"])} for row in ledger]}, default=str))
+
+
 async def cleanup():
     from app.core.config import settings
     _assert_destructive_reset_allowed(settings.DATABASE_URL, "cleanup")
@@ -647,6 +759,12 @@ if __name__ == "__main__":
         asyncio.run(seed_p28())
     elif command == "seed_p28_scenario":
         asyncio.run(seed_p28_scenario())
+    elif command == "reset_p30_scenario":
+        asyncio.run(reset_p30_scenario())
+    elif command == "seed_p30_scenario":
+        asyncio.run(seed_p30_scenario())
+    elif command == "snapshot_p30":
+        asyncio.run(snapshot_p30())
     elif command == "cleanup":
         asyncio.run(cleanup())
     elif command == "snapshot":

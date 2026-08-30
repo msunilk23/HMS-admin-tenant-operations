@@ -10,7 +10,7 @@
  * - Color-coded critical results (red for abnormal)
  */
 
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import type { LabOrder, Visit } from '@/types/common'
@@ -25,9 +25,21 @@ const labResultsService = {
     fetch(`/api/v1/lab/${orderId}/results`)
       .then(r => r.json()),
   
-  getVisits: (filters?: { status?: string; limit?: number }) =>
-    fetch(`/api/v1/visits?${new URLSearchParams(filters as any)}`)
-      .then(r => r.json()),
+  getVisits: (filters?: { status?: string; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (filters?.status) params.set('status', filters.status)
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit))
+    return fetch(`/api/v1/visits?${params}`)
+      .then(r => r.json())
+  },
+}
+
+interface LabTestDisplay {
+  test?: string
+  test_code?: string
+  test_name?: string
+  unit?: string
+  reference_range?: string
 }
 
 interface LabResultDisplay {
@@ -99,21 +111,24 @@ export default function DoctorLabResultsPage() {
 
   // Transform lab orders + results into display table
   const tableRows: LabResultDisplay[] = labOrders.flatMap((order: LabOrder) => {
-    const results = order.lab_result || {}
+    const results = order.result?.results || {}
     const testsArray = order.tests || []
     
-    return testsArray.map((test: any, idx: number) => ({
-      testCode: test.test_code || test.test || `Test ${idx + 1}`,
+    return testsArray.map((test: LabTestDisplay, idx: number) => {
+      const resultKey = test.test_code || test.test
+      return {
+      testCode: resultKey || `Test ${idx + 1}`,
       testName: test.test_name || test.test || 'Unknown Test',
-      resultValue: results[test.test_code] || results[test.test] || null,
+      resultValue: resultKey ? results[resultKey] || null : null,
       unit: test.unit || '—',
       referenceRange: test.reference_range || '—',
-      normalFlag: !(order.lab_result?.critical_flags?.[test.test_code]),
-      criticalFlag: order.lab_result?.critical_flags?.[test.test_code],
+      normalFlag: true,
+      criticalFlag: false,
       status: order.status,
-      verifiedAt: order.verified_at,
-      verifiedBy: order.verified_by_user_id,
-    }))
+      verifiedAt: order.result?.verified_at,
+      verifiedBy: order.result?.verified_by_user_id,
+      }
+    })
   })
 
   // Apply date range filter if provided
@@ -150,7 +165,7 @@ export default function DoctorLabResultsPage() {
                 <option value="">— Select a visit —</option>
                 {visits.map((visit: Visit) => (
                   <option key={visit.id} value={visit.id}>
-                    {visit.patient?.first_name || 'Unknown'} ({visit.uhid}) • {formatDate(visit.created_at)}
+                    {visit.patient?.first_name || 'Unknown'} ({visit.patient?.uhid || 'Unknown'}) • {formatDate(visit.created_at)}
                   </option>
                 ))}
               </select>

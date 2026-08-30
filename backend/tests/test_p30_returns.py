@@ -20,8 +20,8 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tenant import (
-    PatientReturn, PatientReturnItem, SupplierReturn, SupplierReturnItem,
-    PharmacyDispense, PharmacyDispenseItem, InventoryBatch, Supplier,
+    PatientReturn, PatientReturnItem, PatientReturnBatchAllocation, SupplierReturn, SupplierReturnItem,
+    PharmacyDispense, PharmacyDispenseAllocation, PharmacyDispenseItem, InventoryBatch, Supplier,
     Patient, Visit, PharmacyLocation, Invoice, StockTransaction
 )
 from app.schemas.returns import (
@@ -65,6 +65,18 @@ class TestPatientReturnService:
             internal_confirmed_quantity=Decimal("10"),
             dispensed_medicine_product_id=uuid.uuid4(),
         )
+        batch = InventoryBatch(
+            id=uuid.uuid4(), tenant_id=tenant_id, facility_id=facility_id,
+            pharmacy_location_id=pharmacy_location_id, medicine_id=mock_dispense_item.dispensed_medicine_product_id,
+            batch_number="RETURN-1", purchase_rate=Decimal("10"), received_quantity=Decimal("10"),
+            available_quantity=Decimal("0"), reserved_quantity=Decimal("0"), status="ACTIVE",
+        )
+        source_allocation = PharmacyDispenseAllocation(
+            id=uuid.uuid4(), dispense_item_id=dispense_item_id, tenant_id=tenant_id,
+            facility_id=facility_id, pharmacy_location_id=pharmacy_location_id,
+            inventory_batch_id=batch.id, allocated_quantity=Decimal("10"),
+            confirmed_dispensed_quantity=Decimal("10"), status="CONSUMED",
+        )
         
         # Mock database queries
         mock_session.scalar = AsyncMock()
@@ -73,9 +85,8 @@ class TestPatientReturnService:
         mock_session.flush = AsyncMock()
         mock_session.refresh = AsyncMock()
         
-        # Configure mock returns: dispense lookup, then duplicate-check lookup
-        mock_session.scalar.side_effect = [mock_dispense, None]
-        mock_session.scalars.return_value = [mock_dispense_item]
+        mock_session.scalar.side_effect = [mock_dispense, Decimal("0"), batch]
+        mock_session.scalars.side_effect = [[mock_dispense_item], [source_allocation]]
         
         # Create return request
         request_data = PatientReturnCreate(
@@ -87,6 +98,7 @@ class TestPatientReturnService:
                     dispense_item_id=dispense_item_id,
                     returned_quantity=Decimal("5"),
                     restockable=True,
+                    batch_allocations=[{"inventory_batch_id": batch.id, "returned_quantity": Decimal("5")}],
                 )
             ],
             notes="Patient reported allergy"
@@ -463,58 +475,43 @@ class TestPatientReturnIntegration:
             inventory_batch_id=batch_id,
             medicine_product_id=uuid.uuid4(),
         )
+        allocation = PatientReturnBatchAllocation(
+            id=uuid.uuid4(), tenant_id=tenant_id, patient_return_item_id=return_item_id,
+            dispense_allocation_id=uuid.uuid4(), inventory_batch_id=batch_id,
+            returned_quantity=Decimal("5"), unit_cost=Decimal("10"), created_by=user_id,
+        )
         
         mock_session.scalar = AsyncMock(return_value=return_obj)
-        mock_session.scalars = AsyncMock(return_value=[return_item])
+        mock_session.scalars = AsyncMock(side_effect=[[return_item], [allocation]])
         mock_session.flush = AsyncMock()
         mock_session.refresh = AsyncMock()
         
         # Call accept which should create stock ledger
-        result = await PatientReturnService.accept_return(
-            session=mock_session,
-            return_id=return_id,
-            accepting_user_id=user_id,
-            tenant_id=tenant_id,
-            facility_id=facility_id,
-        )
+        with patch("app.services.returns_service.create_stock_ledger_transaction", new=AsyncMock(return_value=MagicMock(id=uuid.uuid4()))) as ledger:
+            result = await PatientReturnService.accept_return(
+                session=mock_session,
+                return_id=return_id,
+                accepting_user_id=user_id,
+                tenant_id=tenant_id,
+                facility_id=facility_id,
+            )
         
         # Verify return status progressed
         assert return_obj.status == "REFUND_PENDING"
+        assert ledger.await_count == 1
+        assert allocation.stock_ledger_transaction_id is not None
 
 
 class TestReturnIdempotency:
     """Test idempotency of return operations."""
     
     @pytest.mark.asyncio
-    async def test_duplicate_return_request_rejected(self, mock_session: AsyncSession):
-        """Test that duplicate return requests on same dispense are rejected."""
+    async def test_return_exceeding_remaining_source_allocation_is_rejected(self, mock_session: AsyncSession):
+        """Multiple partial returns are allowed, but not beyond one original batch allocation."""
         tenant_id = uuid.uuid4()
         facility_id = uuid.uuid4()
         dispense_id = uuid.uuid4()
         
-        # Mock an existing return in REQUESTED status
-        existing_return = PatientReturn(
-            id=uuid.uuid4(),
-            tenant_id=tenant_id,
-            facility_id=facility_id,
-            pharmacy_location_id=uuid.uuid4(),
-            patient_id=uuid.uuid4(),
-            visit_id=uuid.uuid4(),
-            dispense_id=dispense_id,
-            status="REQUESTED",
-            reference_key="PR-TEST-004",
-            return_reason="Duplicate return",
-            total_return_quantity=Decimal("2"),
-            total_return_amount=Decimal("20.00"),
-            refunded_amount=Decimal("0.00"),
-            restockable_count=0,
-            non_restockable_count=0,
-            requested_at=datetime.utcnow(),
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        
-        # The service validates the dispense and items before checking for duplicates.
         mock_dispense = PharmacyDispense(
             id=dispense_id,
             tenant_id=tenant_id,
@@ -532,19 +529,30 @@ class TestReturnIdempotency:
             internal_confirmed_quantity=Decimal("2"),
             dispensed_medicine_product_id=uuid.uuid4(),
         )
-        mock_session.scalar = AsyncMock(side_effect=[mock_dispense, existing_return])
-        mock_session.scalars = AsyncMock(return_value=[mock_dispense_item])
+        batch = InventoryBatch(
+            id=uuid.uuid4(), tenant_id=tenant_id, facility_id=facility_id,
+            pharmacy_location_id=mock_dispense.pharmacy_location_id, medicine_id=mock_dispense_item.dispensed_medicine_product_id,
+            batch_number="RETURN-LIMIT", purchase_rate=Decimal("10"), received_quantity=Decimal("2"),
+            available_quantity=Decimal("0"), reserved_quantity=Decimal("0"), status="ACTIVE",
+        )
+        source = PharmacyDispenseAllocation(
+            id=uuid.uuid4(), dispense_item_id=dispense_item_id, tenant_id=tenant_id, facility_id=facility_id,
+            pharmacy_location_id=mock_dispense.pharmacy_location_id, inventory_batch_id=batch.id,
+            allocated_quantity=Decimal("2"), confirmed_dispensed_quantity=Decimal("2"), status="CONSUMED",
+        )
+        mock_session.scalar = AsyncMock(side_effect=[mock_dispense, Decimal("1")])
+        mock_session.scalars = AsyncMock(side_effect=[[mock_dispense_item], [source]])
 
-        # This should raise ValueError for duplicate
-        with pytest.raises(ValueError, match="Active return already exists"):
+        with pytest.raises(ValueError, match="remaining quantity"):
             request_data = PatientReturnCreate(
                 dispense_id=dispense_id,
                 return_reason="Test return reason with enough length",
                 items=[
                     PatientReturnItemCreate(
                         dispense_item_id=dispense_item_id,
-                        returned_quantity=Decimal("1"),
+                        returned_quantity=Decimal("2"),
                         restockable=True,
+                        batch_allocations=[{"inventory_batch_id": batch.id, "returned_quantity": Decimal("2")}],
                     )
                 ],
             )
@@ -552,7 +560,7 @@ class TestReturnIdempotency:
                 session=mock_session,
                 tenant_id=tenant_id,
                 facility_id=facility_id,
-                pharmacy_location_id=uuid.uuid4(),
+                pharmacy_location_id=mock_dispense.pharmacy_location_id,
                 patient_id=uuid.uuid4(),
                 visit_id=uuid.uuid4(),
                 request_data=request_data,

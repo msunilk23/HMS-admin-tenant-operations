@@ -36,7 +36,7 @@ from app.models.tenant.inventory_batch import InventoryBatch
 from app.models.tenant.stock_transaction import StockTransaction
 from app.models.tenant.pharmacy_dispense import PharmacyDispense, PharmacyDispenseAllocation, PharmacyDispenseItem, PharmacyStockReservation
 from app.models.tenant.requisition import Requisition
-from app.models.tenant.returns import PatientReturn, PatientReturnItem, SupplierReturn, SupplierReturnItem
+from app.models.tenant.returns import PatientReturn, PatientReturnItem, PatientReturnBatchAllocation, SupplierReturn, SupplierReturnItem
 from app.models.tenant.p31_p34 import (
     StockQuarantine, ProductRecall,
     StockTransfer, StockTransferItem,
@@ -94,6 +94,7 @@ __all__ = [
     "Requisition",
     "PatientReturn",
     "PatientReturnItem",
+    "PatientReturnBatchAllocation",
     "SupplierReturn",
     "SupplierReturnItem",
     "StockQuarantine",

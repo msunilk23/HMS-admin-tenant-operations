@@ -61,7 +61,11 @@ export default function PharmacyDispenseModal({ item, onClose, onDone }: Props) 
       await pharmacyService.reserve(validated.id, facilityId)
       return pharmacyService.fulfillInternally(validated.id, facilityId, false)
     },
-    onSuccess: result => { setDispense(result); setError(null) },
+    onSuccess: result => {
+      setDispense(result)
+      setError(null)
+      void itemsQuery.refetch()
+    },
     onError: value => setError(value instanceof Error ? value.message : 'Unable to prepare fulfillment'),
   })
 

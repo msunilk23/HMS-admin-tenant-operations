@@ -1,9 +1,13 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 from pydantic import BaseModel, Field
+
+
+def _utc_business_date() -> date:
+    return datetime.now(timezone.utc).date()
 
 
 class PurchaseOrderItemCreate(BaseModel):
@@ -19,7 +23,7 @@ class PurchaseOrderItemCreate(BaseModel):
 
 class PurchaseOrderCreate(BaseModel):
     supplier_id: uuid.UUID
-    po_date: date = Field(default_factory=date.today)
+    po_date: date = Field(default_factory=_utc_business_date)
     required_by_date: Optional[date] = None
     notes: Optional[str] = None
     items: list[PurchaseOrderItemCreate] = Field(min_length=1)

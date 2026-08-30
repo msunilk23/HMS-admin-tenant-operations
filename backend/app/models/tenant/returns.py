@@ -25,6 +25,11 @@ class PatientReturn(Base, TimestampMixin):
             "reference_key",
             name="uq_patient_returns_tenant_reference",
         ),
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_patient_returns_tenant_idempotency",
+        ),
         CheckConstraint(
             "status IN ('REQUESTED', 'VALIDATED', 'ACCEPTED', 'REJECTED', 'REFUND_PENDING', 'REFUNDED', 'RESTOCKED', 'NON_RESTOCKABLE')",
             name="ck_patient_returns_status",
@@ -52,6 +57,8 @@ class PatientReturn(Base, TimestampMixin):
     
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="REQUESTED", index=True)
     reference_key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    request_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     return_reason: Mapped[str] = mapped_column(Text, nullable=False)
     package_condition: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     
@@ -129,6 +136,37 @@ class PatientReturnItem(Base, TimestampMixin):
     validated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PatientReturnBatchAllocation(Base, TimestampMixin):
+    """Authoritative restoration of a returned item to an original dispense batch."""
+    __tablename__ = "patient_return_batch_allocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "patient_return_item_id",
+            "dispense_allocation_id",
+            name="uq_patient_return_batch_allocation_source",
+        ),
+        CheckConstraint("returned_quantity > 0", name="ck_patient_return_batch_allocation_positive"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    patient_return_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patient_return_items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    dispense_allocation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pharmacy_dispense_allocations.id"), nullable=False, index=True
+    )
+    inventory_batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("inventory_batches.id"), nullable=False, index=True
+    )
+    returned_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    stock_ledger_transaction_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("stock_transactions.id"), nullable=True, unique=True
+    )
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+
+
 class SupplierReturn(Base, TimestampMixin):
     """Supplier return of received goods (from GRN)."""
     __tablename__ = "supplier_returns"
@@ -137,6 +175,11 @@ class SupplierReturn(Base, TimestampMixin):
             "tenant_id",
             "reference_key",
             name="uq_supplier_returns_tenant_reference",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_supplier_returns_tenant_idempotency",
         ),
         CheckConstraint(
             "status IN ('REQUESTED', 'APPROVED', 'DISPATCHED', 'RECEIVED', 'REJECTED', 'CANCELLED')",
@@ -164,6 +207,8 @@ class SupplierReturn(Base, TimestampMixin):
     
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="REQUESTED", index=True)
     reference_key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    request_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     return_reason: Mapped[str] = mapped_column(Text, nullable=False)
     total_return_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
     total_return_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)

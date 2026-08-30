@@ -12,12 +12,12 @@ from app.db.engine import get_session
 from app.core.redis_client import get_cached_features, set_cached_features, get_tenant_forced_logout_time
 from app.models.public.user import Tenant, User
 
-bearer_scheme = HTTPBearer()
+bearer_scheme = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
 
 
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict:
     """Decode JWT and return the current user payload dict."""
@@ -31,6 +31,8 @@ async def get_current_user(
         detail="Your session has been invalidated. Please log in again.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    if credentials is None:
+        raise credentials_exception
     try:
         payload = decode_token(credentials.credentials)
         user_id: str = payload.get("sub")
@@ -56,7 +58,7 @@ async def get_current_user(
         tenant_id_str = payload.get("tenant_id")
         if tenant_id_str:
             tenant = await session.get(Tenant, tenant_id_str)
-            if not tenant or not tenant.is_active:
+            if not tenant or not tenant.is_active or str(user.tenant_id) != str(tenant.id):
                 raise session_invalidated_exception
             if payload.get("tenant_session_version", 0) != tenant.session_version:
                 raise session_invalidated_exception

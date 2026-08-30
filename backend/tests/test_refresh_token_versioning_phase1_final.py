@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.core.security import hash_password
 
 PG_URL = os.environ["DATABASE_URL"]
-SCHEMA = "test_refresh_ver_hospital"
+SCHEMA = f"test_refresh_ver_{uuid.uuid4().hex[:12]}"
 
 
 def _postgres_reachable() -> bool:

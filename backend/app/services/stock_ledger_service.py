@@ -37,7 +37,7 @@ async def create_stock_ledger_transaction(
                 InventoryBatch.id == inventory_batch_id,
                 InventoryBatch.tenant_id == tenant_id,
                 InventoryBatch.facility_id == facility_id,
-            )
+            ).with_for_update()
         )
         if batch is None:
             raise ValueError(f"Inventory batch {inventory_batch_id} not found")
@@ -59,7 +59,9 @@ async def create_stock_ledger_transaction(
 
     if inventory_batch_id is not None:
         prior_balance = _to_decimal((await session.scalar(
-            select(InventoryBatch.available_quantity).where(InventoryBatch.id == inventory_batch_id)
+            select(InventoryBatch.available_quantity)
+            .where(InventoryBatch.id == inventory_batch_id)
+            .with_for_update()
         )) or Decimal("0"))
     else:
         prior_balance = Decimal("0")
@@ -68,7 +70,7 @@ async def create_stock_ledger_transaction(
     new_balance = prior_balance + adjustment
     if inventory_batch_id is not None:
         batch = await session.scalar(
-            select(InventoryBatch).where(InventoryBatch.id == inventory_batch_id)
+            select(InventoryBatch).where(InventoryBatch.id == inventory_batch_id).with_for_update()
         )
         if batch is not None:
             if new_balance < Decimal("0"):

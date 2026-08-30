@@ -7,18 +7,20 @@ and financial reconciliation with strict ACID guarantees.
 
 import uuid
 import logging
+import hashlib
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import Base
 from app.models.tenant import (
-    PatientReturn, PatientReturnItem, SupplierReturn, SupplierReturnItem,
-    PharmacyDispense, PharmacyDispenseItem, InventoryBatch,
+    PatientReturn, PatientReturnItem, PatientReturnBatchAllocation, SupplierReturn, SupplierReturnItem,
+    PharmacyDispense, PharmacyDispenseAllocation, PharmacyDispenseItem, InventoryBatch, GoodsReceipt, Supplier,
     Invoice, StockTransaction, Patient, Visit
 )
 from app.schemas.returns import (
@@ -59,11 +61,12 @@ class PatientReturnService:
         stmt = select(PharmacyDispense).where(
             and_(
                 PharmacyDispense.id == request_data.dispense_id,
+                PharmacyDispense.tenant_id == tenant_id,
                 PharmacyDispense.patient_id == patient_id,
                 PharmacyDispense.facility_id == facility_id,
                 PharmacyDispense.status == "CONFIRMED",
             )
-        )
+        ).with_for_update()
         dispense = await session.scalar(stmt)
         if not dispense:
             raise ValueError(f"Dispense {request_data.dispense_id} not found or not confirmed")
@@ -71,13 +74,27 @@ class PatientReturnService:
         # Fetch dispense items
         stmt = select(PharmacyDispenseItem).where(
             PharmacyDispenseItem.dispense_id == request_data.dispense_id
-        )
+        ).with_for_update()
         dispense_items_result = await session.scalars(stmt)
         dispense_items = list(dispense_items_result)
         
         dispense_item_map = {item.id: item for item in dispense_items}
 
-        # Validate all requested items exist and calculate totals
+        source_allocations = list(await session.scalars(
+            select(PharmacyDispenseAllocation)
+            .where(
+                PharmacyDispenseAllocation.dispense_item_id.in_(dispense_item_map),
+                PharmacyDispenseAllocation.status == "CONSUMED",
+            )
+            .order_by(PharmacyDispenseAllocation.inventory_batch_id, PharmacyDispenseAllocation.id)
+            .with_for_update()
+        ))
+        sources_by_item: dict[UUID, list[PharmacyDispenseAllocation]] = {}
+        for allocation in source_allocations:
+            sources_by_item.setdefault(allocation.dispense_item_id, []).append(allocation)
+
+        allocation_requests: dict[UUID, list[tuple[PharmacyDispenseAllocation, Decimal]]] = {}
+        # Validate all requested items and their explicit original batch allocations.
         total_amount = Decimal("0")
         total_quantity = Decimal("0")
         
@@ -91,6 +108,44 @@ class PatientReturnService:
                     f"Cannot return {return_item.returned_quantity} items; "
                     f"only {dispense_item.internal_confirmed_quantity} were dispensed"
                 )
+
+            sources = sources_by_item.get(return_item.dispense_item_id, [])
+            requested_allocations = return_item.batch_allocations
+            if requested_allocations is None:
+                if len(sources) != 1:
+                    raise ValueError("Batch allocations are required when a dispense item used multiple batches")
+                requested_allocations = [
+                    type("LegacyBatchAllocation", (), {
+                        "inventory_batch_id": sources[0].inventory_batch_id,
+                        "returned_quantity": return_item.returned_quantity,
+                    })()
+                ]
+            if not requested_allocations:
+                raise ValueError("At least one batch allocation is required")
+            if sum((entry.returned_quantity for entry in requested_allocations), Decimal("0")) != return_item.returned_quantity:
+                raise ValueError("Batch allocation total must equal returned quantity")
+            batch_ids = [entry.inventory_batch_id for entry in requested_allocations]
+            if len(set(batch_ids)) != len(batch_ids):
+                raise ValueError("A batch may appear only once in a return item")
+            source_by_batch = {source.inventory_batch_id: source for source in sources}
+            resolved_allocations: list[tuple[PharmacyDispenseAllocation, Decimal]] = []
+            for entry in requested_allocations:
+                source = source_by_batch.get(entry.inventory_batch_id)
+                if source is None:
+                    raise ValueError("Return batch was not used for the original dispensing allocation")
+                previously_returned = await session.scalar(
+                    select(func.coalesce(func.sum(PatientReturnBatchAllocation.returned_quantity), Decimal("0")))
+                    .join(PatientReturnItem, PatientReturnBatchAllocation.patient_return_item_id == PatientReturnItem.id)
+                    .join(PatientReturn, PatientReturnItem.return_id == PatientReturn.id)
+                    .where(
+                        PatientReturnBatchAllocation.dispense_allocation_id == source.id,
+                        PatientReturn.status.not_in(["REJECTED"]),
+                    )
+                )
+                if Decimal(str(previously_returned)) + entry.returned_quantity > source.confirmed_dispensed_quantity:
+                    raise ValueError("Return quantity exceeds the remaining quantity for the original batch allocation")
+                resolved_allocations.append((source, entry.returned_quantity))
+            allocation_requests[return_item.dispense_item_id] = resolved_allocations
             
             # Calculate return amount
             # (assuming invoice has the unit price information)
@@ -101,17 +156,20 @@ class PatientReturnService:
         # Generate unique reference key
         reference_key = f"PR-{tenant_id.hex[:8]}-{uuid.uuid4().hex[:8]}".upper()
 
-        # Check for duplicate return on same dispense
-        stmt = select(PatientReturn).where(
-            and_(
-                PatientReturn.tenant_id == tenant_id,
-                PatientReturn.dispense_id == request_data.dispense_id,
-                PatientReturn.status.not_in(["REJECTED"]),
+        request_hash = hashlib.sha256(
+            json.dumps(request_data.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if request_data.idempotency_key:
+            existing = await session.scalar(
+                select(PatientReturn).where(
+                    PatientReturn.tenant_id == tenant_id,
+                    PatientReturn.idempotency_key == request_data.idempotency_key,
+                ).with_for_update()
             )
-        )
-        existing = await session.scalar(stmt)
-        if existing:
-            raise ValueError(f"Active return already exists for dispense {request_data.dispense_id}")
+            if existing is not None:
+                if existing.request_hash and existing.request_hash != request_hash:
+                    raise ValueError("Idempotency key was already used with a different request")
+                return PatientReturnRead.from_orm(existing)
 
         # Create patient return
         patient_return = PatientReturn(
@@ -124,6 +182,8 @@ class PatientReturnService:
             dispense_id=request_data.dispense_id,
             status="REQUESTED",
             reference_key=reference_key,
+            idempotency_key=request_data.idempotency_key,
+            request_hash=request_hash,
             return_reason=request_data.return_reason,
             package_condition=request_data.package_condition,
             total_return_quantity=total_quantity,
@@ -165,6 +225,30 @@ class PatientReturnService:
                 updated_at=datetime.utcnow(),
             )
             session.add(return_item_obj)
+            resolved_allocations = allocation_requests[return_item.dispense_item_id]
+            for source, quantity in resolved_allocations:
+                batch = await session.scalar(
+                    select(InventoryBatch)
+                    .where(
+                        InventoryBatch.id == source.inventory_batch_id,
+                        InventoryBatch.tenant_id == tenant_id,
+                        InventoryBatch.facility_id == facility_id,
+                    )
+                    .with_for_update()
+                )
+                if batch is None:
+                    raise ValueError("Return batch not found in the authenticated tenant")
+                session.add(PatientReturnBatchAllocation(
+                    tenant_id=tenant_id,
+                    patient_return_item_id=return_item_obj.id,
+                    dispense_allocation_id=source.id,
+                    inventory_batch_id=batch.id,
+                    returned_quantity=quantity,
+                    unit_cost=batch.purchase_rate,
+                    created_by=requesting_user_id,
+                ))
+            if len(resolved_allocations) == 1:
+                return_item_obj.inventory_batch_id = resolved_allocations[0][0].inventory_batch_id
         
         # Record audit
         record_audit(
@@ -277,33 +361,45 @@ class PatientReturnService:
         if not patient_return:
             raise ValueError(f"Return {return_id} not found or not in VALIDATED status")
 
-        # Restock accepted items
-        stmt = select(PatientReturnItem).where(
-            and_(
+        restockable_items = list(await session.scalars(
+            select(PatientReturnItem)
+            .where(
                 PatientReturnItem.return_id == return_id,
                 PatientReturnItem.status == "ACCEPTED",
             )
-        )
-        restockable_items = await session.scalars(stmt)
-        
+            .with_for_update()
+        ))
+        allocation_rows = list(await session.scalars(
+            select(PatientReturnBatchAllocation)
+            .where(PatientReturnBatchAllocation.patient_return_item_id.in_([item.id for item in restockable_items]))
+            .order_by(PatientReturnBatchAllocation.inventory_batch_id, PatientReturnBatchAllocation.id)
+            .with_for_update()
+        ))
+        if restockable_items and not allocation_rows:
+            raise ValueError("Return batch allocations are required before restocking")
+
+        for allocation in allocation_rows:
+            ledger_tx = await create_stock_ledger_transaction(
+                session=session,
+                tenant_id=tenant_id,
+                facility_id=facility_id,
+                pharmacy_location_id=patient_return.pharmacy_location_id,
+                medicine_id=None,
+                inventory_batch_id=allocation.inventory_batch_id,
+                transaction_type="PATIENT_RETURN_RESTOCK",
+                quantity=allocation.returned_quantity,
+                reference_type="PatientReturnBatchAllocation",
+                reference_id=allocation.id,
+                reason=f"Patient return restock: {patient_return.reference_key}",
+                user_id=accepting_user_id,
+            )
+            allocation.stock_ledger_transaction_id = ledger_tx.id
+
         for item in restockable_items:
-            # Create stock ledger transaction for PATIENT_RETURN_RESTOCK
-            if item.inventory_batch_id:
-                ledger_tx = await create_stock_ledger_transaction(
-                    session=session,
-                    tenant_id=tenant_id,
-                    facility_id=facility_id,
-                    pharmacy_location_id=patient_return.pharmacy_location_id,
-                    medicine_id=item.medicine_product_id,
-                    inventory_batch_id=item.inventory_batch_id,
-                    transaction_type="PATIENT_RETURN_RESTOCK",
-                    quantity=item.returned_quantity,
-                    reference_type="PatientReturnItem",
-                    reference_id=item.id,
-                    reason=f"Patient return restock: {patient_return.reference_key}",
-                    user_id=accepting_user_id,
-                )
-                item.restock_ledger_transaction_id = ledger_tx.id
+            item.restock_ledger_transaction_id = next(
+                (allocation.stock_ledger_transaction_id for allocation in allocation_rows if allocation.patient_return_item_id == item.id),
+                None,
+            )
 
         patient_return.status = "ACCEPTED"
         patient_return.accepted_by = accepting_user_id
@@ -437,17 +533,45 @@ class SupplierReturnService:
         - All batches must exist and belong to location
         - Cannot return more than received
         """
-        # Validate batches and calculate totals
+        supplier = await session.scalar(select(Supplier).where(Supplier.id == request_data.supplier_id, Supplier.is_active == True).with_for_update())
+        if supplier is None:
+            raise ValueError("Supplier not found or inactive")
+        if request_data.goods_receipt_id is not None:
+            goods_receipt = await session.scalar(select(GoodsReceipt).where(
+                GoodsReceipt.id == request_data.goods_receipt_id,
+                GoodsReceipt.supplier_id == supplier.id,
+                GoodsReceipt.facility_id == facility_id,
+            ).with_for_update())
+            if goods_receipt is None:
+                raise ValueError("Goods receipt does not belong to the supplier and facility")
+
+        request_hash = hashlib.sha256(
+            json.dumps(request_data.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if request_data.idempotency_key:
+            existing = await session.scalar(select(SupplierReturn).where(
+                SupplierReturn.tenant_id == tenant_id,
+                SupplierReturn.idempotency_key == request_data.idempotency_key,
+            ).with_for_update())
+            if existing is not None:
+                if existing.request_hash and existing.request_hash != request_hash:
+                    raise ValueError("Idempotency key was already used with a different request")
+                return SupplierReturnRead.from_orm(existing)
+
+        # Validate and lock batches in a deterministic order before calculating totals.
         total_value = Decimal("0")
         total_quantity = Decimal("0")
-        
         batch_ids = [item.inventory_batch_id for item in request_data.items]
+        if len(set(batch_ids)) != len(batch_ids):
+            raise ValueError("A batch may appear only once in a supplier return")
         stmt = select(InventoryBatch).where(
             and_(
                 InventoryBatch.id.in_(batch_ids),
+                InventoryBatch.tenant_id == tenant_id,
+                InventoryBatch.facility_id == facility_id,
                 InventoryBatch.pharmacy_location_id == pharmacy_location_id,
             )
-        )
+        ).order_by(InventoryBatch.id).with_for_update()
         batch_result = await session.scalars(stmt)
         batch_map = {batch.id: batch for batch in batch_result}
         
@@ -455,6 +579,10 @@ class SupplierReturnService:
             batch = batch_map.get(return_item.inventory_batch_id)
             if not batch:
                 raise ValueError(f"Batch {return_item.inventory_batch_id} not found in location")
+            if batch.supplier_id is not None and batch.supplier_id != supplier.id:
+                raise ValueError("Batch does not belong to the supplier")
+            if request_data.goods_receipt_id is not None and batch.goods_receipt_id != request_data.goods_receipt_id:
+                raise ValueError("Batch does not belong to the goods receipt")
             
             # Validate quantity against the available on-hand batch quantity.
             if return_item.returned_quantity > batch.available_quantity:
@@ -479,6 +607,8 @@ class SupplierReturnService:
             goods_receipt_id=request_data.goods_receipt_id,
             status="REQUESTED",
             reference_key=reference_key,
+            idempotency_key=request_data.idempotency_key,
+            request_hash=request_hash,
             return_reason=request_data.return_reason,
             total_return_quantity=total_quantity,
             total_return_value=total_value,
@@ -492,10 +622,12 @@ class SupplierReturnService:
         
         # Create return items
         for return_item in request_data.items:
+            batch = batch_map[return_item.inventory_batch_id]
             supplier_return_item = SupplierReturnItem(
                 id=uuid.uuid4(),
                 supplier_return_id=supplier_return.id,
                 inventory_batch_id=return_item.inventory_batch_id,
+                received_quantity=batch.received_quantity,
                 returned_quantity=return_item.returned_quantity,
                 unit_cost=return_item.unit_cost,
                 return_value=return_item.returned_quantity * return_item.unit_cost,

@@ -1,16 +1,20 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
+def _utc_business_date() -> date:
+    return datetime.now(timezone.utc).date()
+
+
 class GoodsReceiptCreate(BaseModel):
     purchase_order_id: uuid.UUID
     facility_id: Optional[uuid.UUID] = None
     pharmacy_location_id: Optional[uuid.UUID] = None
-    received_date: date = Field(default_factory=date.today)
+    received_date: date = Field(default_factory=_utc_business_date)
     supplier_invoice_number: Optional[str] = None
     supplier_invoice_date: Optional[date] = None
     notes: Optional[str] = None

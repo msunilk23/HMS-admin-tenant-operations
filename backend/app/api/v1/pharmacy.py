@@ -974,19 +974,6 @@ async def update_pharmacy_status(
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_permission("PHARMACY_QUEUE_STATUS_UPDATE")),
 ):
-    tenant_id = uuid.UUID(str(current_user["tenant_id"]))
-    dispense = (await session.execute(
-        select(PharmacyDispense).where(
-            PharmacyDispense.pharmacy_queue_id == pq_id,
-            PharmacyDispense.tenant_id == tenant_id,
-        ).with_for_update()
-    )).scalar_one_or_none()
-
-    if dispense is not None and dispense.invoice_id is not None:
-        existing_invoice = await session.get(Invoice, dispense.invoice_id)
-        if existing_invoice is not None:
-            return existing_invoice
-
     pq = await session.get(PharmacyQueue, pq_id)
     if not pq:
         raise HTTPException(status_code=404, detail="Pharmacy queue item not found")
@@ -1546,7 +1533,6 @@ async def bill_pharmacy_dispense(
         pharmacy_queue_id=pq_id,
         pharmacy_dispense_id=dispense.id,
         status="draft",
-        billing_started_at=datetime.now(timezone.utc),
     )
     dispense.invoice_id = invoice.id
     session.add(invoice)
@@ -1564,6 +1550,7 @@ async def bill_pharmacy_dispense(
         
         invoice.payment_method = "cash"
         invoice.status = "paid"
+        invoice.paid_amount = float(total)
         invoice.paid_at = datetime.now(timezone.utc)
         invoice.billing_completed_at = invoice.paid_at
         record_audit(session, current_user=current_user, action="PHARMACY_PAYMENT_INITIATED", resource_type="invoice", resource_id=invoice.id, patient_id=dispense.patient_id, visit_id=dispense.visit_id, new_value={"invoice_id": str(invoice.id), "dispense_id": str(dispense.id), "payment_method": "cash", "amount": float(invoice.total)})
@@ -1583,6 +1570,15 @@ async def bill_pharmacy_dispense(
                 invoice_id=invoice.id,
             )
             record_audit(session, current_user=current_user, action="PHARMACY_DISPENSE_AUTHORIZED", resource_type="pharmacy_dispense", resource_id=authorized.id, patient_id=authorized.patient_id, visit_id=authorized.visit_id, new_value={"invoice_id": str(invoice.id), "billing_status": authorized.billing_status, "status": authorized.status})
+            confirmed = await confirm_dispense_stock_consumption(
+                session,
+                dispense_id=authorized.id,
+                tenant_id=tenant_id,
+                facility_id=authorized.facility_id,
+                confirmed_by=uuid.UUID(str(current_user["sub"])),
+                billing_authorized=True,
+            )
+            record_audit(session, current_user=current_user, action="PHARMACY_DISPENSE_CONFIRMED", resource_type="pharmacy_dispense", resource_id=confirmed.id, patient_id=confirmed.patient_id, visit_id=confirmed.visit_id, new_value={"invoice_id": str(invoice.id), "billing_status": confirmed.billing_status, "status": confirmed.status})
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

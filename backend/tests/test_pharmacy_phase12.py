@@ -87,6 +87,7 @@ def _make_doctor(**overrides):
 
 @pytest.mark.asyncio
 async def test_pharmacy_queue_progress_is_independent_from_visit_state(session):
+    tenant_id = uuid.uuid4()
     doctor_user_id = uuid.uuid4()
     doctor = _make_doctor(user_id=doctor_user_id)
     patient = _make_patient()
@@ -123,7 +124,7 @@ async def test_pharmacy_queue_progress_is_independent_from_visit_state(session):
         queue.id,
         PharmacyStatusUpdate(status="called", notes="Patient called to pharmacy"),
         session=session,
-        current_user={"sub": str(doctor_user_id), "role": "pharmacist", "tenant_schema": "test_tenant"},
+        current_user={"sub": str(doctor_user_id), "role": "pharmacist", "tenant_id": str(tenant_id), "tenant_schema": "test_tenant"},
     )
     await session.refresh(visit)
     assert called.status == "called"
@@ -133,7 +134,7 @@ async def test_pharmacy_queue_progress_is_independent_from_visit_state(session):
         queue.id,
         PharmacyStatusUpdate(status="dispensing", notes="Preparing medication"),
         session=session,
-        current_user={"sub": str(doctor_user_id), "role": "pharmacist", "tenant_schema": "test_tenant"},
+        current_user={"sub": str(doctor_user_id), "role": "pharmacist", "tenant_id": str(tenant_id), "tenant_schema": "test_tenant"},
     )
     await session.refresh(visit)
     assert dispensing.status == "dispensing"
@@ -143,7 +144,7 @@ async def test_pharmacy_queue_progress_is_independent_from_visit_state(session):
         queue.id,
         PharmacyStatusUpdate(status="dispensed", notes="Given to patient"),
         session=session,
-        current_user={"sub": str(doctor_user_id), "role": "pharmacist", "tenant_schema": "test_tenant"},
+        current_user={"sub": str(doctor_user_id), "role": "pharmacist", "tenant_id": str(tenant_id), "tenant_schema": "test_tenant"},
     )
     await session.refresh(visit)
     assert dispensed.status == "dispensed"

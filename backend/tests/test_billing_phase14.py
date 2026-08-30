@@ -27,7 +27,10 @@ def test_invoice_payment_statuses(total, paid, expected):
     assert invoice_status_for_payment(total, paid) == expected
 
 
-def test_webhook_signature_requires_matching_secret():
+def test_webhook_signature_requires_matching_secret(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "RAZORPAY_WEBHOOK_SECRET", "webhook-secret")
     body = b'{"event":"payment.captured"}'
     signature = hmac.new(b"webhook-secret", body, hashlib.sha256).hexdigest()
 

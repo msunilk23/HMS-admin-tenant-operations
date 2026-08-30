@@ -30,7 +30,7 @@ class LabOrder(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     visit_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("visits.id"), nullable=False, index=True)
-    facility_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("facilities.id"), nullable=True, index=True)
+    facility_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     uhid: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     # e.g. [{"test": "CBC", "notes": "fasting required"}]
     tests: Mapped[Optional[list]] = mapped_column(JSONB)

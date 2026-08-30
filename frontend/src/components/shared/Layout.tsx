@@ -129,6 +129,28 @@ const NAV_ITEMS: NavItem[] = [
     feature: 'pharmacy',
   },
   {
+    label: 'Patient Returns',
+    to: '/pharmacy/patient-returns',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7h16M4 12h9m-9 5h16" />
+      </svg>
+    ),
+    roles: ['pharmacist', 'hospital_admin'],
+    feature: 'pharmacy',
+  },
+  {
+    label: 'Supplier Returns',
+    to: '/pharmacy/supplier-returns',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5 7h14v10H5zM9 7V5h6v2" />
+      </svg>
+    ),
+    roles: ['pharmacist', 'hospital_admin'],
+    feature: 'pharmacy',
+  },
+  {
     label: 'Billing',
     to: '/billing',
     icon: (

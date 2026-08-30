@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -36,6 +36,10 @@ def _compile_jsonb_as_json(type_, compiler, **kw):
 
 ADMIN = {"sub": str(uuid.uuid4()), "role": "hospital_admin", "tenant_schema": "tenant_a"}
 STORE = {"sub": str(uuid.uuid4()), "role": "store_manager", "tenant_schema": "tenant_a"}
+
+
+def _business_date():
+    return datetime.now(timezone.utc).date()
 
 
 @pytest_asyncio.fixture
@@ -78,11 +82,11 @@ async def sent_order(session, supplier, product, quantity=Decimal("100")):
 async def test_grn_receipt_calculates_totals_and_finalizes_full_po(grn_context):
     session, supplier, product = grn_context
     order = await sent_order(session, supplier, product)
-    receipt = await create_goods_receipt(GoodsReceiptCreate(purchase_order_id=order.id, received_date=date.today()), session, STORE)
+    receipt = await create_goods_receipt(GoodsReceiptCreate(purchase_order_id=order.id, received_date=_business_date()), session, STORE)
     po_item = order.items[0]
     item = await receive_goods_receipt_item(
         receipt.id,
-        GoodsReceiptItemCreate(purchase_order_item_id=po_item.id, received_quantity=Decimal("100"), free_quantity=Decimal("5"), batch_number="B-1", expiry_date=date(2027, 1, 31)),
+        GoodsReceiptItemCreate(purchase_order_item_id=po_item.id, received_quantity=Decimal("100"), free_quantity=Decimal("5"), batch_number="B-1", expiry_date=_business_date() + timedelta(days=365)),
         session,
         STORE,
     )
@@ -103,12 +107,12 @@ async def test_partial_receipt_allows_a_later_grn_for_remaining_quantity(grn_con
     order = await sent_order(session, supplier, product)
     first = await create_goods_receipt(GoodsReceiptCreate(purchase_order_id=order.id), session, STORE)
     po_item = order.items[0]
-    await receive_goods_receipt_item(first.id, GoodsReceiptItemCreate(purchase_order_item_id=po_item.id, received_quantity=Decimal("40"), batch_number="B-PART-1", expiry_date=date(2027, 1, 31)), session, STORE)
+    await receive_goods_receipt_item(first.id, GoodsReceiptItemCreate(purchase_order_item_id=po_item.id, received_quantity=Decimal("40"), batch_number="B-PART-1", expiry_date=_business_date() + timedelta(days=365)), session, STORE)
     first_final = await finalize_goods_receipt(first.id, session, STORE)
     assert first_final.status == "PARTIALLY_RECEIVED"
     assert (await session.get(PurchaseOrder, order.id)).status == "PARTIALLY_RECEIVED"
     second = await create_goods_receipt(GoodsReceiptCreate(purchase_order_id=order.id), session, STORE)
-    await receive_goods_receipt_item(second.id, GoodsReceiptItemCreate(purchase_order_item_id=po_item.id, received_quantity=Decimal("60"), batch_number="B-PART-2", expiry_date=date(2027, 1, 31)), session, STORE)
+    await receive_goods_receipt_item(second.id, GoodsReceiptItemCreate(purchase_order_item_id=po_item.id, received_quantity=Decimal("60"), batch_number="B-PART-2", expiry_date=_business_date() + timedelta(days=365)), session, STORE)
     second_final = await finalize_goods_receipt(second.id, session, STORE)
     assert second_final.status == "FULLY_RECEIVED"
     assert (await session.get(PurchaseOrder, order.id)).status == "FULLY_RECEIVED"
@@ -124,7 +128,7 @@ async def test_receiving_rejects_over_receipt_and_active_duplicate_grn(grn_conte
     assert "active goods receipt" in str(active_error.value)
     po_item = order.items[0]
     with pytest.raises(Exception) as over_error:
-        await receive_goods_receipt_item(first.id, GoodsReceiptItemCreate(purchase_order_item_id=po_item.id, received_quantity=Decimal("101"), batch_number="B-OVER", expiry_date=date(2027, 1, 31)), session, STORE)
+        await receive_goods_receipt_item(first.id, GoodsReceiptItemCreate(purchase_order_item_id=po_item.id, received_quantity=Decimal("101"), batch_number="B-OVER", expiry_date=_business_date() + timedelta(days=365)), session, STORE)
     assert "exceeds" in str(over_error.value)
 
 
