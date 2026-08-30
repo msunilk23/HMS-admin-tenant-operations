@@ -15,7 +15,7 @@ test.describe.serial('P30 patient returns', () => {
   let diagnostics: PageDiagnosticsCollector
   test.beforeEach(() => resetP30())
   test.beforeEach(async ({ page }) => { diagnostics = createPageDiagnostics(page) })
-  test.afterEach(async ({}, info) => diagnostics.flush(info))
+  test.afterEach(async ({ page: _page }, info) => diagnostics.flush(info))
   test('creates a single-batch patient return through Chromium', async ({ page }) => {
     await login(page); await page.goto('/pharmacy/patient-returns'); await expect(page.getByRole('heading', { name: 'Patient Returns' })).toBeVisible()
     await page.getByPlaceholder('Patient name or UHID').fill('E2E-P30-SINGLE'); await page.getByLabel('Eligible dispensing record').selectOption({ index: 1 })

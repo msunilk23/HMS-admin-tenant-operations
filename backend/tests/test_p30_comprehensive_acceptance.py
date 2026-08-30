@@ -415,3 +415,52 @@ async def test_patient_return_preparation_rollback_leaves_no_idempotency_or_allo
         ) == 0
         batch = await verify.get(InventoryBatch, p30_pg_context["batch_b_id"])
         assert batch.available_quantity == Decimal("2")
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_supplier_dispatch_rollback_after_stock_mutation_leaves_no_committed_state(p30_pg_context):
+    import app.services.returns_service as returns_service
+
+    key = "p30-supplier-dispatch-rollback"
+    original_ledger = returns_service.create_stock_ledger_transaction
+
+    async def fail_after_ledger(*args, **kwargs):
+        await original_ledger(*args, **kwargs)
+        raise RuntimeError("controlled post-ledger dispatch failure")
+
+    async with await _session(p30_pg_context) as session:
+        opening_batch = await session.get(InventoryBatch, p30_pg_context["supplier_batch_id"])
+        opening_quantity = opening_batch.available_quantity
+        requested = await SupplierReturnService.request_return(
+            session, p30_pg_context["tenant_a"], p30_pg_context["facility_id"], p30_pg_context["location_id"],
+            _supplier_request(p30_pg_context, Decimal("1"), idempotency_key=key), p30_pg_context["user_id"],
+        )
+        await SupplierReturnService.approve_return(session, requested.id, p30_pg_context["user_id"], p30_pg_context["tenant_a"], p30_pg_context["facility_id"])
+        await session.commit()
+        returns_service.create_stock_ledger_transaction = fail_after_ledger
+        try:
+            with pytest.raises(RuntimeError, match="post-ledger"):
+                await SupplierReturnService.dispatch_return(session, requested.id, p30_pg_context["user_id"], p30_pg_context["tenant_a"], p30_pg_context["facility_id"])
+        finally:
+            returns_service.create_stock_ledger_transaction = original_ledger
+            await session.rollback()
+
+    async with await _session(p30_pg_context) as verify:
+        returned = await verify.get(SupplierReturn, requested.id)
+        batch = await verify.get(InventoryBatch, p30_pg_context["supplier_batch_id"])
+        item = await verify.scalar(select(SupplierReturnItem).where(SupplierReturnItem.supplier_return_id == requested.id))
+        ledger_count = await verify.scalar(select(func.count()).select_from(StockTransaction).where(StockTransaction.reference_id == item.id, StockTransaction.transaction_type == "SUPPLIER_RETURN"))
+        assert returned.status == "APPROVED"
+        assert batch.available_quantity == opening_quantity
+        assert ledger_count == 0
+        await SupplierReturnService.dispatch_return(verify, requested.id, p30_pg_context["user_id"], p30_pg_context["tenant_a"], p30_pg_context["facility_id"])
+        await verify.commit()
+
+    async with await _session(p30_pg_context) as verify:
+        returned = await verify.get(SupplierReturn, requested.id)
+        batch = await verify.get(InventoryBatch, p30_pg_context["supplier_batch_id"])
+        item = await verify.scalar(select(SupplierReturnItem).where(SupplierReturnItem.supplier_return_id == requested.id))
+        ledger = await verify.scalar(select(StockTransaction).where(StockTransaction.reference_id == item.id, StockTransaction.transaction_type == "SUPPLIER_RETURN"))
+        assert returned.status == "DISPATCHED"
+        assert batch.available_quantity == opening_quantity - Decimal("1")
+        assert ledger.quantity == Decimal("-1")

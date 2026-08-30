@@ -184,7 +184,6 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
                 )
 
     if user.role == "super_admin":
-        facility_id = await _load_default_pharmacy_facility(tenant, session)
         extra_claims = {
             "role": "super_admin",
             "tenant_schema": "",
@@ -199,6 +198,7 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
         tenant = tenant_result.scalar_one_or_none()
         if not tenant or not tenant.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hospital account is inactive")
+        facility_id = await _load_default_pharmacy_facility(tenant, session)
         extra_claims = {
             "role": user.role,
             "tenant_id": str(user.tenant_id),
