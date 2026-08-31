@@ -41,7 +41,7 @@ from app.models.tenant.p31_p34 import (
     StockQuarantine, ProductRecall, RecallAffectedStock,
     StockTransfer, StockTransferItem, StockTransferDiscrepancy, PharmacyWorkflowOperation,
     StockCountSettings, StockCount, CountDetail, CountRecount, CountRecountDetail, StockCountOperation,
-    PharmacyAlert, PharmacyAuditTrail
+    PharmacyAlert, PharmacyAlertAcknowledgement, PharmacyAlertConfiguration, PharmacyDashboardOperation
 )
 
 __all__ = [
@@ -111,5 +111,7 @@ __all__ = [
     "CountRecountDetail",
     "StockCountOperation",
     "PharmacyAlert",
-    "PharmacyAuditTrail",
+    "PharmacyAlertAcknowledgement",
+    "PharmacyAlertConfiguration",
+    "PharmacyDashboardOperation",
 ]

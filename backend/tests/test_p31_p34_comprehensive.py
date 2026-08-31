@@ -18,7 +18,7 @@ from app.models.tenant import (
     StockQuarantine, ProductRecall,
     StockTransfer, StockTransferItem,
     StockCount, CountDetail,
-    PharmacyAlert, PharmacyAuditTrail,
+    AuditLog, PharmacyAlert, PharmacyAlertAcknowledgement,
     InventoryBatch, PharmacyLocation
 )
 
@@ -273,17 +273,22 @@ class TestP34DashboardAlerts:
             facility_id=uuid.uuid4(),
             alert_type="LOW_STOCK",
             severity="WARNING",
-            reference_type="BATCH",
-            reference_id=uuid.uuid4(),
+            status="OPEN",
+            subject_type="BATCH",
+            subject_key=str(uuid.uuid4()),
+            subject_data={},
+            title="Low stock",
             message="Medicine stock is below minimum threshold",
-            is_acknowledged=False,
+            condition_data={"reorder_level": "10"},
+            first_detected_at=datetime.utcnow(),
+            last_evaluated_at=datetime.utcnow(),
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
         
         assert alert.alert_type == "LOW_STOCK"
         assert alert.severity == "WARNING"
-        assert not alert.is_acknowledged
+        assert alert.status == "OPEN"
 
     @pytest.mark.asyncio
     async def test_acknowledge_alert(self, mock_session):
@@ -292,43 +297,50 @@ class TestP34DashboardAlerts:
             id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             facility_id=uuid.uuid4(),
-            alert_type="EXPIRED",
+            alert_type="EXPIRY",
             severity="CRITICAL",
-            reference_type="BATCH",
-            reference_id=uuid.uuid4(),
+            status="OPEN",
+            subject_type="BATCH",
+            subject_key=str(uuid.uuid4()),
+            subject_data={},
+            title="Expired stock",
             message="Expired stock detected",
-            is_acknowledged=False,
+            condition_data={"expired": True},
+            first_detected_at=datetime.utcnow(),
+            last_evaluated_at=datetime.utcnow(),
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
-        
-        # Simulate acknowledgment
-        alert.is_acknowledged = True
-        alert.acknowledged_by = uuid.uuid4()
-        alert.acknowledged_at = datetime.utcnow()
-        
-        assert alert.is_acknowledged
-        assert alert.acknowledged_by is not None
+        acknowledgement = PharmacyAlertAcknowledgement(
+            alert_id=alert.id,
+            tenant_id=alert.tenant_id,
+            facility_id=alert.facility_id,
+            acknowledged_by=uuid.uuid4(),
+            note="Reviewed and assigned for correction",
+        )
+
+        alert.status = "ACKNOWLEDGED"
+        assert alert.status == "ACKNOWLEDGED"
+        assert acknowledgement.note
 
     @pytest.mark.asyncio
     async def test_create_audit_trail_entry(self, mock_session):
         """Test creating audit trail entry."""
-        audit = PharmacyAuditTrail(
+        audit = AuditLog(
             id=uuid.uuid4(),
-            tenant_id=uuid.uuid4(),
-            facility_id=uuid.uuid4(),
-            resource_type="StockTransfer",
-            resource_id=uuid.uuid4(),
+            tenant_schema="tenant_test",
+            resource_type="pharmacy_stock_transfer",
+            resource_id=str(uuid.uuid4()),
             action="APPROVE",
             user_id=uuid.uuid4(),
-            old_values='{"status": "REQUESTED"}',
-            new_values='{"status": "APPROVED"}',
-            created_at=datetime.utcnow(),
+            old_value={"status": "REQUESTED"},
+            new_value={"status": "APPROVED"},
+            timestamp=datetime.utcnow(),
         )
-        
-        assert audit.resource_type == "StockTransfer"
+
+        assert audit.resource_type == "pharmacy_stock_transfer"
         assert audit.action == "APPROVE"
-        assert "APPROVED" in audit.new_values
+        assert audit.new_value["status"] == "APPROVED"
 
 
 # Run tests with: pytest tests/test_p31_p34_comprehensive.py -v

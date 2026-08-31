@@ -128,6 +128,7 @@ P32_TRANSFER_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p32-transfer-bat
 P33_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p33-location")
 P33_COUNT_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p33-count-batch")
 P33_UNEXPECTED_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p33-unexpected-batch")
+P34_ALERT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p34-low-stock-alert")
 
 
 def _assert_destructive_reset_allowed(database_url: str, command: str) -> None:
@@ -748,6 +749,54 @@ async def snapshot_p33():
     print(json.dumps({"ids": {"location": P33_LOCATION_ID, "batch": P33_COUNT_BATCH_ID, "unexpected_batch": P33_UNEXPECTED_BATCH_ID, "pharmacist": PHARMACIST_USER_ID, "manager": STORE_MANAGER_USER_ID, "recounter": RECOUNTER_USER_ID}, "batches": [dict(row) for row in batches], "counts": [dict(row) for row in counts], "details": [dict(row) for row in details], "recounts": [dict(row) for row in recounts], "ledger": [dict(row) for row in ledger], "operation_count": operation_count, "audit_count": audit_count}, default=str))
 
 
+async def reset_p34_scenario():
+    from app.core.config import settings
+    _assert_destructive_reset_allowed(settings.DATABASE_URL, "reset_p34_scenario")
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        await conn.execute(text("DELETE FROM pharmacy_dashboard_operations"))
+        await conn.execute(text("DELETE FROM pharmacy_alert_acknowledgements"))
+        await conn.execute(text("DELETE FROM pharmacy_alert_configurations"))
+        await conn.execute(text("DELETE FROM pharmacy_alerts"))
+    await engine.dispose()
+
+
+async def seed_p34_scenario():
+    await reset_p34_scenario()
+    await seed_p28_scenario()
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+    async with maker() as session:
+        await session.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        session.add(PharmacyAlert(
+            id=P34_ALERT_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID,
+            pharmacy_location_id=PHARMACY_LOCATION_A_ID, alert_type="LOW_STOCK",
+            severity="WARNING", status="OPEN", subject_type="inventory_batch",
+            subject_key=str(P28_EARLY_BATCH_ID), active_subject_key=f"LOW_STOCK:{P28_EARLY_BATCH_ID}",
+            subject_data={"batch_number": "P28-EARLY"}, title="Low stock: P28-EARLY",
+            message="P28-EARLY has fallen below its configured reorder level.",
+            condition_data={"available_quantity": "6", "reorder_level": "10"},
+        ))
+        await session.commit()
+    await engine.dispose()
+    print("P34 E2E seed ready")
+
+
+async def snapshot_p34():
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        alerts = (await conn.execute(text("SELECT id, status FROM pharmacy_alerts ORDER BY created_at"))).mappings().all()
+        acknowledgements = (await conn.execute(text("SELECT alert_id, acknowledged_by, note FROM pharmacy_alert_acknowledgements ORDER BY acknowledged_at"))).mappings().all()
+        configurations = (await conn.execute(text("SELECT scope_key, expiry_horizon_days, version, updated_by FROM pharmacy_alert_configurations ORDER BY created_at"))).mappings().all()
+        operation_count = await conn.scalar(text("SELECT count(*) FROM pharmacy_dashboard_operations"))
+    await engine.dispose()
+    print(json.dumps({"alerts": [dict(row) for row in alerts], "acknowledgements": [dict(row) for row in acknowledgements], "configurations": [dict(row) for row in configurations], "operation_count": operation_count}, default=str))
+
+
 async def cleanup():
     from app.core.config import settings
     _assert_destructive_reset_allowed(settings.DATABASE_URL, "cleanup")
@@ -990,6 +1039,12 @@ if __name__ == "__main__":
         asyncio.run(seed_p33_scenario())
     elif command == "snapshot_p33":
         asyncio.run(snapshot_p33())
+    elif command == "reset_p34_scenario":
+        asyncio.run(reset_p34_scenario())
+    elif command == "seed_p34_scenario":
+        asyncio.run(seed_p34_scenario())
+    elif command == "snapshot_p34":
+        asyncio.run(snapshot_p34())
     elif command == "cleanup":
         asyncio.run(cleanup())
     elif command == "snapshot":

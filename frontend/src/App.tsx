@@ -28,6 +28,7 @@ import SupplierReturnsPage from '@/features/pharmacy/SupplierReturnsPage'
 import QuarantinePage from '@/features/pharmacy/QuarantinePage'
 import P32OperationsPage from '@/features/pharmacy/P32OperationsPage'
 import InventoryCountPage from '@/features/pharmacy/InventoryCountPage'
+import PharmacyDashboardPage from '@/features/pharmacy/PharmacyDashboardPage'
 import LabPage from '@/features/lab/LabPage'
 import AdminDashboard from '@/features/admin/AdminDashboard'
 import TenantsPage from '@/features/super_admin/TenantsPage'
@@ -36,6 +37,8 @@ import PharmacyAdminPage from '@/features/admin/PharmacyAdminPage'
 
 import { useAuthStore } from '@/features/auth/authStore'
 import TenantBranding from '@/components/shared/TenantBranding'
+import PermissionGuard from '@/components/shared/PermissionGuard'
+import { P34_PERMISSIONS } from '@/services/pharmacyDashboardService'
 
 const ADMIN = ['hospital_admin']
 const DOCTOR = ['doctor', ...ADMIN]
@@ -123,6 +126,7 @@ export default function App() {
             <Route path="/doctor/lab-results" element={<RoleGuard allowed={DOCTOR}><LabResultsPage /></RoleGuard>} />
             <Route path="/lab" element={<FeatureGuard feature="lab"><RoleGuard allowed={LAB}><LabPage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><PharmacyPage /></RoleGuard></FeatureGuard>} />
+            <Route path="/pharmacy/dashboard" element={<FeatureGuard feature="pharmacy"><PermissionGuard permission={P34_PERMISSIONS.dashboard}><PharmacyDashboardPage /></PermissionGuard></FeatureGuard>} />
             <Route path="/pharmacy/patient-returns" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><PatientReturnsPage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy/supplier-returns" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><SupplierReturnsPage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy/quarantine" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={['pharmacist', 'store_manager', 'hospital_admin']}><QuarantinePage /></RoleGuard></FeatureGuard>} />

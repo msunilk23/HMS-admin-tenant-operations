@@ -1,7 +1,9 @@
 import { useState, useRef } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { ClipboardCheck } from 'lucide-react'
+import { BarChart3, ClipboardCheck } from 'lucide-react'
 import { useAuthStore } from '@/features/auth/authStore'
+import { usePharmacyCapabilities } from '@/hooks/usePharmacyCapabilities'
+import { P34_PERMISSIONS } from '@/services/pharmacyDashboardService'
 import hospitalLogo from '../../../logo/hospital-logo-design-vector-medical-cross_53876-136743.avif'
 
 interface NavItem {
@@ -10,6 +12,7 @@ interface NavItem {
   icon: React.ReactNode
   roles?: string[]
   feature?: string
+  permission?: string
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -126,8 +129,16 @@ const NAV_ITEMS: NavItem[] = [
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
       </svg>
     ),
+    roles: ['pharmacist', 'store_manager', 'hospital_admin', 'auditor'],
+    feature: 'pharmacy',
+  },
+  {
+    label: 'Pharmacy Dashboard',
+    to: '/pharmacy/dashboard',
+    icon: <BarChart3 className="h-5 w-5" />,
     roles: ['pharmacist', 'hospital_admin'],
     feature: 'pharmacy',
+    permission: P34_PERMISSIONS.dashboard,
   },
   {
     label: 'Patient Returns',
@@ -251,6 +262,7 @@ export default function AppLayout() {
     closeTimer.current = setTimeout(() => setUserMenuOpen(false), 150)
   }
   const isExpanded = !collapsed || hovered
+  const { hasPermission } = usePharmacyCapabilities(Boolean(user) && hasFeature('pharmacy'))
 
   const handleLogout = async () => {
     // Revoke the refresh token on the server before clearing local state.
@@ -273,7 +285,8 @@ export default function AppLayout() {
   const visibleItems = NAV_ITEMS.filter(
     (item) =>
       (!item.roles || (user && item.roles.includes(user.role))) &&
-      (!item.feature || hasFeature(item.feature)),
+      (!item.feature || hasFeature(item.feature)) &&
+      (!item.permission || hasPermission(item.permission)),
   )
 
   return (

@@ -15,6 +15,7 @@ from app.api.v1.nurse_departments import router as nurse_departments_router
 from app.api.v1.nurse_roster import router as nurse_roster_router
 from app.api.v1.patients import router as patients_router
 from app.api.v1.pharmacy import router as pharmacy_router
+from app.api.v1.pharmacy_dashboard import router as pharmacy_dashboard_router
 from app.api.v1.prescriptions import router as prescriptions_router
 from app.api.v1.quarantine import router as quarantine_router
 from app.api.v1.p32 import recall_router, transfer_router
@@ -60,6 +61,7 @@ api_router.include_router(feedback_router, prefix="/feedback", tags=["feedback"]
 api_router.include_router(nurse_departments_router, prefix="/nurse-departments", tags=["nurse-departments"], **_tenant_guard)
 api_router.include_router(nurse_roster_router, prefix="/nurse-roster", tags=["nurse-roster"], **_tenant_guard)
 api_router.include_router(pharmacy_router, prefix="/pharmacy", tags=["pharmacy"], **_tenant_guard)
+api_router.include_router(pharmacy_dashboard_router, prefix="/pharmacy-dashboard", tags=["pharmacy-dashboard"], **_tenant_guard)
 api_router.include_router(returns_router, prefix="/returns", tags=["returns"], **_tenant_guard)
 api_router.include_router(quarantine_router, prefix="/pharmacy/quarantines", tags=["pharmacy-quarantine"], **_tenant_guard)
 api_router.include_router(recall_router, prefix="/pharmacy/recalls", tags=["pharmacy-recall"], **_tenant_guard)

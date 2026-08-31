@@ -442,53 +442,112 @@ class StockCountOperation(Base):
 # ============ P34: DASHBOARD + REPORTS + AUDIT ============
 
 class PharmacyAlert(Base, TimestampMixin):
-    """Alerts for dashboard and monitoring."""
+    """A deduplicated, scoped Pharmacy operational alert."""
     __tablename__ = "pharmacy_alerts"
     __table_args__ = (
         CheckConstraint(
-            "alert_type IN ('LOW_STOCK', 'OUT_OF_STOCK', 'NEAR_EXPIRY', 'EXPIRED', 'REPEATED_ADJUSTMENT', 'HIGH_VALUE_VARIANCE', 'UNUSUAL_RETURN')",
+            "alert_type IN ('LOW_STOCK', 'OUT_OF_STOCK', 'EXPIRY', 'UNUSUAL_ADJUSTMENT', 'REPEATED_VARIANCE', 'UNUSUAL_RETURN')",
             name="ck_pharmacy_alerts_type",
         ),
         CheckConstraint(
             "severity IN ('INFO', 'WARNING', 'CRITICAL')",
             name="ck_pharmacy_alerts_severity",
         ),
+        CheckConstraint(
+            "status IN ('OPEN', 'ACKNOWLEDGED', 'RESOLVED')",
+            name="ck_pharmacy_alerts_status",
+        ),
+        UniqueConstraint(
+            "tenant_id", "facility_id", "active_subject_key",
+            name="uq_pharmacy_alerts_active_subject",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     facility_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    
+    pharmacy_location_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("pharmacy_locations.id"), nullable=True, index=True
+    )
     alert_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
-    
-    reference_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # BATCH, MEDICINE, LOCATION
-    reference_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
-    
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN", index=True)
+    subject_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    subject_key: Mapped[str] = mapped_column(String(250), nullable=False, index=True)
+    active_subject_key: Mapped[Optional[str]] = mapped_column(String(350), nullable=True)
+    subject_data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    is_acknowledged: Mapped[bool] = mapped_column(nullable=False, default=False)
-    
-    acknowledged_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
-    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    condition_data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    previous_alert_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("pharmacy_alerts.id"), nullable=True, index=True
+    )
+    first_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class PharmacyAuditTrail(Base):
-    """Extended audit trail for P34 dashboard tracking."""
-    __tablename__ = "pharmacy_audit_trail"
+class PharmacyAlertAcknowledgement(Base):
+    """Immutable acknowledgement history for a Pharmacy alert."""
+    __tablename__ = "pharmacy_alert_acknowledgements"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pharmacy_alerts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    facility_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    acknowledged_by: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class PharmacyAlertConfiguration(Base, TimestampMixin):
+    """Tenant, facility, or location alert configuration override."""
+    __tablename__ = "pharmacy_alert_configurations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "scope_key", name="uq_pharmacy_alert_config_scope"),
+        CheckConstraint("version > 0", name="ck_pharmacy_alert_config_version"),
+        CheckConstraint("expiry_horizon_days > 0", name="ck_pharmacy_alert_config_expiry"),
+        CheckConstraint("quantity_percentage_threshold >= 0", name="ck_pharmacy_alert_config_quantity_pct"),
+        CheckConstraint("repeated_event_count > 0", name="ck_pharmacy_alert_config_repeat_count"),
+        CheckConstraint("lookback_days > 0", name="ck_pharmacy_alert_config_lookback"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    facility_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    pharmacy_location_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("pharmacy_locations.id"), nullable=True, index=True
+    )
+    scope_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    reorder_level: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False, default=Decimal("0"))
+    expiry_horizon_days: Mapped[int] = mapped_column(nullable=False, default=90)
+    high_value_thresholds: Mapped[dict] = mapped_column(JSON, nullable=False, default=lambda: {"INR": "5000.00"})
+    quantity_percentage_threshold: Mapped[Decimal] = mapped_column(Numeric(7, 3), nullable=False, default=Decimal("10"))
+    repeated_event_count: Mapped[int] = mapped_column(nullable=False, default=2)
+    lookback_days: Mapped[int] = mapped_column(nullable=False, default=90)
+    version: Mapped[int] = mapped_column(nullable=False, default=1)
+    updated_by: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+
+
+class PharmacyDashboardOperation(Base):
+    """Successful idempotent P34 mutations and their replay payloads."""
+    __tablename__ = "pharmacy_dashboard_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "user_id", "action", "scope_resource", "idempotency_key",
+            name="uq_pharmacy_dashboard_operation_scope",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     facility_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    
-    resource_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # PatientReturn, SupplierReturn, StockTransfer, CountDetail
-    resource_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    
-    action: Mapped[str] = mapped_column(String(50), nullable=False)  # CREATE, UPDATE, APPROVE, REJECT
     user_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    
-    old_values: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
-    new_values: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
-    
+    action: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    scope_resource: Mapped[str] = mapped_column(String(100), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

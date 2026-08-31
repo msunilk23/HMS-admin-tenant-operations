@@ -1,5 +1,6 @@
 import logging
-from typing import Annotated
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Any, overload
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -94,7 +95,19 @@ def require_role(*roles: str):
     return _check
 
 
-def require_permission(*permissions: str):
+@overload
+def require_permission(*permissions: str) -> Callable[..., Awaitable[dict]]: ...
+
+
+@overload
+def require_permission(
+    session: AsyncSession,
+    user_id: Any,
+    *permissions: str,
+) -> Awaitable[bool]: ...
+
+
+def require_permission(*permissions: Any) -> Any:
     """Compatibility wrapper for dependency and direct service authorization checks."""
     if permissions and not all(isinstance(permission, str) for permission in permissions):
         session = permissions[0]
