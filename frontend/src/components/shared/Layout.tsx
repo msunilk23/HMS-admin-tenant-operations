@@ -151,6 +151,17 @@ const NAV_ITEMS: NavItem[] = [
     feature: 'pharmacy',
   },
   {
+    label: 'Stock Quarantine',
+    to: '/pharmacy/quarantine',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v4m0 4h.01M5.2 20h13.6a2 2 0 001.74-3L13.74 5a2 2 0 00-3.48 0L3.46 17a2 2 0 001.74 3z" />
+      </svg>
+    ),
+    roles: ['pharmacist', 'store_manager', 'hospital_admin'],
+    feature: 'pharmacy',
+  },
+  {
     label: 'Billing',
     to: '/billing',
     icon: (

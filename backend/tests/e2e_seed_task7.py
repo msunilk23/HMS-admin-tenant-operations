@@ -4,7 +4,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -109,6 +109,10 @@ P30_SUPPLIER_BATCH_A_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-supplier-b
 P30_SUPPLIER_BATCH_B_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-supplier-batch-b")
 P30_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-location")
 P30_GRN_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p30-grn")
+P31_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p31-location")
+P31_INVESTIGATIVE_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p31-investigative")
+P31_EXPIRED_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p31-expired")
+P31_DAMAGED_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p31-damaged")
 
 
 def _assert_destructive_reset_allowed(database_url: str, command: str) -> None:
@@ -541,6 +545,60 @@ async def snapshot_p30():
     print(json.dumps({"batches": [{"batch_number": row["batch_number"], "available_quantity": str(row["available_quantity"])} for row in batches], "patient_returns": [dict(row) for row in patient_returns], "patient_allocations": [{"batch_number": row["batch_number"], "returned_quantity": str(row["returned_quantity"])} for row in patient_allocations], "supplier_returns": [dict(row) for row in supplier_returns], "ledger": [{"transaction_type": row["transaction_type"], "batch_number": row["batch_number"], "quantity": str(row["quantity"])} for row in ledger]}, default=str))
 
 
+async def reset_p31_scenario():
+    from app.core.config import settings
+    _assert_destructive_reset_allowed(settings.DATABASE_URL, "reset_p31_scenario")
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    batch_ids = [P31_INVESTIGATIVE_BATCH_ID, P31_EXPIRED_BATCH_ID, P31_DAMAGED_BATCH_ID]
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        table_exists = await conn.scalar(text("SELECT to_regclass('stock_quarantine') IS NOT NULL"))
+        quarantine_ids = (await conn.execute(text("SELECT id FROM stock_quarantine WHERE inventory_batch_id = ANY(:ids)"), {"ids": batch_ids})).scalars().all() if table_exists else []
+        if quarantine_ids:
+            await conn.execute(text("DELETE FROM audit_logs WHERE resource_type = 'stock_quarantine' AND resource_id = ANY(:ids)"), {"ids": [str(value) for value in quarantine_ids]})
+            await conn.execute(text("DELETE FROM stock_quarantine WHERE id = ANY(:ids)"), {"ids": quarantine_ids})
+        await conn.execute(text("DELETE FROM stock_transactions WHERE inventory_batch_id = ANY(:ids)"), {"ids": batch_ids})
+        await conn.execute(text("DELETE FROM inventory_batches WHERE id = ANY(:ids)"), {"ids": batch_ids})
+        await conn.execute(text("DELETE FROM pharmacy_locations WHERE id = :id"), {"id": P31_LOCATION_ID})
+    await engine.dispose()
+
+
+async def seed_p31_scenario():
+    await reset_p31_scenario()
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        await conn.run_sync(lambda sync: StockQuarantine.__table__.create(sync, checkfirst=True))
+    async with maker() as session:
+        await session.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        session.add(PharmacyLocation(id=P31_LOCATION_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, location_code="E2E-P31", location_name="E2E P31 Quarantine", location_type="PHARMACY", active=True))
+        await session.flush()
+        session.add_all([
+            InventoryBatch(id=P31_INVESTIGATIVE_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P31_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P31-INVESTIGATIVE", expiry_date=date(2028, 12, 31), purchase_rate=Decimal("10"), received_quantity=Decimal("10"), available_quantity=Decimal("10"), reserved_quantity=Decimal("0"), status="ACTIVE"),
+            InventoryBatch(id=P31_EXPIRED_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P31_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P31-EXPIRED", expiry_date=date(2025, 1, 1), purchase_rate=Decimal("10"), received_quantity=Decimal("8"), available_quantity=Decimal("8"), reserved_quantity=Decimal("0"), status="ACTIVE"),
+            InventoryBatch(id=P31_DAMAGED_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P31_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P31-DAMAGED", expiry_date=date(2028, 12, 31), purchase_rate=Decimal("10"), received_quantity=Decimal("6"), available_quantity=Decimal("6"), reserved_quantity=Decimal("0"), status="ACTIVE"),
+        ])
+        await session.commit()
+    await engine.dispose()
+    print("P31 E2E seed ready")
+
+
+async def snapshot_p31():
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    batch_ids = [P31_INVESTIGATIVE_BATCH_ID, P31_EXPIRED_BATCH_ID, P31_DAMAGED_BATCH_ID]
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        batches = (await conn.execute(text("SELECT id, batch_number, received_quantity, available_quantity FROM inventory_batches WHERE id = ANY(:ids) ORDER BY batch_number"), {"ids": batch_ids})).mappings().all()
+        quarantines = (await conn.execute(text("SELECT id, inventory_batch_id, status, reason, total_quantity_quarantined, remaining_quantity, disposal_method, disposal_date, witnessed_by, quarantined_by, approved_by FROM stock_quarantine WHERE inventory_batch_id = ANY(:ids) ORDER BY created_at"), {"ids": batch_ids})).mappings().all()
+        ledger = (await conn.execute(text("SELECT inventory_batch_id, transaction_type, quantity, previous_balance, new_balance, reference_id, performed_by FROM stock_transactions WHERE inventory_batch_id = ANY(:ids) AND transaction_type LIKE 'QUARANTINE_%' ORDER BY created_at"), {"ids": batch_ids})).mappings().all()
+        audits = await conn.scalar(text("SELECT count(*) FROM audit_logs WHERE resource_type = 'stock_quarantine' AND resource_id IN (SELECT id::text FROM stock_quarantine WHERE inventory_batch_id = ANY(:ids))"), {"ids": batch_ids})
+    await engine.dispose()
+    print(json.dumps({"actors": {"pharmacist": PHARMACIST_USER_ID, "admin": ADMIN_USER_ID, "witness": RECEPTIONIST_USER_ID}, "batches": [dict(row) for row in batches], "quarantines": [dict(row) for row in quarantines], "ledger": [dict(row) for row in ledger], "audit_count": audits}, default=str))
+
+
 async def cleanup():
     from app.core.config import settings
     _assert_destructive_reset_allowed(settings.DATABASE_URL, "cleanup")
@@ -765,6 +823,12 @@ if __name__ == "__main__":
         asyncio.run(seed_p30_scenario())
     elif command == "snapshot_p30":
         asyncio.run(snapshot_p30())
+    elif command == "reset_p31_scenario":
+        asyncio.run(reset_p31_scenario())
+    elif command == "seed_p31_scenario":
+        asyncio.run(seed_p31_scenario())
+    elif command == "snapshot_p31":
+        asyncio.run(snapshot_p31())
     elif command == "cleanup":
         asyncio.run(cleanup())
     elif command == "snapshot":

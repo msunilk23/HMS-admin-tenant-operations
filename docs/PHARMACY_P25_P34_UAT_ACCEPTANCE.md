@@ -552,3 +552,57 @@ This section supersedes earlier P30 closure statements in this report. P30 busin
 **P30 ACCEPTED**
 
 The final consolidated gate is green. The full backend suite passed `344` tests with exit `0`; combined patient and supplier P30 Chromium executed all `5` tests with no skips or did-not-run tests and exit `0`; final frontend lint exited `0`. No critical/high P30 defect remains. The report and artifact paths are `frontend/playwright-report/`, `frontend/test-results/`, and `.acceptance-artifacts/2026-08-30/p30-combined-chromium-final.txt`.
+
+## Final P31 Consolidated Gate
+
+**Execution date:** 2026-08-30  
+**Decision:** **P31 ACCEPTED**
+
+This section supersedes earlier P31 closure statements in this report. Scope is P31 stock quarantine, investigative release, and expired/damaged disposal only. No P32, Lab implementation, commit, merge, deployment, branch switch, reset, clean, discard, or unstage operation was performed.
+
+### PostgreSQL And Migration Evidence
+
+- Additive revision `0085_p31_stock_quarantine.py` creates the tenant quarantine register, tenant-scoped idempotency uniqueness, quantity-balance constraint, foreign keys, indexes, and live permissions.
+- Upgrade, downgrade, and re-upgrade through `0085` completed successfully against PostgreSQL. The final schema revision is `0085 (head)`.
+- `python -m pytest tests/test_p31_quarantine_acceptance.py -q` with `DATABASE_URL=postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital`, `SECRET_KEY=test-secret-key`, and `REDIS_URL=redis://localhost:6379` produced `7 passed`; exit `0`.
+- The seven real-PostgreSQL tests cover model/migration parity, quarantine and release reconciliation, expired disposal, lifecycle rejection, tenant/RBAC/unauthenticated boundaries, idempotency, independent-session contention, and controlled rollback.
+
+### Accounting And Control Evidence
+
+- Quarantine locks the source inventory batch and moves exactly the requested quantity from saleable `InventoryBatch.available_quantity` to `StockQuarantine.remaining_quantity` without changing physical stock.
+- Investigative release of quantity `3` reconciles saleable ledger movements `-3` and `+3`, restores the source batch, and closes the quarantine balance.
+- Disposal of expired quantity `2` records exactly one physical-only `DISPOSAL` ledger movement of `-2`; it does not subtract the already-removed saleable balance a second time.
+- Maker-checker enforcement rejects self-approval. Release is restricted to investigative stock; expired/damaged stock follows witnessed disposal. Excess quantities, terminal-state transitions, duplicate side effects, cross-tenant access, unauthorized roles, and unauthenticated access are rejected.
+- Audit snapshots serialize decimal quantities safely. Controlled rollback leaves no quarantine, ledger, audit, or inventory mutation. Independent PostgreSQL sessions cannot consume more than the locked available balance.
+
+### Frontend And Chromium Evidence
+
+| Gate | Exact command | Result |
+|---|---|---|
+| P31 component tests | `npx vitest run src/features/pharmacy/QuarantinePage.test.tsx` | `1` file / `6` tests passed; exit `0`. |
+| Complete frontend unit suite | `npm run test:unit` | `5` files / `21` tests passed; exit `0`. |
+| TypeScript | `npm run type-check` | Passed; exit `0`. |
+| ESLint | `npm run lint` | Passed; exit `0`. |
+| Production build | `npm run build` | Passed; `2057` modules transformed; exit `0`. One non-blocking Vite chunk-size warning. |
+| P31 Chromium | `npx playwright test e2e/pharmacy-p31-quarantine.spec.ts --project=chromium` with the PostgreSQL environment above | `3 passed`, `0 failed`, `0 skipped`, `45.8s`; exit `0`. |
+| P25/P28/OPD browser regressions | `npx playwright test e2e/pharmacy-p28.spec.ts e2e/pharmacy-prescription.spec.ts e2e/task7.spec.ts --project=chromium --workers=1` as part of the guarded six-spec run | P28 `1`, prescription `4`, and OPD/controlled-clinical `8` tests passed. |
+| P30 supplier regression | `npx playwright test e2e/pharmacy-p30-supplier-returns.spec.ts --project=chromium --workers=1` with `E2E_ALLOW_DESTRUCTIVE_RESET=true` | `1 passed`, `0 failed`, `26.4s`; exit `0`. |
+
+The P31 Chromium cases execute the real React UI, FastAPI application, JWT route guards, and PostgreSQL tenant schema. They prove investigative quarantine/release with ledger reconciliation, expired disposal with witness and one physical movement, excess-quantity rejection, maker-checker rejection, and unauthorized direct-route denial. The deterministic P31 fixture was reset and reseeded repeatedly with stable IDs and snapshots.
+
+A broad six-spec browser attempt produced `20 passed` and one transient P30 supplier eligibility-render timeout after all related API responses returned `200`. The unchanged supplier spec passed immediately in isolation and had passed in the prior combined P30 gate. This attempt is retained as diagnostic evidence only; it is not substituted for the clean P31 `3/3` result or the clean isolated P30 regression.
+
+### Consolidated Regression Evidence
+
+| Gate | Exact command | Result |
+|---|---|---|
+| Explicit P25-P31 Pharmacy backend files | `$pharmacyTests = (Get-ChildItem tests\test_*.py \| Where-Object { $_.Name -match 'medicine\|formulary\|dosage\|manufacturer\|prescription\|pharmacy\|supplier\|purchase_order\|goods_receipt\|grn\|inventory\|stock_transaction\|dispensing\|p29\|p30\|p31\|return' }).FullName; python -m pytest -q $pharmacyTests` | `148 passed`, `199 warnings`, `29.52s`; exit `0`. |
+| Full backend | `python -m pytest tests -q` | `351 passed`, `293 warnings`, `117.45s`; exit `0`. |
+
+The warning families are existing Pydantic v2, `datetime.utcnow()`, pytest-asyncio, ReportLab, and SQLAlchemy metadata-ordering warnings. They do not change any gate exit code. The production build's large-chunk warning is deferred as low-risk performance maintenance; it does not affect P31 correctness or browser execution.
+
+### Final P31 Decision
+
+**P31 ACCEPTED**
+
+PostgreSQL migration lifecycle, transactional/RBAC/isolation/concurrency/accounting acceptance, the complete frontend gate, P31 component coverage, P31 Chromium `3/3`, relevant Pharmacy/OPD regressions, the explicit Pharmacy backend set, and the full `351`-test backend suite are green. No critical or high P31 defect remains. P32 and Lab were not started.

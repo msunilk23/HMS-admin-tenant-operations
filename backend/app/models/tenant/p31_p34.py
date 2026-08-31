@@ -8,12 +8,12 @@ P34: Dashboard + Reports + Audit
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
-    DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint,
+    Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint,
     CheckConstraint, func, Boolean, Integer
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -32,9 +32,26 @@ class StockQuarantine(Base, TimestampMixin):
             "reference_key",
             name="uq_stock_quarantine_tenant_reference",
         ),
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_stock_quarantine_tenant_idempotency",
+        ),
         CheckConstraint(
-            "status IN ('QUARANTINED', 'APPROVED_FOR_DISPOSAL', 'APPROVED_FOR_RETURN', 'RELEASED', 'DISPOSED')",
+            "status IN ('QUARANTINED', 'RELEASED', 'DISPOSED')",
             name="ck_stock_quarantine_status",
+        ),
+        CheckConstraint(
+            "reason IN ('EXPIRED', 'DAMAGED', 'INVESTIGATION')",
+            name="ck_stock_quarantine_reason",
+        ),
+        CheckConstraint(
+            "total_quantity_quarantined > 0",
+            name="ck_stock_quarantine_positive_quantity",
+        ),
+        CheckConstraint(
+            "remaining_quantity >= 0 AND remaining_quantity <= total_quantity_quarantined",
+            name="ck_stock_quarantine_remaining_quantity",
         ),
     )
 
@@ -51,9 +68,12 @@ class StockQuarantine(Base, TimestampMixin):
     
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="QUARANTINED", index=True)
     reference_key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     
     reason: Mapped[str] = mapped_column(String(50), nullable=False)  # EXPIRED, DAMAGED, RECALLED, RECALLED_PRODUCT, RECALLED_MANUFACTURER
     total_quantity_quarantined: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    remaining_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
     
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
@@ -63,9 +83,29 @@ class StockQuarantine(Base, TimestampMixin):
     
     approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    approved_action: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # DISPOSE, RETURN_TO_SUPPLIER
+    approved_action: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    release_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    released_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    released_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    disposal_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    disposal_method: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    disposal_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    witnessed_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    disposed_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     
     disposed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    quarantine_ledger_transaction_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("stock_transactions.id"), nullable=True, unique=True
+    )
+    release_ledger_transaction_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("stock_transactions.id"), nullable=True, unique=True
+    )
+    disposal_ledger_transaction_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("stock_transactions.id"), nullable=True, unique=True
+    )
 
 
 class ProductRecall(Base, TimestampMixin):

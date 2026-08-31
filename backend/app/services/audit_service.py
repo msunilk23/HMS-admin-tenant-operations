@@ -2,6 +2,7 @@
 
 import uuid
 from contextvars import ContextVar
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +46,8 @@ def sanitize_audit_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [sanitize_audit_value(item) for item in value]
     if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, Decimal):
         return str(value)
     if hasattr(value, "isoformat"):
         return value.isoformat()

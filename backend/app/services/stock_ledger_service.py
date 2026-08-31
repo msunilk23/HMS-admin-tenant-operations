@@ -29,6 +29,7 @@ async def create_stock_ledger_transaction(
     reference_id: Any,
     reason: str,
     user_id: Optional[uuid.UUID] = None,
+    affects_available_balance: bool = True,
 ) -> StockTransaction:
     """Append a signed stock ledger row and keep the batch cache consistent."""
     if inventory_batch_id is not None:
@@ -67,8 +68,8 @@ async def create_stock_ledger_transaction(
         prior_balance = Decimal("0")
 
     adjustment = _to_decimal(quantity)
-    new_balance = prior_balance + adjustment
-    if inventory_batch_id is not None:
+    new_balance = prior_balance + adjustment if affects_available_balance else prior_balance
+    if inventory_batch_id is not None and affects_available_balance:
         batch = await session.scalar(
             select(InventoryBatch).where(InventoryBatch.id == inventory_batch_id).with_for_update()
         )
