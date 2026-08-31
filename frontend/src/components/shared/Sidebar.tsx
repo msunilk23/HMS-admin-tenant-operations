@@ -8,6 +8,7 @@ import {
   filterNavTree,
   isLeafActive,
   findActiveDomainIds,
+  findActiveSubsectionIds,
   type NavDomain,
   type NavLeafItem,
 } from './navConfig'
@@ -57,11 +58,23 @@ interface DomainRowProps {
   isOpen: boolean
   isDomainActive: boolean
   pathname: string
+  expandedSubsections: Set<string>
   onToggle: () => void
+  onToggleSubsection: (id: string) => void
   onSelectLeaf: () => void
 }
 
-function DomainRow({ domain, isExpanded, isOpen, isDomainActive, pathname, onToggle, onSelectLeaf }: DomainRowProps) {
+function DomainRow({
+  domain,
+  isExpanded,
+  isOpen,
+  isDomainActive,
+  pathname,
+  expandedSubsections,
+  onToggle,
+  onToggleSubsection,
+  onSelectLeaf,
+}: DomainRowProps) {
   const Icon = domain.icon
   const showChildren = isExpanded && isOpen
   const domainId = `nav-domain-${domain.id}`
@@ -104,16 +117,35 @@ function DomainRow({ domain, isExpanded, isOpen, isDomainActive, pathname, onTog
               </li>
             ) : (
               <li key={child.id}>
-                <p className="mt-2 px-3 pb-0.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                  {child.label}
-                </p>
-                <ul className="space-y-0.5">
-                  {child.items.map((item) => (
-                    <li key={item.id}>
-                      <NavLeafRow item={item} isExpanded={isExpanded} pathname={pathname} indent onSelect={onSelectLeaf} />
-                    </li>
-                  ))}
-                </ul>
+                <button
+                  type="button"
+                  onClick={() => onToggleSubsection(child.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      onToggleSubsection(child.id)
+                    }
+                  }}
+                  aria-expanded={expandedSubsections.has(child.id)}
+                  aria-controls={`nav-subsection-${child.id}`}
+                  className="mt-2 flex w-full items-center justify-between gap-2 rounded-lg px-3 pb-0.5 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-400 transition-colors hover:text-gray-600"
+                >
+                  <span className="truncate">{child.label}</span>
+                  {expandedSubsections.has(child.id) ? (
+                    <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+                  ) : (
+                    <ChevronRight className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+                  )}
+                </button>
+                {expandedSubsections.has(child.id) && (
+                  <ul id={`nav-subsection-${child.id}`} className="space-y-0.5">
+                    {child.items.map((item) => (
+                      <li key={item.id}>
+                        <NavLeafRow item={item} isExpanded={isExpanded} pathname={pathname} indent onSelect={onSelectLeaf} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </li>
             ),
           )}
@@ -137,6 +169,7 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
   const [collapsed, setCollapsed] = useState<boolean>(readStoredCollapsed)
   const [hovered, setHovered] = useState(false)
   const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set())
+  const [expandedSubsections, setExpandedSubsections] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     try {
@@ -148,14 +181,26 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
 
   const tree = filterNavTree(NAV_TREE, { role: user?.role ?? '', hasFeature, hasPermission })
   const activeDomainIds = findActiveDomainIds(tree, location.pathname)
+  const activeSubsectionIds = findActiveSubsectionIds(tree, location.pathname)
 
   // Auto-open the parent hierarchy of the current route. Only adds ids —
-  // never removes — so manually expanded domains stay open across navigation.
+  // never removes — so manually expanded domains/subsections stay open across navigation.
   useEffect(() => {
     setExpandedDomains((previous) => {
       const next = new Set(previous)
       let changed = false
       activeDomainIds.forEach((id) => {
+        if (!next.has(id)) {
+          next.add(id)
+          changed = true
+        }
+      })
+      return changed ? next : previous
+    })
+    setExpandedSubsections((previous) => {
+      const next = new Set(previous)
+      let changed = false
+      activeSubsectionIds.forEach((id) => {
         if (!next.has(id)) {
           next.add(id)
           changed = true
@@ -170,6 +215,15 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
 
   const toggleDomain = (id: string) => {
     setExpandedDomains((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSubsection = (id: string) => {
+    setExpandedSubsections((previous) => {
       const next = new Set(previous)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -223,7 +277,9 @@ export default function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                     isOpen={expandedDomains.has(entry.id)}
                     isDomainActive={activeDomainIds.has(entry.id)}
                     pathname={location.pathname}
+                    expandedSubsections={expandedSubsections}
                     onToggle={() => handleDomainToggle(entry.id)}
+                    onToggleSubsection={toggleSubsection}
                     onSelectLeaf={onCloseMobile}
                   />
                 )}

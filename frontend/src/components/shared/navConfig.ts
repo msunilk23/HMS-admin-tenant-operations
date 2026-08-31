@@ -320,3 +320,17 @@ export function findActiveDomainIds(entries: NavEntry[], pathname: string): Set<
   }
   return active
 }
+
+/** Subsection ids (nested inside a domain) that contain the currently active route. */
+export function findActiveSubsectionIds(entries: NavEntry[], pathname: string): Set<string> {
+  const active = new Set<string>()
+  for (const entry of entries) {
+    if (entry.kind !== 'domain') continue
+    for (const child of entry.children) {
+      if (child.kind === 'subsection' && child.items.some((item) => isLeafActive(pathname, item))) {
+        active.add(child.id)
+      }
+    }
+  }
+  return active
+}

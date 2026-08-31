@@ -65,6 +65,36 @@ describe('Sidebar active-route behaviour', () => {
   })
 })
 
+describe('Sidebar nested subsection collapse', () => {
+  it('collapses and expands Nursing independently of Doctor Workspace', () => {
+    setRole('hospital_admin')
+    renderSidebar('/dashboard')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clinical Care' }))
+    const nursing = screen.getByRole('button', { name: 'Nursing' })
+    const doctorWorkspace = screen.getByRole('button', { name: 'Doctor Workspace' })
+    expect(nursing).toHaveAttribute('aria-expanded', 'false')
+    expect(doctorWorkspace).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('link', { name: 'Vitals' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Consultation' })).not.toBeInTheDocument()
+
+    fireEvent.click(nursing)
+    expect(nursing).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('link', { name: 'Vitals' })).toBeInTheDocument()
+    expect(doctorWorkspace).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('link', { name: 'Consultation' })).not.toBeInTheDocument()
+
+    fireEvent.click(doctorWorkspace)
+    expect(screen.getByRole('link', { name: 'Consultation' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Vitals' })).toBeInTheDocument()
+
+    fireEvent.click(nursing)
+    expect(nursing).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('link', { name: 'Vitals' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Consultation' })).toBeInTheDocument()
+  })
+})
+
 describe('Sidebar collapsed/expanded persistence', () => {
   it('starts expanded when no preference has been saved', () => {
     setRole('hospital_admin')

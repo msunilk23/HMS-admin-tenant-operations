@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { P34_PERMISSIONS } from '@/services/pharmacyDashboardService'
-import { NAV_TREE, filterNavTree, findActiveDomainIds, isLeafActive, type NavAuthContext, type NavDomain } from './navConfig'
+import { NAV_TREE, filterNavTree, findActiveDomainIds, findActiveSubsectionIds, isLeafActive, type NavAuthContext, type NavDomain } from './navConfig'
 
 function ctx(overrides: Partial<NavAuthContext> = {}): NavAuthContext {
   return {
@@ -178,5 +178,11 @@ describe('navConfig active-route matching', () => {
     // matchPath only ever receives pathname (query strings are stripped by the router),
     // so a schedules link with search params still maps to the same active domain.
     expect(findActiveDomainIds(tree, '/admin/doctors/schedules')).toEqual(new Set(['administration']))
+  })
+
+  it('activates only the subsection containing the active route, not sibling subsections', () => {
+    const tree = filterNavTree(NAV_TREE, ctx({ role: 'doctor' }))
+    expect(findActiveSubsectionIds(tree, '/doctor/consultation')).toEqual(new Set(['doctor-workspace']))
+    expect(findActiveSubsectionIds(tree, '/doctor/consultation')).not.toContain('nursing')
   })
 })
