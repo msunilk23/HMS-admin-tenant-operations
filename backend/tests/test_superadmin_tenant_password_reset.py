@@ -9,6 +9,7 @@ from starlette.requests import Request
 
 from app.api.v1.super_admin import (
     TenantAdminPasswordResetRequest,
+    delete_tenant,
     reset_tenant_admin_password,
 )
 from app.core.dependencies import require_role
@@ -135,3 +136,36 @@ def _allowed():
     async def result():
         return True
     return result()
+
+
+class DeleteSession:
+    def __init__(self, tenant):
+        self.tenant = tenant
+        self.statements = []
+        self.deleted = []
+        self.commits = 0
+
+    async def get(self, _model, key):
+        return self.tenant if key == self.tenant.id else None
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+
+    async def delete(self, value):
+        self.deleted.append(value)
+
+    async def commit(self):
+        self.commits += 1
+
+
+@pytest.mark.asyncio
+async def test_delete_tenant_preserves_platform_super_admins():
+    tenant = SimpleNamespace(id=uuid.uuid4(), schema_name="hospital_a")
+    session = DeleteSession(tenant)
+
+    await delete_tenant(tenant.id, session)
+
+    user_delete = str(session.statements[1].compile(compile_kwargs={"literal_binds": True}))
+    assert "public.users.role != 'super_admin'" in user_delete
+    assert session.deleted == [tenant]
+    assert session.commits == 1

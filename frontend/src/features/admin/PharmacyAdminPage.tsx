@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { masterDataService } from '@/services/masterDataService'
+import apiClient from '@/services/apiClient'
 
-type Tab = 'generic-medicines' | 'dosage-forms' | 'routes' | 'manufacturers' | 'medicine-products' | 'formulary'
+type Tab = 'locations' | 'suppliers' | 'generic-medicines' | 'dosage-forms' | 'routes' | 'manufacturers' | 'medicine-products' | 'formulary'
 type FormValue = string | boolean
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'locations', label: 'Locations' },
+  { id: 'suppliers', label: 'Suppliers' },
   { id: 'generic-medicines', label: 'Generic Medicines' },
   { id: 'dosage-forms', label: 'Dosage Forms' },
   { id: 'routes', label: 'Routes' },
@@ -15,6 +18,13 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 const fields: Record<Tab, { key: string; label: string; type?: 'boolean' | 'date' }[]> = {
+  locations: [{ key: 'location_code', label: 'Location code' }, { key: 'location_name', label: 'Location name' }],
+  suppliers: [
+    { key: 'supplier_code', label: 'Supplier code' }, { key: 'supplier_name', label: 'Supplier name' },
+    { key: 'gstin', label: 'GSTIN' }, { key: 'drug_license_no', label: 'Drug license number' },
+    { key: 'contact_person', label: 'Contact person' }, { key: 'phone', label: 'Phone' },
+    { key: 'email', label: 'Email' }, { key: 'payment_terms', label: 'Payment terms' },
+  ],
   'generic-medicines': [
     { key: 'code', label: 'Code' }, { key: 'name', label: 'Name' }, { key: 'therapeutic_class', label: 'Therapeutic class' }, { key: 'description', label: 'Description' },
   ],
@@ -33,6 +43,8 @@ const fields: Record<Tab, { key: string; label: string; type?: 'boolean' | 'date
 
 const api = {
   list: (tab: Tab, q: string) => {
+    if (tab === 'locations') return apiClient.get<Record<string, unknown>[]>('/pharmacy/inventory/setup/locations').then(response => response.data)
+    if (tab === 'suppliers') return masterDataService.listSuppliers(q)
     if (tab === 'generic-medicines') return masterDataService.listGenericMedicines(q)
     if (tab === 'dosage-forms') return masterDataService.listDosageForms(q)
     if (tab === 'routes') return masterDataService.listRoutes(q)
@@ -41,6 +53,8 @@ const api = {
     return masterDataService.listFormulary(q)
   },
   create: (tab: Tab, data: Record<string, FormValue>) => {
+    if (tab === 'locations') return apiClient.post('/pharmacy/inventory/setup/locations', data).then(response => response.data)
+    if (tab === 'suppliers') return masterDataService.createSupplier(data)
     if (tab === 'generic-medicines') return masterDataService.createGenericMedicine(data)
     if (tab === 'dosage-forms') return masterDataService.createDosageForm(data)
     if (tab === 'routes') return masterDataService.createRoute(data)
@@ -49,6 +63,8 @@ const api = {
     return masterDataService.createFormulary(data)
   },
   update: (tab: Tab, id: string, data: Record<string, FormValue>) => {
+    if (tab === 'locations') throw new Error('Pharmacy locations cannot be edited here')
+    if (tab === 'suppliers') return masterDataService.updateSupplier(id, data)
     if (tab === 'generic-medicines') return masterDataService.updateGenericMedicine(id, data)
     if (tab === 'dosage-forms') return masterDataService.updateDosageForm(id, data)
     if (tab === 'routes') return masterDataService.updateRoute(id, data)
@@ -57,6 +73,8 @@ const api = {
     return masterDataService.updateFormulary(id, data)
   },
   deactivate: (tab: Tab, id: string) => {
+    if (tab === 'locations') throw new Error('Pharmacy locations cannot be deactivated here')
+    if (tab === 'suppliers') return masterDataService.deactivateSupplier(id)
     if (tab === 'generic-medicines') return masterDataService.deactivateGenericMedicine(id)
     if (tab === 'dosage-forms') return masterDataService.deactivateDosageForm(id)
     if (tab === 'routes') return masterDataService.deactivateRoute(id)
@@ -72,15 +90,19 @@ function displayValue(value: unknown) {
 }
 
 export default function PharmacyAdminPage() {
-  const [tab, setTab] = useState<Tab>('generic-medicines')
+  const [tab, setTab] = useState<Tab>('locations')
   const [query, setQuery] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<Record<string, FormValue>>({})
+  const [setupMessage, setSetupMessage] = useState('')
   const qc = useQueryClient()
   const { data = [], isLoading, isError } = useQuery<Record<string, unknown>[]>({ queryKey: ['pharmacy-admin', tab, query], queryFn: async () => api.list(tab, query) as unknown as Record<string, unknown>[] })
   const mutation = useMutation({
     mutationFn: async (): Promise<unknown> => editingId ? api.update(tab, editingId, form) : api.create(tab, form),
-    onSuccess: () => { setForm({}); setEditingId(null); qc.invalidateQueries({ queryKey: ['pharmacy-admin', tab] }) },
+    onSuccess: () => {
+      setForm({}); setEditingId(null); qc.invalidateQueries({ queryKey: ['pharmacy-admin', tab] })
+      if (tab === 'locations') setSetupMessage('Location created. Sign out and sign in again to activate facility context.')
+    },
   })
   const deactivateMutation = useMutation({ mutationFn: async (id: string): Promise<unknown> => api.deactivate(tab, id), onSuccess: () => qc.invalidateQueries({ queryKey: ['pharmacy-admin', tab] }) })
   const config = fields[tab]
@@ -98,7 +120,7 @@ export default function PharmacyAdminPage() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Pharmacy Master Data</h1>
-            <p className="text-sm text-gray-500 mt-1">Manage controlled medicine, product, and formulary records.</p>
+            <p className="text-sm text-gray-500 mt-1">Set up pharmacy locations, medicines, products, and formulary records.</p>
           </div>
           <a href="/admin/pharmacy/purchase-orders" className="px-3 py-2 rounded-lg border border-primary text-primary text-sm font-medium hover:bg-primary/5 whitespace-nowrap">
             Purchase Orders
@@ -108,6 +130,7 @@ export default function PharmacyAdminPage() {
       <div className="flex gap-1 overflow-x-auto border-b border-gray-200">
         {TABS.map(item => <button key={item.id} type="button" onClick={() => { setTab(item.id); setQuery(''); setForm({}); setEditingId(null) }} className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 ${tab === item.id ? 'border-primary text-primary font-semibold' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>{item.label}</button>)}
       </div>
+      {setupMessage && <p role="status" className="border-l-4 border-emerald-600 bg-emerald-50 p-3 text-sm text-emerald-900">{setupMessage}</p>}
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-5 items-start">
         <section className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="p-4 border-b border-gray-200 flex gap-3">
@@ -116,7 +139,7 @@ export default function PharmacyAdminPage() {
           </div>
           {isLoading && <p className="p-5 text-sm text-gray-500">Loading records…</p>}
           {isError && <p className="p-5 text-sm text-red-600">Could not load records.</p>}
-          {!isLoading && !isError && <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50 text-left text-xs uppercase text-gray-500"><tr><th className="px-4 py-3">Record</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-gray-100">{data.map(item => <tr key={String(item.id)}><td className="px-4 py-3"><div className="font-medium text-gray-900">{displayValue(item.name ?? item.brand_name ?? item.code ?? item.medicine_product_id)}</div><div className="text-xs text-gray-500">{displayValue(item.code ?? item.department_id)}</div></td><td className="px-4 py-3">{item.is_active === false ? <span className="text-gray-400">Inactive</span> : <span className="text-emerald-700">Active</span>}</td><td className="px-4 py-3 text-right space-x-2"><button type="button" onClick={() => beginEdit(item)} className="text-primary hover:underline">Edit</button>{item.is_active !== false && <button type="button" onClick={() => deactivateMutation.mutate(String(item.id))} className="text-red-600 hover:underline">Deactivate</button>}</td></tr>)}</tbody></table>{data.length === 0 && <p className="p-5 text-sm text-gray-500">No records found.</p>}</div>}
+          {!isLoading && !isError && <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-gray-50 text-left text-xs uppercase text-gray-500"><tr><th className="px-4 py-3">Record</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-gray-100">{data.map(item => <tr key={String(item.id)}><td className="px-4 py-3"><div className="font-medium text-gray-900">{displayValue(item.location_name ?? item.supplier_name ?? item.name ?? item.brand_name ?? item.code ?? item.medicine_product_id)}</div><div className="text-xs text-gray-500">{displayValue(item.location_code ?? item.supplier_code ?? item.code ?? item.department_id)}</div></td><td className="px-4 py-3">{item.active === false || item.is_active === false ? <span className="text-gray-400">Inactive</span> : <span className="text-emerald-700">Active</span>}</td><td className="px-4 py-3 text-right space-x-2">{tab !== 'locations' && <><button type="button" onClick={() => beginEdit(item)} className="text-primary hover:underline">Edit</button>{item.is_active !== false && <button type="button" onClick={() => deactivateMutation.mutate(String(item.id))} className="text-red-600 hover:underline">Deactivate</button>}</>}</td></tr>)}</tbody></table>{data.length === 0 && <p className="p-5 text-sm text-gray-500">{tab === 'locations' ? 'No pharmacy location exists. Create the first location to establish facility context.' : 'No records found.'}</p>}</div>}
         </section>
         <section className="bg-white border border-gray-200 rounded-xl p-5">
           <h2 className="font-semibold text-gray-900">{editingId ? 'Edit record' : 'Add record'}</h2>

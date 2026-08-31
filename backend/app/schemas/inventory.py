@@ -3,7 +3,20 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+
+
+class PharmacyLocationCreate(BaseModel):
+    location_code: str = Field(min_length=1, max_length=50)
+    location_name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("location_code", "location_name")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value cannot be blank")
+        return value
 
 
 class PharmacyLocationRead(BaseModel):

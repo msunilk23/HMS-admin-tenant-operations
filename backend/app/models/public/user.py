@@ -45,8 +45,10 @@ class User(Base, TimestampMixin):
     __table_args__ = {"schema": "public"}
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("public.tenants.id"), nullable=False)
-    tenant_name: Mapped[str] = mapped_column(String(63), nullable=False)
+    tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("public.tenants.id", ondelete="SET NULL"), nullable=True
+    )
+    tenant_name: Mapped[Optional[str]] = mapped_column(String(63), nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
@@ -59,7 +61,7 @@ class User(Base, TimestampMixin):
     session_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tokens_valid_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="users")
+    tenant: Mapped[Optional["Tenant"]] = relationship("Tenant", back_populates="users")
 
     def __repr__(self) -> str:
         return f"<User {self.email} role={self.role}>"

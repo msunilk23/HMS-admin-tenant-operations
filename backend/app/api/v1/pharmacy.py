@@ -42,7 +42,7 @@ from app.schemas.invoice import InvoiceRead, PharmacyBillCreate
 from app.schemas.pharmacy import FormularyMedicineSearchResult, OutsidePurchaseCreate, PharmacyAllocationRequest, PharmacyDispenseConfirm, PharmacyDispenseItemRead, PharmacyDispenseRead, PharmacyDispenseStart, PharmacyQueueRead, PharmacyReservationRead, PharmacyReservationRelease, PharmacyStatusUpdate, PharmacySubstitutionCreate, SupplierCreate, SupplierImportItem, SupplierRead, SupplierUpdate
 from app.schemas.purchase_order import PurchaseOrderCreate, PurchaseOrderRead, PurchaseOrderUpdate
 from app.schemas.goods_receipt import GoodsReceiptCreate, GoodsReceiptItemCreate, GoodsReceiptItemRead, GoodsReceiptRead
-from app.schemas.inventory import InventoryBalanceRead, InventoryBatchRead, InventoryReconciliationRead, PharmacyLocationRead, StockAdjustmentCreate, StockTransactionRead
+from app.schemas.inventory import InventoryBalanceRead, InventoryBatchRead, InventoryReconciliationRead, PharmacyLocationCreate, PharmacyLocationRead, StockAdjustmentCreate, StockTransactionRead
 from app.models.tenant.inventory_batch import InventoryBatch
 from app.models.tenant.pharmacy_location import PharmacyLocation
 from app.models.tenant.stock_transaction import StockTransaction
@@ -685,6 +685,58 @@ def _current_tenant_id(current_user: dict) -> uuid.UUID:
         return uuid.UUID(str(current_user["tenant_id"]))
     except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(status_code=401, detail="Tenant context is required") from exc
+
+
+@router.get("/inventory/setup/locations", response_model=List[PharmacyLocationRead])
+async def list_setup_locations(
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("hospital_admin")),
+):
+    tenant_id = _current_tenant_id(current_user)
+    return (await session.execute(
+        select(PharmacyLocation)
+        .where(PharmacyLocation.tenant_id == tenant_id)
+        .order_by(PharmacyLocation.location_name)
+    )).scalars().all()
+
+
+@router.post("/inventory/setup/locations", response_model=PharmacyLocationRead, status_code=201)
+async def create_setup_location(
+    payload: PharmacyLocationCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("hospital_admin")),
+):
+    tenant_id = _current_tenant_id(current_user)
+    facility_ids = (await session.execute(
+        select(PharmacyLocation.facility_id)
+        .where(PharmacyLocation.tenant_id == tenant_id)
+        .distinct()
+        .limit(2)
+    )).scalars().all()
+    if len(facility_ids) > 1:
+        raise HTTPException(status_code=409, detail="Multiple pharmacy facilities exist; location setup is ambiguous")
+
+    location_code = payload.location_code.upper()
+    duplicate = await session.scalar(select(PharmacyLocation.id).where(
+        PharmacyLocation.tenant_id == tenant_id,
+        PharmacyLocation.location_code == location_code,
+    ))
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Pharmacy location code already exists")
+
+    location = PharmacyLocation(
+        tenant_id=tenant_id,
+        facility_id=facility_ids[0] if facility_ids else uuid.uuid4(),
+        location_code=location_code,
+        location_name=payload.location_name,
+        location_type="PHARMACY",
+        active=True,
+        created_by=uuid.UUID(str(current_user["sub"])),
+    )
+    session.add(location)
+    await session.commit()
+    await session.refresh(location)
+    return location
 
 
 @router.get("/inventory/locations", response_model=List[PharmacyLocationRead])

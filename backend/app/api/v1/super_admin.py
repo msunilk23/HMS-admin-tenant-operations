@@ -649,7 +649,7 @@ async def delete_tenant(
     """
     Permanently delete a tenant:
     1. Delete all TenantFeature rows
-    2. Delete all User rows belonging to this tenant
+    2. Delete tenant users while preserving platform Super Admins
     3. Delete the Tenant record
     4. Drop the PostgreSQL schema (CASCADE — removes all tables)
     """
@@ -657,7 +657,9 @@ async def delete_tenant(
     schema_name = tenant.schema_name
 
     await session.execute(sa_delete(TenantFeature).where(TenantFeature.tenant_id == tenant_id))
-    await session.execute(sa_delete(User).where(User.tenant_id == tenant_id))
+    await session.execute(
+        sa_delete(User).where(User.tenant_id == tenant_id, User.role != "super_admin")
+    )
     await session.delete(tenant)
     await session.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
     await session.commit()
