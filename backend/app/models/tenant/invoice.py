@@ -2,7 +2,7 @@ from typing import Optional
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,10 @@ from app.db.base import Base, TimestampMixin
 
 class Invoice(Base, TimestampMixin):
     __tablename__ = "invoices"
+    __table_args__ = (
+        UniqueConstraint("pharmacy_dispense_id", name="uq_invoices_pharmacy_dispense"),
+        UniqueConstraint("lab_order_id", name="uq_invoices_lab_order_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     visit_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("visits.id"), nullable=False, index=True)
@@ -33,6 +37,8 @@ class Invoice(Base, TimestampMixin):
     # pharmacy billing fields
     source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="consultation")
     pharmacy_queue_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
+    pharmacy_dispense_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("pharmacy_dispenses.id"), nullable=True, index=True)
+    lab_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("lab_orders.id"), nullable=True, index=True)
 
     @property
     def balance(self) -> float:

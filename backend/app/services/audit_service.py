@@ -2,6 +2,7 @@
 
 import uuid
 from contextvars import ContextVar
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +47,8 @@ def sanitize_audit_value(value: Any) -> Any:
         return [sanitize_audit_value(item) for item in value]
     if isinstance(value, uuid.UUID):
         return str(value)
+    if isinstance(value, Decimal):
+        return str(value)
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
@@ -61,7 +64,7 @@ def _user_uuid(user_id: Any) -> uuid.UUID | None:
 def record_audit(
     session: AsyncSession,
     *,
-    current_user: dict | None,
+    current_user: dict | None = None,
     action: str,
     resource_type: str,
     resource_id: Any = None,
@@ -71,10 +74,21 @@ def record_audit(
     visit_id: Any = None,
     reason: str | None = None,
     request_metadata: dict | None = None,
+    tenant_id: Any = None,
+    facility_id: Any = None,
+    user_id: Any = None,
+    **_: Any,
 ) -> AuditLog:
     user = current_user or {}
+    if not user and (user_id is not None or tenant_id is not None):
+        user = {
+            "sub": str(user_id) if user_id is not None else None,
+            "tenant_id": str(tenant_id) if tenant_id is not None else None,
+            "facility_id": str(facility_id) if facility_id is not None else None,
+            "role": "system",
+        }
     entry = AuditLog(
-        user_id=_user_uuid(user.get("sub")),
+        user_id=_user_uuid(user.get("sub")) if user else _user_uuid(user_id),
         tenant_schema=user.get("tenant_schema"),
         role=user.get("role"),
         action=action,

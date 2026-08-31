@@ -8,6 +8,7 @@ from app.models.tenant.vitals import Vitals
 from app.models.tenant.consultation import Consultation
 from app.models.tenant.prescription import Prescription, PrescriptionItem
 from app.models.tenant.lab_order import LabOrder, LabResult
+from app.models.tenant.lab_test_master import LabTestMaster
 from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.invoice import Invoice, Payment, Refund
 from app.models.tenant.document import DocumentVersion, DocumentVersionCounter
@@ -19,8 +20,29 @@ from app.models.tenant.doctor_schedule_exception import DoctorScheduleException
 from app.models.tenant.clinical_alert import ClinicalAlert
 from app.models.tenant.audit_log import AuditLog
 from app.models.tenant.token_counter import TokenCounter
+from app.models.tenant.supplier import Supplier
+from app.models.tenant.purchase_order import PurchaseOrder, PurchaseOrderItem
+from app.models.tenant.goods_receipt import GoodsReceipt, GoodsReceiptItem
 from app.models.tenant.icd10_code import ICD10Code
+from app.models.tenant.generic_medicine import GenericMedicine
+from app.models.tenant.dosage_form import DosageForm
+from app.models.tenant.hospital_formulary import HospitalFormulary
+from app.models.tenant.manufacturer import Manufacturer
 from app.models.tenant.medicine_master import MedicineMaster
+from app.models.tenant.medicine_product import MedicineProduct
+from app.models.tenant.route import Route
+from app.models.tenant.pharmacy_location import PharmacyLocation
+from app.models.tenant.inventory_batch import InventoryBatch
+from app.models.tenant.stock_transaction import StockTransaction
+from app.models.tenant.pharmacy_dispense import PharmacyDispense, PharmacyDispenseAllocation, PharmacyDispenseItem, PharmacyStockReservation
+from app.models.tenant.requisition import Requisition
+from app.models.tenant.returns import PatientReturn, PatientReturnItem, PatientReturnBatchAllocation, SupplierReturn, SupplierReturnItem
+from app.models.tenant.p31_p34 import (
+    StockQuarantine, ProductRecall, RecallAffectedStock,
+    StockTransfer, StockTransferItem, StockTransferDiscrepancy, PharmacyWorkflowOperation,
+    StockCountSettings, StockCount, CountDetail, CountRecount, CountRecountDetail, StockCountOperation,
+    PharmacyAlert, PharmacyAlertAcknowledgement, PharmacyAlertConfiguration, PharmacyDashboardOperation
+)
 
 __all__ = [
     "Department",
@@ -35,6 +57,7 @@ __all__ = [
     "PrescriptionItem",
     "LabOrder",
     "LabResult",
+    "LabTestMaster",
     "PharmacyQueue",
     "Invoice",
     "DocumentVersion",
@@ -48,6 +71,47 @@ __all__ = [
     "ClinicalAlert",
     "AuditLog",
     "TokenCounter",
+    "Supplier",
+    "PurchaseOrder",
+    "PurchaseOrderItem",
+    "GoodsReceipt",
+    "GoodsReceiptItem",
     "ICD10Code",
+    "GenericMedicine",
+    "DosageForm",
+    "HospitalFormulary",
+    "Manufacturer",
     "MedicineMaster",
+    "MedicineProduct",
+    "Route",
+    "PharmacyLocation",
+    "InventoryBatch",
+    "StockTransaction",
+    "PharmacyDispense",
+    "PharmacyDispenseItem",
+    "PharmacyDispenseAllocation",
+    "PharmacyStockReservation",
+    "Requisition",
+    "PatientReturn",
+    "PatientReturnItem",
+    "PatientReturnBatchAllocation",
+    "SupplierReturn",
+    "SupplierReturnItem",
+    "StockQuarantine",
+    "ProductRecall",
+    "RecallAffectedStock",
+    "StockTransfer",
+    "StockTransferItem",
+    "StockTransferDiscrepancy",
+    "PharmacyWorkflowOperation",
+    "StockCount",
+    "CountDetail",
+    "StockCountSettings",
+    "CountRecount",
+    "CountRecountDetail",
+    "StockCountOperation",
+    "PharmacyAlert",
+    "PharmacyAlertAcknowledgement",
+    "PharmacyAlertConfiguration",
+    "PharmacyDashboardOperation",
 ]

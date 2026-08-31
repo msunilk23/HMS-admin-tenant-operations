@@ -59,8 +59,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-HOSPITAL_A_SCHEMA = "test_iso_hospital_a"
-HOSPITAL_B_SCHEMA = "test_iso_hospital_b"
+_SCHEMA_SUFFIX = uuid.uuid4().hex[:12]
+HOSPITAL_A_SCHEMA = f"test_iso_a_{_SCHEMA_SUFFIX}"
+HOSPITAL_B_SCHEMA = f"test_iso_b_{_SCHEMA_SUFFIX}"
 
 
 @pytest.fixture(scope="module")

@@ -172,6 +172,25 @@ def upgrade() -> None:
     op.create_index("ix_prescriptions_visit_id", "prescriptions", ["visit_id"])
 
     op.create_table(
+        "prescription_items",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("prescription_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("medicine", sa.String(200), nullable=False),
+        sa.Column("strength", sa.String(100)),
+        sa.Column("dose", sa.String(100)),
+        sa.Column("route", sa.String(50), server_default="oral"),
+        sa.Column("frequency", sa.String(50)),
+        sa.Column("duration", sa.String(80)),
+        sa.Column("quantity", sa.String(50)),
+        sa.Column("instructions", sa.Text()),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.ForeignKeyConstraint(["prescription_id"], ["prescriptions.id"]),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("ix_prescription_items_prescription_id", "prescription_items", ["prescription_id"])
+
+    op.create_table(
         "lab_orders",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("visit_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -270,7 +289,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     tables = [
         "audit_logs", "nurse_roster", "feedback", "invoices",
-        "pharmacy_queue", "lab_results", "lab_orders", "prescriptions",
+        "pharmacy_queue", "lab_results", "lab_orders", "prescription_items", "prescriptions",
         "consultations", "vitals", "visits", "queue_tokens",
         "appointments", "patients", "doctors", "departments",
     ]

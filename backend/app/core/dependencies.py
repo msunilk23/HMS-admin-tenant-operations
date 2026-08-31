@@ -1,5 +1,6 @@
 import logging
-from typing import Annotated
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Any, overload
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -12,12 +13,12 @@ from app.db.engine import get_session
 from app.core.redis_client import get_cached_features, set_cached_features, get_tenant_forced_logout_time
 from app.models.public.user import Tenant, User
 
-bearer_scheme = HTTPBearer()
+bearer_scheme = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
 
 
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict:
     """Decode JWT and return the current user payload dict."""
@@ -31,6 +32,8 @@ async def get_current_user(
         detail="Your session has been invalidated. Please log in again.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    if credentials is None:
+        raise credentials_exception
     try:
         payload = decode_token(credentials.credentials)
         user_id: str = payload.get("sub")
@@ -56,7 +59,7 @@ async def get_current_user(
         tenant_id_str = payload.get("tenant_id")
         if tenant_id_str:
             tenant = await session.get(Tenant, tenant_id_str)
-            if not tenant or not tenant.is_active:
+            if not tenant or not tenant.is_active or str(user.tenant_id) != str(tenant.id):
                 raise session_invalidated_exception
             if payload.get("tenant_session_version", 0) != tenant.session_version:
                 raise session_invalidated_exception
@@ -87,6 +90,80 @@ def require_role(*roles: str):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Insufficient permissions",
             )
+        return current_user
+
+    return _check
+
+
+@overload
+def require_permission(*permissions: str) -> Callable[..., Awaitable[dict]]: ...
+
+
+@overload
+def require_permission(
+    session: AsyncSession,
+    user_id: Any,
+    *permissions: str,
+) -> Awaitable[bool]: ...
+
+
+def require_permission(*permissions: Any) -> Any:
+    """Compatibility wrapper for dependency and direct service authorization checks."""
+    if permissions and not all(isinstance(permission, str) for permission in permissions):
+        session = permissions[0]
+        user_id = permissions[1]
+        requested_permissions = permissions[2:]
+        if not requested_permissions:
+            raise ValueError("A permission code is required")
+
+        async def _direct_check() -> bool:
+            from app.models.public.user import User
+            from app.models.public.permission import Permission, RolePermission
+
+            user = await session.get(User, str(user_id)) if user_id is not None else None
+            if user is None:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not found")
+            role = getattr(user, "role", None)
+            if not role or role == "super_admin":
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+            allowed = await session.scalar(
+                select(Permission.code)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(
+                    RolePermission.role == role,
+                    Permission.code.in_(requested_permissions),
+                    Permission.is_active == True,  # noqa: E712
+                )
+                .limit(1)
+            )
+            if allowed is None:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+            return True
+
+        return _direct_check()
+
+    async def _check(
+        current_user: Annotated[dict, Depends(get_current_user)],
+        session: Annotated[AsyncSession, Depends(get_session)],
+    ) -> dict:
+        role = current_user.get("role")
+        if not role or role == "super_admin":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        from app.models.public.permission import Permission, RolePermission
+
+        allowed = await session.scalar(
+            select(Permission.code)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(
+                RolePermission.role == role,
+                Permission.code.in_(permissions),
+                Permission.is_active == True,  # noqa: E712
+            )
+            .limit(1)
+        )
+        if allowed is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
         return current_user
 
     return _check

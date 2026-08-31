@@ -11,6 +11,7 @@ class LineItem(BaseModel):
 
 
 class PharmacyLineItem(BaseModel):
+    dispense_item_id: Optional[uuid.UUID] = None
     name: str
     mfr: str = ""
     batch: str = ""
@@ -80,6 +81,7 @@ class InvoiceRead(BaseModel):
     status: str
     source: Optional[str] = None
     pharmacy_queue_id: Optional[uuid.UUID] = None
+    pharmacy_dispense_id: Optional[uuid.UUID] = None
     paid_at: Optional[datetime] = None
     razorpay_order_id: Optional[str] = None
     razorpay_payment_id: Optional[str] = None

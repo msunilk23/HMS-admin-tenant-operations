@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.engine import get_session
@@ -41,6 +41,23 @@ async def _load_enabled_features(tenant_id, session: AsyncSession) -> list[str]:
     # Warm the Redis feature cache so require_feature reads from Redis, not the JWT
     await set_cached_features(tenant_id, features)
     return features
+
+
+async def _load_default_pharmacy_facility(tenant: Tenant, session: AsyncSession) -> str | None:
+    """Return the only active pharmacy facility for a tenant, if unambiguous."""
+    schema = tenant.schema_name
+    if not schema.replace("_", "").isalnum():
+        return None
+    rows = await session.execute(
+        text(
+            f'SELECT DISTINCT facility_id FROM "{schema}".pharmacy_locations '
+            "WHERE tenant_id = :tenant_id AND location_type = 'PHARMACY' AND active = true "
+            "ORDER BY facility_id LIMIT 2"
+        ),
+        {"tenant_id": tenant.id},
+    )
+    facility_ids = [row[0] for row in rows]
+    return str(facility_ids[0]) if len(facility_ids) == 1 else None
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -82,6 +99,7 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Hospital account is inactive",
             )
+        facility_id = await _load_default_pharmacy_facility(tenant, session)
         extra_claims = {
             "role": user.role,
             "tenant_id": str(user.tenant_id),
@@ -97,6 +115,8 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
             "session_version": getattr(user, "session_version", 0),
             "tenant_session_version": getattr(tenant, "session_version", 0),
         }
+        if facility_id:
+            extra_claims["facility_id"] = facility_id
 
     access_token = create_access_token(subject=str(user.id), extra_claims=extra_claims)
     refresh_token = create_refresh_token(subject=str(user.id), extra_claims=_refresh_token_claims(extra_claims))
@@ -178,6 +198,7 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
         tenant = tenant_result.scalar_one_or_none()
         if not tenant or not tenant.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hospital account is inactive")
+        facility_id = await _load_default_pharmacy_facility(tenant, session)
         extra_claims = {
             "role": user.role,
             "tenant_id": str(user.tenant_id),
@@ -193,6 +214,8 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
             "session_version": getattr(user, "session_version", 0),
             "tenant_session_version": getattr(tenant, "session_version", 0),
         }
+        if facility_id:
+            extra_claims["facility_id"] = facility_id
 
     access_token = create_access_token(subject=str(user.id), extra_claims=extra_claims)
     new_refresh = create_refresh_token(subject=str(user.id), extra_claims=_refresh_token_claims(extra_claims))
@@ -282,6 +305,7 @@ async def change_password(
         tenant = (await session.execute(select(Tenant).where(Tenant.id == user.tenant_id))).scalar_one_or_none()
         if not tenant or not tenant.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Hospital account is inactive")
+        facility_id = await _load_default_pharmacy_facility(tenant, session)
         extra_claims = {
             "role": user.role,
             "tenant_id": str(user.tenant_id),
@@ -297,6 +321,8 @@ async def change_password(
             "session_version": getattr(user, "session_version", 0),
             "tenant_session_version": getattr(tenant, "session_version", 0),
         }
+        if facility_id:
+            extra_claims["facility_id"] = facility_id
 
     access_token = create_access_token(subject=str(user.id), extra_claims=extra_claims)
     refresh_token = create_refresh_token(subject=str(user.id), extra_claims=_refresh_token_claims(extra_claims))

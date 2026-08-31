@@ -122,6 +122,41 @@ def test_clean_upgrade_to_head_succeeds_for_a_brand_new_tenant_schema(registered
     assert result.returncode == 0, f"alembic upgrade head failed:\n{result.stdout}\n{result.stderr}"
 
 
+@pytest.mark.asyncio(loop_scope="module")
+async def test_clean_upgrade_creates_p29_pharmacy_linkage(registered_tenant):
+        schema = registered_tenant["schema"]
+        engine = registered_tenant["engine"]
+        async with engine.connect() as connection:
+                await connection.execute(text(f'SET search_path TO "{schema}", public'))
+                columns = (await connection.execute(text("""
+                        SELECT table_name, column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                            AND ((table_name = 'invoices' AND column_name = 'pharmacy_dispense_id')
+                                OR (table_name = 'pharmacy_dispenses' AND column_name = 'invoice_id'))
+                """))).all()
+                assert set(columns) == {
+                        ("invoices", "pharmacy_dispense_id"),
+                        ("pharmacy_dispenses", "invoice_id"),
+                }
+
+                constraints = (await connection.execute(text("""
+                        SELECT constraint_name
+                        FROM information_schema.table_constraints
+                        WHERE table_schema = current_schema()
+                            AND constraint_name IN (
+                                'uq_invoices_pharmacy_dispense',
+                                'fk_invoices_pharmacy_dispense_id',
+                                'fk_pharmacy_dispenses_invoice_id'
+                            )
+                """))).scalars().all()
+                assert set(constraints) == {
+                        "uq_invoices_pharmacy_dispense",
+                        "fk_invoices_pharmacy_dispense_id",
+                        "fk_pharmacy_dispenses_invoice_id",
+                }
+
+
 def test_exactly_one_alembic_head(registered_tenant):
     result = _run_alembic("heads")
     assert result.returncode == 0, result.stderr

@@ -1,0 +1,13 @@
+E2E seed ready: e2e_doctor_task7 / E2eDoctor@123 / visit=a5a85a47-7a23-5587-97de-56daaf8b7822
+
+Running 1 test using 1 worker
+
+P30 E2E seed ready
+  ✓  1 [chromium] › e2e\pharmacy-p30-supplier-returns.spec.ts:18:3 › P30 supplier returns › creates, approves, and dispatches a supplier return through Chromium (12.8s)
+
+  1 passed (34.2s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

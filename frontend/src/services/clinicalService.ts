@@ -4,6 +4,9 @@ import type { Prescription, Invoice, Doctor, Department, Appointment, Appointmen
 export interface MedicineItemCreate {
   medicine?: string
   medicine_master_id?: string
+  medicine_product_id?: string
+  is_free_text?: boolean
+  free_text_reason?: string
   strength?: string
   dosage_form?: string
   dose: string
@@ -12,6 +15,7 @@ export interface MedicineItemCreate {
   duration: string
   route: string
   quantity?: string
+  quantity_override_reason?: string
   timing_relative_to_food?: string
   notes?: string
 }

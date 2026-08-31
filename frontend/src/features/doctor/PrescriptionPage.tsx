@@ -13,7 +13,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { visitService } from '@/services/visitService'
 import { prescriptionService } from '@/services/clinicalService'
-import { masterDataService, type MedicineMaster } from '@/services/masterDataService'
+import { masterDataService, type FormularyMedicineSearchResult } from '@/services/masterDataService'
 
 const PRESET_FREQUENCIES: { value: string; label: string }[] = [
   { value: 'OD',  label: 'OD — Once Daily' },
@@ -83,27 +83,41 @@ const FOOD_INSTRUCTIONS = ['Before Food', 'After Food', 'With Food', 'N/A'] as c
 
 const medicineSchema = z.object({
   name: z.string().min(1, 'Select a medicine'),
-  medicine_master_id: z.string().min(1, 'Select a medicine'),
+  medicine_master_id: z.string().optional(),
+  medicine_product_id: z.string().optional(),
+  is_free_text: z.boolean().default(false),
+  free_text_reason: z.string().optional(),
   strength: z.string().optional(),
   dosage_form: z.string().optional(),
   dose: z.string().min(1, 'Dose required'),
   frequency: z.string().min(1, 'Frequency required'),
   food_instruction: z.enum(FOOD_INSTRUCTIONS).default('N/A'),
   duration: z.string().min(1, 'Duration required'),
-  quantity: z.string().min(1, 'Quantity required'),
+  quantity: z.string().optional(),
+  quantity_override_reason: z.string().optional(),
   route: z.string().default('oral'),
   notes: z.string().optional(),
+}).superRefine((item, ctx) => {
+  if (item.medicine_product_id && item.is_free_text) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Choose a formulary medicine or free text', path: ['medicine_product_id'] })
+  }
+  if (!item.medicine_product_id && !item.medicine_master_id && !item.is_free_text) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Select a medicine or choose free text', path: ['medicine_product_id'] })
+  }
+  if (item.is_free_text && !item.free_text_reason?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Reason required for free-text medicine', path: ['free_text_reason'] })
+  }
 })
 
-function MedicineSelector({ index, value, setValue }: { index: number; value: string; setValue: (name: `medicines.${number}.${'name' | 'medicine_master_id' | 'strength' | 'dosage_form'}`, value: string) => void }) {
+function MedicineSelector({ index, value, departmentId, setValue }: { index: number; value: string; departmentId?: string; setValue: (name: string, value: string | boolean) => void }) {
   const [query, setQuery] = useState(value ?? '')
   const { data = [] } = useQuery({
-    queryKey: ['medicine-search', query],
-    queryFn: () => masterDataService.searchMedicines(query),
+    queryKey: ['formulary-medicine-search', query, departmentId],
+    queryFn: () => masterDataService.searchFormularyMedicines(query, departmentId),
     enabled: query.trim().length >= 2,
     staleTime: 30_000,
   })
-  return <div className="relative"><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search generic, brand, strength or form" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />{data.length > 0 && <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-auto">{data.map((item: MedicineMaster) => <button type="button" key={item.id} className="block w-full text-left px-3 py-2 hover:bg-blue-50 text-sm" onClick={() => { setQuery(`${item.generic_name}${item.brand_name ? ` (${item.brand_name})` : ''} ${item.strength ?? ''} ${item.dosage_form ?? ''}`); setValue(`medicines.${index}.name`, item.brand_name || item.generic_name); setValue(`medicines.${index}.medicine_master_id`, item.id); setValue(`medicines.${index}.strength`, item.strength ?? ''); setValue(`medicines.${index}.dosage_form`, item.dosage_form ?? '') }}><strong>{item.generic_name}</strong>{item.brand_name ? ` · ${item.brand_name}` : ''} · {item.strength || 'unspecified'} · {item.dosage_form || 'form unspecified'}</button>)}</div>}</div>
+  return <div className="relative"><input value={query} onChange={e => { setQuery(e.target.value); setValue(`medicines.${index}.medicine_product_id`, ''); setValue(`medicines.${index}.name`, e.target.value) }} placeholder="Search formulary generic, brand or composition" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />{data.length > 0 && <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-auto">{data.map((item: FormularyMedicineSearchResult) => <button type="button" key={item.medicine_product_id} className="block w-full text-left px-3 py-2 hover:bg-blue-50 text-sm" onClick={() => { setQuery(`${item.generic_name}${item.brand_name ? ` (${item.brand_name})` : ''} ${item.strength ?? ''} ${item.dosage_form_name}`); setValue(`medicines.${index}.name`, item.brand_name || item.generic_name); setValue(`medicines.${index}.medicine_product_id`, item.medicine_product_id); setValue(`medicines.${index}.medicine_master_id`, ''); setValue(`medicines.${index}.strength`, item.strength ?? ''); setValue(`medicines.${index}.dosage_form`, item.dosage_form_name); setValue(`medicines.${index}.is_free_text`, false); setValue(`medicines.${index}.free_text_reason`, '') }}><strong>{item.generic_name}</strong>{item.brand_name ? ` · ${item.brand_name}` : ''} · {item.strength || 'unspecified'} · {item.dosage_form_name}</button>)}</div>}</div>
 }
 
 const labTestSchema = z.object({
@@ -146,6 +160,7 @@ export default function PrescriptionPage() {
     control,
     reset,
     setValue,
+    watch,
     formState: { errors },
   } = useForm<RxForm>({
     resolver: zodResolver(rxSchema),
@@ -167,6 +182,9 @@ export default function PrescriptionPage() {
       medicines: (existingPrescription.items ?? []).map(item => ({
         name: (item as typeof item & { medicine?: string }).medicine ?? item.name,
         medicine_master_id: item.medicine_master_id ?? '',
+        medicine_product_id: item.medicine_product_id ?? '',
+        is_free_text: existingPrescription.medicines?.[existingPrescription.items?.indexOf(item) ?? 0]?.is_free_text ?? (!item.medicine_product_id && !item.medicine_master_id),
+        free_text_reason: existingPrescription.medicines?.[existingPrescription.items?.indexOf(item) ?? 0]?.free_text_reason ?? '',
         strength: item.strength ?? '',
         dosage_form: item.dosage_form ?? '',
         dose: item.dose ?? '',
@@ -175,6 +193,7 @@ export default function PrescriptionPage() {
         duration: item.duration ?? '',
         route: item.route ?? 'oral',
         quantity: item.quantity ?? '',
+        quantity_override_reason: item.quantity_override_reason ?? '',
         notes: item.instructions ?? '',
       })),
       instructions: existingPrescription.instructions ?? '',
@@ -187,15 +206,19 @@ export default function PrescriptionPage() {
       visit_id: visitId!,
       medicines: data.medicines.map(item => ({
         medicine: item.name,
-        medicine_master_id: item.medicine_master_id,
-        strength: item.strength,
-        dosage_form: item.dosage_form,
+        medicine_master_id: item.medicine_master_id?.trim() || undefined,
+        medicine_product_id: item.medicine_product_id?.trim() || undefined,
+        is_free_text: item.is_free_text,
+        free_text_reason: item.free_text_reason?.trim() || undefined,
+        strength: item.strength?.trim() || undefined,
+        dosage_form: item.dosage_form?.trim() || undefined,
         dose: item.dose,
         frequency: item.frequency,
         duration: item.duration,
         route: item.route,
-        quantity: item.quantity,
-        instructions: item.notes,
+        quantity: item.quantity?.trim() || undefined,
+        quantity_override_reason: item.quantity_override_reason?.trim() || undefined,
+        instructions: item.notes?.trim() || undefined,
         timing_relative_to_food: item.food_instruction,
       })),
       instructions: data.instructions,
@@ -235,7 +258,7 @@ export default function PrescriptionPage() {
             <h2 className="text-sm font-semibold text-gray-700">Medicines</h2>
             <button
               type="button"
-              onClick={() => append({ name: '', medicine_master_id: '', strength: '', dosage_form: '', dose: '', frequency: '1-0-1-0', food_instruction: 'N/A', duration: '5 days', quantity: '', route: 'oral' })}
+              onClick={() => append({ name: '', medicine_master_id: '', medicine_product_id: '', is_free_text: false, free_text_reason: '', strength: '', dosage_form: '', dose: '', frequency: '1-0-1-0', food_instruction: 'N/A', duration: '5 days', quantity: '', route: 'oral' })}
               className="text-xs text-primary hover:underline font-medium flex items-center gap-1"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -268,12 +291,23 @@ export default function PrescriptionPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="col-span-2">
                     <label className="block text-xs font-medium text-gray-600 mb-1">Drug Name *</label>
-                    <Controller control={control} name={`medicines.${i}.name`} render={({ field }) => <MedicineSelector index={i} value={field.value} setValue={(name, value) => setValue(name, value)} />} />
+                    <Controller control={control} name={`medicines.${i}.name`} render={({ field }) => <MedicineSelector index={i} value={field.value} departmentId={visit?.department_id} setValue={(name, value) => setValue(name as never, value as never)} />} />
                     <input type="hidden" {...register(`medicines.${i}.medicine_master_id`)} />
+                    <input type="hidden" {...register(`medicines.${i}.medicine_product_id`)} />
                     <input type="hidden" {...register(`medicines.${i}.strength`)} />
                     <input type="hidden" {...register(`medicines.${i}.dosage_form`)} />
                     {errors.medicines?.[i]?.name && (
                       <p className="text-xs text-red-600 mt-0.5">{errors.medicines[i]?.name?.message}</p>
+                    )}
+                    <label className="mt-2 flex items-center gap-2 text-xs text-gray-600">
+                      <input type="checkbox" {...register(`medicines.${i}.is_free_text`)} onChange={event => { setValue(`medicines.${i}.is_free_text`, event.target.checked); if (event.target.checked) { setValue(`medicines.${i}.medicine_product_id`, ''); setValue(`medicines.${i}.medicine_master_id`, '') } }} className="accent-primary" />
+                      Use free-text medicine exception
+                    </label>
+                    {watch(`medicines.${i}.is_free_text`) && (
+                      <>
+                        <input {...register(`medicines.${i}.free_text_reason`)} placeholder="Reason required for free-text medicine" className={rx_input(!!errors.medicines?.[i]?.free_text_reason)} />
+                        {errors.medicines?.[i]?.free_text_reason && <p className="text-xs text-red-600 mt-0.5">{errors.medicines[i]?.free_text_reason?.message}</p>}
+                      </>
                     )}
                   </div>
 
@@ -318,8 +352,10 @@ export default function PrescriptionPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Quantity *</label>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Quantity</label>
                     <input {...register(`medicines.${i}.quantity`)} placeholder="e.g. 10" className={rx_input(!!errors.medicines?.[i]?.quantity)} />
+                    <input {...register(`medicines.${i}.quantity_override_reason`)} placeholder="Reason if overriding calculated quantity" className={`${rx_input(!!errors.medicines?.[i]?.quantity_override_reason)} mt-2`} />
+                    {errors.medicines?.[i]?.quantity_override_reason && <p className="text-xs text-red-600 mt-0.5">{errors.medicines[i]?.quantity_override_reason?.message}</p>}
                   </div>
 
                   <div>

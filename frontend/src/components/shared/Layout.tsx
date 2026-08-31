@@ -1,6 +1,9 @@
 import { useState, useRef } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { BarChart3, ClipboardCheck } from 'lucide-react'
 import { useAuthStore } from '@/features/auth/authStore'
+import { usePharmacyCapabilities } from '@/hooks/usePharmacyCapabilities'
+import { P34_PERMISSIONS } from '@/services/pharmacyDashboardService'
 import hospitalLogo from '../../../logo/hospital-logo-design-vector-medical-cross_53876-136743.avif'
 
 interface NavItem {
@@ -9,6 +12,7 @@ interface NavItem {
   icon: React.ReactNode
   roles?: string[]
   feature?: string
+  permission?: string
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -97,6 +101,16 @@ const NAV_ITEMS: NavItem[] = [
     roles: ['doctor', 'hospital_admin'],
   },
   {
+    label: 'Lab Results',
+    to: '/doctor/lab-results',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0010.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+      </svg>
+    ),
+    roles: ['doctor', 'hospital_admin'],
+  },
+  {
     label: 'Lab',
     to: '/lab',
     icon: (
@@ -115,7 +129,66 @@ const NAV_ITEMS: NavItem[] = [
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
       </svg>
     ),
+    roles: ['pharmacist', 'store_manager', 'hospital_admin', 'auditor'],
+    feature: 'pharmacy',
+  },
+  {
+    label: 'Pharmacy Dashboard',
+    to: '/pharmacy/dashboard',
+    icon: <BarChart3 className="h-5 w-5" />,
     roles: ['pharmacist', 'hospital_admin'],
+    feature: 'pharmacy',
+    permission: P34_PERMISSIONS.dashboard,
+  },
+  {
+    label: 'Patient Returns',
+    to: '/pharmacy/patient-returns',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7h16M4 12h9m-9 5h16" />
+      </svg>
+    ),
+    roles: ['pharmacist', 'hospital_admin'],
+    feature: 'pharmacy',
+  },
+  {
+    label: 'Supplier Returns',
+    to: '/pharmacy/supplier-returns',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5 7h14v10H5zM9 7V5h6v2" />
+      </svg>
+    ),
+    roles: ['pharmacist', 'hospital_admin'],
+    feature: 'pharmacy',
+  },
+  {
+    label: 'Stock Quarantine',
+    to: '/pharmacy/quarantine',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v4m0 4h.01M5.2 20h13.6a2 2 0 001.74-3L13.74 5a2 2 0 00-3.48 0L3.46 17a2 2 0 001.74 3z" />
+      </svg>
+    ),
+    roles: ['pharmacist', 'store_manager', 'hospital_admin'],
+    feature: 'pharmacy',
+  },
+  {
+    label: 'Recall & Transfers',
+    to: '/pharmacy/operations',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 7h11l-3-3m3 3-3 3M17 17H6l3 3m-3-3 3-3" />
+      </svg>
+    ),
+    roles: ['pharmacist', 'store_manager', 'hospital_admin'],
+    feature: 'pharmacy',
+  },
+  {
+    label: 'Inventory Counts',
+    to: '/pharmacy/inventory-counts',
+    icon: <ClipboardCheck className="h-5 w-5" />,
+    roles: ['pharmacist', 'store_manager', 'hospital_admin', 'auditor'],
     feature: 'pharmacy',
   },
   {
@@ -189,6 +262,7 @@ export default function AppLayout() {
     closeTimer.current = setTimeout(() => setUserMenuOpen(false), 150)
   }
   const isExpanded = !collapsed || hovered
+  const { hasPermission } = usePharmacyCapabilities(Boolean(user) && hasFeature('pharmacy'))
 
   const handleLogout = async () => {
     // Revoke the refresh token on the server before clearing local state.
@@ -211,7 +285,8 @@ export default function AppLayout() {
   const visibleItems = NAV_ITEMS.filter(
     (item) =>
       (!item.roles || (user && item.roles.includes(user.role))) &&
-      (!item.feature || hasFeature(item.feature)),
+      (!item.feature || hasFeature(item.feature)) &&
+      (!item.permission || hasPermission(item.permission)),
   )
 
   return (
