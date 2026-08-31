@@ -27,6 +27,7 @@ async def create_stock_ledger_transaction(
     quantity: Any,
     reference_type: str,
     reference_id: Any,
+    correlation_reference: str | None = None,
     reason: str,
     user_id: Optional[uuid.UUID] = None,
     affects_available_balance: bool = True,
@@ -92,6 +93,7 @@ async def create_stock_ledger_transaction(
         new_balance=new_balance,
         reference_type=reference_type,
         reference_id=reference_id,
+        correlation_reference=correlation_reference,
         reason=reason,
         performed_by=user_id,
     )

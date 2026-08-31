@@ -82,7 +82,7 @@ class TestP31Quarantine:
 
 
 class TestP31ProductRecall:
-    """P31 product recall tests."""
+    """P32 batch recall model tests."""
 
     @pytest.mark.asyncio
     async def test_create_batch_level_recall(self, mock_session):
@@ -90,36 +90,42 @@ class TestP31ProductRecall:
         recall = ProductRecall(
             id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
-            recall_level="BATCH",
-            status="ACTIVE",
-            batch_id=uuid.uuid4(),
+            facility_id=uuid.uuid4(),
+            medicine_id=uuid.uuid4(),
+            batch_number="RECALL-BATCH-001",
+            status="DRAFT",
+            reference_key="RC-TEST-001",
+            idempotency_key="recall-test-001",
+            request_hash="a" * 64,
             recall_reason="Quality defect discovered",
-            issued_date=datetime.utcnow(),
             initiated_by=uuid.uuid4(),
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
-        
-        assert recall.recall_level == "BATCH"
-        assert recall.status == "ACTIVE"
+        assert recall.batch_number == "RECALL-BATCH-001"
+        assert recall.status == "DRAFT"
 
     @pytest.mark.asyncio
-    async def test_create_product_level_recall(self, mock_session):
-        """Test creating product-level recall."""
+    async def test_recall_preserves_medicine_and_batch_identity(self, mock_session):
+        """Recall identity is always medicine-and-batch specific."""
+        medicine_id = uuid.uuid4()
         recall = ProductRecall(
             id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
-            recall_level="PRODUCT",
-            status="ACTIVE",
-            product_id=uuid.uuid4(),
+            facility_id=uuid.uuid4(),
+            medicine_id=medicine_id,
+            batch_number="RECALL-BATCH-002",
+            status="DRAFT",
+            reference_key="RC-TEST-002",
+            idempotency_key="recall-test-002",
+            request_hash="b" * 64,
             recall_reason="Manufacturing issue",
-            issued_date=datetime.utcnow(),
             initiated_by=uuid.uuid4(),
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
-        
-        assert recall.recall_level == "PRODUCT"
+        assert recall.medicine_id == medicine_id
+        assert recall.batch_number == "RECALL-BATCH-002"
 
 
 class TestP32StockTransfer:

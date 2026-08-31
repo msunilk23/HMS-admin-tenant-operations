@@ -113,6 +113,10 @@ P31_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p31-location")
 P31_INVESTIGATIVE_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p31-investigative")
 P31_EXPIRED_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p31-expired")
 P31_DAMAGED_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p31-damaged")
+P32_SOURCE_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p32-source")
+P32_DESTINATION_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p32-destination")
+P32_RECALL_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p32-recall-batch")
+P32_TRANSFER_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p32-transfer-batch")
 
 
 def _assert_destructive_reset_allowed(database_url: str, command: str) -> None:
@@ -599,6 +603,69 @@ async def snapshot_p31():
     print(json.dumps({"actors": {"pharmacist": PHARMACIST_USER_ID, "admin": ADMIN_USER_ID, "witness": RECEPTIONIST_USER_ID}, "batches": [dict(row) for row in batches], "quarantines": [dict(row) for row in quarantines], "ledger": [dict(row) for row in ledger], "audit_count": audits}, default=str))
 
 
+async def reset_p32_scenario():
+    from app.core.config import settings
+    _assert_destructive_reset_allowed(settings.DATABASE_URL, "reset_p32_scenario")
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    batch_ids = [P32_RECALL_BATCH_ID, P32_TRANSFER_BATCH_ID]
+    location_ids = [P32_SOURCE_LOCATION_ID, P32_DESTINATION_LOCATION_ID]
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        batch_ids.extend((await conn.execute(text("SELECT id FROM inventory_batches WHERE pharmacy_location_id = ANY(:locations)"), {"locations": location_ids})).scalars().all())
+        if await conn.scalar(text("SELECT to_regclass('stock_transfers') IS NOT NULL")):
+            transfer_ids = (await conn.execute(text("SELECT id FROM stock_transfers WHERE from_location_id = ANY(:locations) OR to_location_id = ANY(:locations)"), {"locations": location_ids})).scalars().all()
+            await conn.execute(text("DELETE FROM pharmacy_workflow_operations WHERE resource_id = ANY(:ids)"), {"ids": transfer_ids})
+            await conn.execute(text("DELETE FROM stock_transfer_discrepancies WHERE transfer_id = ANY(:ids)"), {"ids": transfer_ids})
+            await conn.execute(text("DELETE FROM stock_transfer_items WHERE transfer_id = ANY(:ids)"), {"ids": transfer_ids})
+            await conn.execute(text("DELETE FROM stock_transfers WHERE id = ANY(:ids)"), {"ids": transfer_ids})
+        if await conn.scalar(text("SELECT to_regclass('product_recalls') IS NOT NULL")):
+            recall_ids = (await conn.execute(text("SELECT id FROM product_recalls WHERE medicine_id = :medicine AND batch_number = 'P30-SINGLE-BATCH'"), {"medicine": PRODUCT_A_ID})).scalars().all()
+            await conn.execute(text("DELETE FROM pharmacy_workflow_operations WHERE resource_id = ANY(:ids)"), {"ids": recall_ids})
+            quarantine_ids = (await conn.execute(text("SELECT quarantine_id FROM recall_affected_stock WHERE recall_id = ANY(:ids) AND quarantine_id IS NOT NULL"), {"ids": recall_ids})).scalars().all()
+            await conn.execute(text("DELETE FROM recall_affected_stock WHERE recall_id = ANY(:ids)"), {"ids": recall_ids})
+            await conn.execute(text("DELETE FROM stock_quarantine WHERE id = ANY(:ids)"), {"ids": quarantine_ids})
+            await conn.execute(text("DELETE FROM product_recalls WHERE id = ANY(:ids)"), {"ids": recall_ids})
+        await conn.execute(text("DELETE FROM stock_transactions WHERE inventory_batch_id = ANY(:ids)"), {"ids": batch_ids})
+        await conn.execute(text("DELETE FROM inventory_batches WHERE id = ANY(:ids)"), {"ids": batch_ids})
+        await conn.execute(text("DELETE FROM pharmacy_locations WHERE id = ANY(:ids)"), {"ids": location_ids})
+    await engine.dispose()
+
+
+async def seed_p32_scenario():
+    await reset_p32_scenario()
+    await seed_p30_scenario()
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+    async with maker() as session:
+        await session.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        session.add_all([
+            PharmacyLocation(id=P32_SOURCE_LOCATION_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, location_code="E2E-P32-SRC", location_name="P32 Central Store", location_type="PHARMACY", active=True),
+            PharmacyLocation(id=P32_DESTINATION_LOCATION_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, location_code="E2E-P32-DST", location_name="P32 Emergency Pharmacy", location_type="PHARMACY", active=True),
+        ])
+        await session.flush()
+        session.add_all([
+            InventoryBatch(id=P32_RECALL_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P32_SOURCE_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P30-SINGLE-BATCH", manufacturing_date=date(2026, 1, 1), expiry_date=date(2028, 12, 31), purchase_rate=Decimal("10"), received_quantity=Decimal("5"), available_quantity=Decimal("5"), reserved_quantity=Decimal("0"), status="ACTIVE"),
+            InventoryBatch(id=P32_TRANSFER_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P32_SOURCE_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P32-TRANSFER", manufacturing_date=date(2026, 2, 1), expiry_date=date(2029, 1, 31), purchase_rate=Decimal("9"), received_quantity=Decimal("20"), available_quantity=Decimal("20"), reserved_quantity=Decimal("0"), status="ACTIVE"),
+        ])
+        await session.commit()
+    await engine.dispose()
+    print("P32 E2E seed ready")
+
+
+async def snapshot_p32():
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        batches = (await conn.execute(text("SELECT batch_number, pharmacy_location_id, available_quantity, reserved_quantity, status FROM inventory_batches WHERE (id = ANY(:ids) OR (pharmacy_location_id = :destination AND batch_number = 'P32-TRANSFER')) ORDER BY pharmacy_location_id, batch_number"), {"ids": [P32_RECALL_BATCH_ID, P32_TRANSFER_BATCH_ID], "destination": P32_DESTINATION_LOCATION_ID})).mappings().all()
+        recalls = (await conn.execute(text("SELECT id, reference_key, status FROM product_recalls WHERE medicine_id = :medicine AND batch_number = 'P30-SINGLE-BATCH'"), {"medicine": PRODUCT_A_ID})).mappings().all()
+        transfers = (await conn.execute(text("SELECT id, reference_key, status, received_quantity FROM stock_transfers WHERE from_location_id = :source AND to_location_id = :destination"), {"source": P32_SOURCE_LOCATION_ID, "destination": P32_DESTINATION_LOCATION_ID})).mappings().all()
+        ledger = (await conn.execute(text("SELECT correlation_reference, transaction_type, quantity FROM stock_transactions WHERE correlation_reference IS NOT NULL AND inventory_batch_id IN (SELECT id FROM inventory_batches WHERE batch_number IN ('P30-SINGLE-BATCH', 'P32-TRANSFER')) ORDER BY created_at"))).mappings().all()
+    await engine.dispose()
+    print(json.dumps({"ids": {"medicine": PRODUCT_A_ID, "source": P32_SOURCE_LOCATION_ID, "destination": P32_DESTINATION_LOCATION_ID}, "batches": [dict(row) for row in batches], "recalls": [dict(row) for row in recalls], "transfers": [dict(row) for row in transfers], "ledger": [dict(row) for row in ledger]}, default=str))
+
+
 async def cleanup():
     from app.core.config import settings
     _assert_destructive_reset_allowed(settings.DATABASE_URL, "cleanup")
@@ -829,6 +896,12 @@ if __name__ == "__main__":
         asyncio.run(seed_p31_scenario())
     elif command == "snapshot_p31":
         asyncio.run(snapshot_p31())
+    elif command == "reset_p32_scenario":
+        asyncio.run(reset_p32_scenario())
+    elif command == "seed_p32_scenario":
+        asyncio.run(seed_p32_scenario())
+    elif command == "snapshot_p32":
+        asyncio.run(snapshot_p32())
     elif command == "cleanup":
         asyncio.run(cleanup())
     elif command == "snapshot":

@@ -962,6 +962,8 @@ async def confirm_dispense_stock_consumption(
             raise ValueError("Active reservation does not cover the confirmed allocation")
         if batch.status != "ACTIVE" or (batch.expiry_date is not None and batch.expiry_date < datetime.now(timezone.utc).date()):
             raise ValueError("Inventory batch is expired or inactive")
+        if batch.status != "ACTIVE":
+            raise ValueError("Recalled or inactive inventory batch cannot be dispensed")
         if batch.available_quantity < quantity or batch.reserved_quantity < quantity:
             raise ValueError("Insufficient reserved stock for confirmation")
 

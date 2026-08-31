@@ -38,8 +38,8 @@ from app.models.tenant.pharmacy_dispense import PharmacyDispense, PharmacyDispen
 from app.models.tenant.requisition import Requisition
 from app.models.tenant.returns import PatientReturn, PatientReturnItem, PatientReturnBatchAllocation, SupplierReturn, SupplierReturnItem
 from app.models.tenant.p31_p34 import (
-    StockQuarantine, ProductRecall,
-    StockTransfer, StockTransferItem,
+    StockQuarantine, ProductRecall, RecallAffectedStock,
+    StockTransfer, StockTransferItem, StockTransferDiscrepancy, PharmacyWorkflowOperation,
     StockCount, CountDetail,
     PharmacyAlert, PharmacyAuditTrail
 )
@@ -99,8 +99,11 @@ __all__ = [
     "SupplierReturnItem",
     "StockQuarantine",
     "ProductRecall",
+    "RecallAffectedStock",
     "StockTransfer",
     "StockTransferItem",
+    "StockTransferDiscrepancy",
+    "PharmacyWorkflowOperation",
     "StockCount",
     "CountDetail",
     "PharmacyAlert",

@@ -162,6 +162,17 @@ const NAV_ITEMS: NavItem[] = [
     feature: 'pharmacy',
   },
   {
+    label: 'Recall & Transfers',
+    to: '/pharmacy/operations',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 7h11l-3-3m3 3-3 3M17 17H6l3 3m-3-3 3-3" />
+      </svg>
+    ),
+    roles: ['pharmacist', 'store_manager', 'hospital_admin'],
+    feature: 'pharmacy',
+  },
+  {
     label: 'Billing',
     to: '/billing',
     icon: (

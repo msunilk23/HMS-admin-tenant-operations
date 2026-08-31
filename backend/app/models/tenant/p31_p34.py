@@ -38,11 +38,11 @@ class StockQuarantine(Base, TimestampMixin):
             name="uq_stock_quarantine_tenant_idempotency",
         ),
         CheckConstraint(
-            "status IN ('QUARANTINED', 'RELEASED', 'DISPOSED')",
+            "status IN ('QUARANTINED', 'RELEASED', 'DISPOSED', 'RETURNED_TO_SUPPLIER')",
             name="ck_stock_quarantine_status",
         ),
         CheckConstraint(
-            "reason IN ('EXPIRED', 'DAMAGED', 'INVESTIGATION')",
+            "reason IN ('EXPIRED', 'DAMAGED', 'INVESTIGATION', 'RECALL')",
             name="ck_stock_quarantine_reason",
         ),
         CheckConstraint(
@@ -109,40 +109,47 @@ class StockQuarantine(Base, TimestampMixin):
 
 
 class ProductRecall(Base, TimestampMixin):
-    """Track product recalls at product, manufacturer, or batch level."""
+    """Medicine-and-batch specific recall with maker-checker control."""
     __tablename__ = "product_recalls"
     __table_args__ = (
-        CheckConstraint(
-            "recall_level IN ('PRODUCT', 'MANUFACTURER', 'BATCH')",
-            name="ck_product_recalls_level",
-        ),
-        CheckConstraint(
-            "status IN ('ACTIVE', 'RESOLVED', 'CANCELLED')",
-            name="ck_product_recalls_status",
-        ),
+        UniqueConstraint("tenant_id", "reference_key", name="uq_product_recalls_tenant_reference"),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_product_recalls_tenant_idempotency"),
+        CheckConstraint("status IN ('DRAFT', 'ACTIVE', 'RESOLVED')", name="ck_product_recalls_status"),
+        CheckConstraint("resolution_action IS NULL OR resolution_action IN ('SUPPLIER_RETURN', 'APPROVED_RELEASE', 'DISPOSAL')", name="ck_product_recalls_resolution"),
+        CheckConstraint("notification_status IN ('NOT_STARTED', 'IN_PROGRESS', 'COMPLETED')", name="ck_product_recalls_notification_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    
-    recall_level: Mapped[str] = mapped_column(String(30), nullable=False)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="ACTIVE", index=True)
-    
-    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("medicine_products.id"), nullable=True, index=True
-    )
-    manufacturer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("manufacturers.id"), nullable=True, index=True
-    )
-    batch_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("inventory_batches.id"), nullable=True, index=True
-    )
-    
+    facility_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    medicine_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    batch_number: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="DRAFT", index=True)
+    reference_key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     recall_reason: Mapped[str] = mapped_column(Text, nullable=False)
-    issued_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    regulatory_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    notification_status: Mapped[str] = mapped_column(String(30), nullable=False, default="NOT_STARTED")
     resolved_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    
     initiated_by: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_action: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    resolution_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolved_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+
+
+class RecallAffectedStock(Base, TimestampMixin):
+    __tablename__ = "recall_affected_stock"
+    __table_args__ = (UniqueConstraint("recall_id", "inventory_batch_id", name="uq_recall_affected_batch"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    recall_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("product_recalls.id", ondelete="CASCADE"), nullable=False, index=True)
+    inventory_batch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("inventory_batches.id"), nullable=False, index=True)
+    pharmacy_location_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pharmacy_locations.id"), nullable=False, index=True)
+    quarantine_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("stock_quarantine.id"), nullable=True, unique=True)
+    quantity_quarantined: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
 
 
 # ============ P32: STOCK TRANSFER + MULTI-LOCATION ============
@@ -156,10 +163,13 @@ class StockTransfer(Base, TimestampMixin):
             "reference_key",
             name="uq_stock_transfers_tenant_reference",
         ),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_stock_transfers_tenant_idempotency"),
         CheckConstraint(
-            "status IN ('REQUESTED', 'APPROVED', 'ISSUED', 'IN_TRANSIT', 'RECEIVED', 'PARTIAL_RECEIVED', 'REJECTED', 'CANCELLED')",
+            "status IN ('DRAFT', 'APPROVED', 'IN_TRANSIT', 'RECEIVED', 'CANCELLED')",
             name="ck_stock_transfers_status",
         ),
+        CheckConstraint("from_location_id <> to_location_id", name="ck_stock_transfers_distinct_locations"),
+        CheckConstraint("total_items > 0 AND total_quantity > 0", name="ck_stock_transfers_positive_totals"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -173,8 +183,10 @@ class StockTransfer(Base, TimestampMixin):
         ForeignKey("pharmacy_locations.id"), nullable=False, index=True
     )
     
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="REQUESTED", index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="DRAFT", index=True)
     reference_key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     
     total_items: Mapped[int] = mapped_column(nullable=False)
     total_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
@@ -188,8 +200,8 @@ class StockTransfer(Base, TimestampMixin):
     approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     
-    issued_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
-    issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatched_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     
     received_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -200,6 +212,11 @@ class StockTransfer(Base, TimestampMixin):
 class StockTransferItem(Base, TimestampMixin):
     """Individual batch items in a transfer."""
     __tablename__ = "stock_transfer_items"
+    __table_args__ = (
+        UniqueConstraint("transfer_id", "inventory_batch_id", name="uq_stock_transfer_item_batch"),
+        CheckConstraint("transfer_quantity > 0", name="ck_stock_transfer_item_positive_quantity"),
+        CheckConstraint("received_quantity IS NULL OR received_quantity >= 0", name="ck_stock_transfer_item_received_quantity"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     transfer_id: Mapped[uuid.UUID] = mapped_column(
@@ -211,9 +228,48 @@ class StockTransferItem(Base, TimestampMixin):
     
     transfer_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
     received_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), nullable=True)
-    
-    discrepancy_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), nullable=True)
-    discrepancy_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    destination_batch_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("inventory_batches.id"), nullable=True, index=True)
+    dispatch_ledger_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("stock_transactions.id"), nullable=True, unique=True)
+    receive_ledger_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("stock_transactions.id"), nullable=True, unique=True)
+
+
+class StockTransferDiscrepancy(Base, TimestampMixin):
+    __tablename__ = "stock_transfer_discrepancies"
+    __table_args__ = (
+        UniqueConstraint("transfer_item_id", name="uq_stock_transfer_discrepancy_item"),
+        CheckConstraint("discrepancy_type IN ('SHORTAGE', 'EXCESS', 'DAMAGE', 'BATCH_MISMATCH')", name="ck_stock_transfer_discrepancy_type"),
+        CheckConstraint("status IN ('OPEN', 'RECONCILED')", name="ck_stock_transfer_discrepancy_status"),
+        CheckConstraint("quantity > 0", name="ck_stock_transfer_discrepancy_quantity"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    transfer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stock_transfers.id", ondelete="CASCADE"), nullable=False, index=True)
+    transfer_item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stock_transfer_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    discrepancy_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="OPEN", index=True)
+    reported_by: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    reconciled_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    reconciled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reconciliation_action: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    reconciliation_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class PharmacyWorkflowOperation(Base):
+    __tablename__ = "pharmacy_workflow_operations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_pharmacy_workflow_operation_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    facility_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    resource_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 # ============ P33: CYCLE COUNT + PHYSICAL VERIFICATION ============

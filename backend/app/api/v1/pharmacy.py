@@ -13,6 +13,7 @@ from sqlalchemy import and_, func, or_, select, text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.dependencies import get_facility_id
 from app.core.config import settings
 from app.core.dependencies import ensure_feature_enabled, require_permission, require_role, require_feature
 from app.core.pdf_service import generate_and_upload_prescription_pdf
@@ -688,7 +689,7 @@ def _current_tenant_id(current_user: dict) -> uuid.UUID:
 
 @router.get("/inventory/locations", response_model=List[PharmacyLocationRead])
 async def list_inventory_locations(
-    facility_id: uuid.UUID,
+    facility_id: uuid.UUID = Depends(get_facility_id),
     include_inactive: bool = False,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_permission("PHARMACY_INVENTORY_VIEW")),

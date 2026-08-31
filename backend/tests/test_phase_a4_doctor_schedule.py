@@ -2,12 +2,14 @@ import asyncio
 import os
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
@@ -34,6 +36,18 @@ _TABLES = [
     DoctorScheduleException.__table__,
     Appointment.__table__,
 ]
+
+_IST = ZoneInfo("Asia/Kolkata")
+_MONDAY = 0
+
+
+def _future_weekday(weekday: int, *, minimum_days_ahead: int = 14) -> date:
+    earliest = datetime.now(_IST).date() + timedelta(days=minimum_days_ahead)
+    return earliest + timedelta(days=(weekday - earliest.weekday()) % 7)
+
+
+def _ist_slot(target_date: date, hour: int, minute: int = 0) -> datetime:
+    return datetime.combine(target_date, time(hour, minute), tzinfo=_IST).astimezone(timezone.utc)
 
 
 @pytest_asyncio.fixture
@@ -86,7 +100,7 @@ def _make_doctor(**overrides) -> Doctor:
 async def test_slots_follow_doctor_schedule_capacity_and_booking(session):
     patient = _make_patient()
     doctor = _make_doctor()
-    target_date = date(2026, 8, 31)
+    target_date = _future_weekday(_MONDAY)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -100,8 +114,7 @@ async def test_slots_follow_doctor_schedule_capacity_and_booking(session):
         effective_to=target_date,
         is_active=True,
     )
-    ist_tz = timezone(timedelta(hours=5, minutes=30))
-    appointment_time = datetime(2026, 8, 31, 9, 30, tzinfo=ist_tz).astimezone(timezone.utc)
+    appointment_time = _ist_slot(target_date, 9, 30)
     appt = Appointment(
         id=uuid.uuid4(),
         patient_id=patient.id,
@@ -124,17 +137,17 @@ async def test_slots_follow_doctor_schedule_capacity_and_booking(session):
     )
 
     available_slot_times = [slot.slot_time for slot in slots if slot.is_available]
-    ist_tz = timezone(timedelta(hours=5, minutes=30))
-    assert datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc) in available_slot_times
-    assert datetime(2026, 8, 31, 9, 30, tzinfo=ist_tz).astimezone(timezone.utc) not in available_slot_times
-    assert datetime(2026, 8, 31, 10, 0, tzinfo=ist_tz).astimezone(timezone.utc) in available_slot_times
+    assert _ist_slot(target_date, 9) in available_slot_times
+    assert _ist_slot(target_date, 9, 30) not in available_slot_times
+    assert _ist_slot(target_date, 10) in available_slot_times
 
 
 @pytest.mark.asyncio
 async def test_book_appointment_rejects_over_capacity_slot(session):
     patient = _make_patient()
+    second_patient = _make_patient(id=uuid.uuid4(), uhid="UHID002")
     doctor = _make_doctor()
-    target_date = date(2026, 8, 31)
+    target_date = _future_weekday(_MONDAY)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -148,9 +161,8 @@ async def test_book_appointment_rejects_over_capacity_slot(session):
         effective_to=target_date,
         is_active=True,
     )
-    ist_tz = timezone(timedelta(hours=5, minutes=30))
-    appt_time = datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
-    session.add_all([patient, doctor, schedule])
+    appt_time = _ist_slot(target_date, 9)
+    session.add_all([patient, second_patient, doctor, schedule])
     await session.commit()
 
     existing = Appointment(
@@ -167,10 +179,10 @@ async def test_book_appointment_rejects_over_capacity_slot(session):
     session.add(existing)
     await session.commit()
 
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException) as exc_info:
         await book_appointment(
             payload=AppointmentCreate(
-                patient_id=uuid.uuid4(),
+                patient_id=second_patient.id,
                 doctor_id=doctor.id,
                 slot_time=appt_time,
                 type="phone",
@@ -179,11 +191,14 @@ async def test_book_appointment_rejects_over_capacity_slot(session):
             current_user={"sub": str(uuid.uuid4()), "role": "receptionist", "tenant_schema": "tenant_1"},
         )
 
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Slot is not available"
+
 
 @pytest.mark.asyncio
 async def test_multi_capacity_slot_allows_up_to_configured_limit(session):
     doctor = _make_doctor()
-    target_date = date(2026, 8, 31)
+    target_date = _future_weekday(_MONDAY)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -197,8 +212,7 @@ async def test_multi_capacity_slot_allows_up_to_configured_limit(session):
         effective_to=target_date,
         is_active=True,
     )
-    ist_tz = timezone(timedelta(hours=5, minutes=30))
-    slot_time = datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
+    slot_time = _ist_slot(target_date, 9)
     for idx in range(2):
         patient = _make_patient(id=uuid.uuid4(), uhid=f"UHID{idx + 10:03d}")
         session.add(
@@ -232,7 +246,7 @@ async def test_multi_capacity_slot_allows_up_to_configured_limit(session):
 async def test_cancelled_appointments_release_capacity(session):
     patient = _make_patient()
     doctor = _make_doctor()
-    target_date = date(2026, 8, 31)
+    target_date = _future_weekday(_MONDAY)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -246,8 +260,7 @@ async def test_cancelled_appointments_release_capacity(session):
         effective_to=target_date,
         is_active=True,
     )
-    ist_tz = timezone(timedelta(hours=5, minutes=30))
-    slot_time = datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
+    slot_time = _ist_slot(target_date, 9)
     appt = Appointment(
         id=uuid.uuid4(),
         patient_id=patient.id,
@@ -278,7 +291,7 @@ async def test_cancelled_appointments_release_capacity(session):
 @pytest.mark.asyncio
 async def test_last_capacity_booking_is_concurrency_safe(session):
     doctor = _make_doctor()
-    target_date = date(2026, 8, 31)
+    target_date = _future_weekday(_MONDAY)
     schedule = DoctorSchedule(
         id=uuid.uuid4(),
         doctor_id=doctor.id,
@@ -292,8 +305,7 @@ async def test_last_capacity_booking_is_concurrency_safe(session):
         effective_to=target_date,
         is_active=True,
     )
-    ist_tz = timezone(timedelta(hours=5, minutes=30))
-    slot_time = datetime(2026, 8, 31, 9, 0, tzinfo=ist_tz).astimezone(timezone.utc)
+    slot_time = _ist_slot(target_date, 9)
     session.add_all([doctor, schedule])
     await session.commit()
 
@@ -330,3 +342,36 @@ async def test_last_capacity_booking_is_concurrency_safe(session):
 
     assert len(successful) == 2
     assert len(failed) == 1
+
+
+@pytest.mark.asyncio
+async def test_historical_slots_remain_unavailable(session):
+    doctor = _make_doctor()
+    target_date = datetime.now(_IST).date() - timedelta(days=1)
+    schedule = DoctorSchedule(
+        id=uuid.uuid4(),
+        doctor_id=doctor.id,
+        department_id=uuid.uuid4(),
+        weekday=target_date.weekday(),
+        start_time=time(9, 0),
+        end_time=time(9, 30),
+        slot_duration_minutes=30,
+        capacity=1,
+        effective_from=target_date,
+        effective_to=target_date,
+        is_active=True,
+    )
+    session.add_all([doctor, schedule])
+    await session.commit()
+
+    slots = await get_slots(
+        doctor_id=doctor.id,
+        slot_date=target_date,
+        session=session,
+        _={"sub": str(uuid.uuid4()), "role": "receptionist"},
+    )
+
+    assert len(slots) == 1
+    assert slots[0].slot_time == _ist_slot(target_date, 9)
+    assert slots[0].is_available is False
+    assert slots[0].blocked_reason == "past"

@@ -244,6 +244,33 @@ The previous failed gate was remediated only where a contained root cause was ve
 
 The final decision remains **NOT UAT READY**. The migration, frontend quality, and P28 browser blockers are corrected, but mandatory P30 real-PostgreSQL acceptance, P31-P34 operational evidence, RBAC/isolation/concurrency/reconciliation evidence, and the green full backend gate remain incomplete.
 
+## 2026-08-31 P32 Recall And Transfer Acceptance
+
+P32 now implements approved medicine-batch recall and inter-location transfer workflows through additive revision `0086`. Recall approval is maker-checker controlled, marks every matching tenant/facility batch `RECALLED`, quarantines saleable stock at each location, writes correlated ledger and audit records, and exposes affected dispensing/patient history. Transfers reserve on approval, deduct on dispatch, preserve batch/expiry identity on receipt, create explicit discrepancies for partial receipts, and require manager reconciliation. Canonical request hashes, idempotency records, deterministic locks, API-owned transactions, role permissions, and tenant/facility filters cover every state transition.
+
+The React P32 operations page provides recall and transfer registers, lifecycle actions, affected-patient rendering, exact receipt entry, discrepancy capture, and manager-only maker-checker controls. The deterministic Chromium fixture owns two P32 locations and its seeded/generated batches, performs child-first reset, and snapshots recall, transfer, batch-balance, and correlated-ledger state.
+
+| Working directory | Exact command | Result | Exit code |
+|---|---|---|---:|
+| `backend` | `python -m pytest tests\test_p32_acceptance.py -q` | `5 passed, 1 warning in 4.83s` | `0` |
+| `backend` | `python -m pytest tests\test_migrations_phase1_taskG.py -q` | `7 passed in 15.76s` | `0` |
+| `backend` | `python -m pytest tests -q -k "pharmacy or formulary or medicine or dosage_form or route_master or goods_receipt or grn or inventory or dispensing or return or quarantine or recall or transfer or migrations_phase1_taskG"` | `132 passed, 224 deselected, 165 warnings in 63.04s` | `0` |
+| `backend` | `python -m pytest tests\test_consultation_schema_parity.py::test_consultation_lifecycle_columns_backfill_from_visit_state tests\test_vitals_schema_migration.py::test_legacy_vitals_schema_is_expanded_and_can_complete -q` | `2 passed in 33.23s` | `0` |
+| `frontend` | `npm run type-check` | Passed | `0` |
+| `frontend` | `npm run lint` | Passed | `0` |
+| `frontend` | `npm run test:unit` | `6 files, 25 tests passed` | `0` |
+| `frontend` | `npm run build` | `2,059 modules transformed`; non-blocking chunk-size warning | `0` |
+| `frontend` | `npx playwright test pharmacy-p32-recall-transfer.spec.ts --project=chromium --workers=1` | `3 passed in 46.5s` | `0` |
+| `frontend` | Pharmacy prescription/P28/P30/P31 Chromium group with explicit E2E environment | `12 passed, 1 failed`; supplier-return fixture-order failure | `1` |
+| `frontend` | `npx playwright test pharmacy-p30-supplier-returns.spec.ts --project=chromium --workers=1` with explicit E2E environment | `1 passed in 48.1s` | `0` |
+| `backend` | `python -m pytest tests -q` | `4 failed, 352 passed, 292 warnings in 122.04s` | `1` |
+
+P32 PostgreSQL evidence includes recall maker-checker rejection/approval, all-location quarantine, correlated ledger/audit, exact transfer balances and identity, lifecycle replay, partial receipt discrepancy and reconciliation, excess receipt rollback, a two-session competing approval race that permits only one reservation, and explicit dispatch/receipt transaction rollback probes. Chromium verifies affected-patient rendering, recalled-batch transfer exclusion, exact source/destination balances, self-approval controls, and excess-quantity no-mutation behavior.
+
+### P32 Decision
+
+**P32 NOT ACCEPTED.** The mandatory full backend command remains red. The four failures in `tests/test_phase_a4_doctor_schedule.py` use fixed `2026-08-31 09:00 IST` slots, which the application now correctly reports as `blocked_reason='past'`; the same four failures reproduce when that module is run independently (`4 failed, 1 passed`, exit `1`). This is outside P32 behavior, but acceptance requires a green full regression gate and test weakening is prohibited. The combined legacy Chromium group also has fixture-order coupling even though the failed supplier-return workflow passes independently.
+
 ### Final Repository Snapshot
 
 Final branch: `feature/pharmacy-module`. `git merge-base --is-ancestor HEAD phase1-stabilization` returned exit `1`; no merge into `phase1-stabilization` occurred. The report is staged (`A  docs/PHARMACY_P25_P34_UAT_ACCEPTANCE.md`) but no commit was created. The remediation worktree contains modifications to the migration, P30 API/test fixture, Pharmacy bill flow, Lab ORM display compatibility, P28 E2E, and frontend display files. `git diff --stat` (unstaged) reports `backend/app/api/v1/pharmacy.py | 10 +++++++++-`; `git diff --cached --stat` reports 9 files changed, 318 insertions, 52 deletions. No deployment was performed.
