@@ -15,7 +15,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: hospital_user
-          POSTGRES_PASSWORD: hospital_pass
+          POSTGRES_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
           POSTGRES_DB: hospital
         ports: ['5433:5432']
         options: >-
@@ -25,10 +25,10 @@ jobs:
         image: redis:7
         ports: ['6379:6379']
     env:
-      DATABASE_URL: postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital
-      SECRET_KEY: task7-ci-secret
+      DATABASE_URL: postgresql+asyncpg://hospital_user:${{ secrets.CI_POSTGRES_PASSWORD }}@localhost:5433/hospital
+      SECRET_KEY: ${{ secrets.CI_SECRET_KEY }}
       REDIS_URL: redis://localhost:6379
-      E2E_DATABASE_URL: postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital
+      E2E_DATABASE_URL: postgresql+asyncpg://hospital_user:${{ secrets.CI_POSTGRES_PASSWORD }}@localhost:5433/hospital
       E2E_BASE_URL: http://localhost:5173
       PYTHONPATH: ${{ github.workspace }}/backend
     steps:
@@ -73,6 +73,23 @@ jobs:
       - name: Frontend production build
         working-directory: frontend
         run: npm run build
+      - name: Validate Compose and build application images
+        run: |
+          cp .env.example .env
+          docker compose -f infra/docker-compose.yml config --quiet
+          docker compose -f infra/docker-compose.yml build backend frontend
+      - name: Validate PostgreSQL backup and restore
+        env:
+          PGPASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          pg_dump -h localhost -p 5433 -U hospital_user -d hospital -Fc -f release-a.dump
+          createdb -h localhost -p 5433 -U hospital_user release_a_restore
+          pg_restore -h localhost -p 5433 -U hospital_user -d release_a_restore --exit-on-error release-a.dump
+          test "$(psql -h localhost -p 5433 -U hospital_user -d release_a_restore -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'alembic_version'")" = "1"
+          test "$(psql -h localhost -p 5433 -U hospital_user -d release_a_restore -Atc "SELECT count(*) FROM public.alembic_version WHERE version_num = '0088'")" = "1"
+          dropdb -h localhost -p 5433 -U hospital_user release_a_restore
       - name: Install Playwright Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium

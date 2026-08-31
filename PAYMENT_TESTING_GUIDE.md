@@ -2,9 +2,9 @@
 
 ## Environment Setup ✓
 Your `.env` file has:
-- `RAZORPAY_KEY_ID=rzp_test_SaFBSHMxcyEQ2P` ✓ **SET**
-- `RAZORPAY_KEY_SECRET=JMzWCFHEFP2E05MMxeQf7uB4` ✓ **SET**
-- `RAZORPAY_WEBHOOK_SECRET=hellodude@123` ✓ **SET**
+- `RAZORPAY_KEY_ID=<configured-in-environment>` ✓ **SET**
+- `RAZORPAY_KEY_SECRET=<configured-in-environment>` ✓ **SET**
+- `RAZORPAY_WEBHOOK_SECRET=<configured-in-environment>` ✓ **SET**
 
 ## Testing Checklist
 
@@ -21,13 +21,13 @@ docker logs hospital_backend 2>&1 | grep -E "(RAZORPAY|Starting|HOSPITAL API)"
 =========================================================================
 Environment: development
 Debug: true
-RAZORPAY_KEY_ID: rzp_test_SaFBSHMxcyEQ2...
+RAZORPAY_KEY_ID: <configured-in-environment>
 RAZORPAY_WEBHOOK_SECRET: ✓ SET
 =========================================================================
 ```
 
 **If you see:**
-- ❌ `RAZORPAY_KEY_ID: ❌ NOT SET` → Environment variables not loaded in container
+- ❌ `RAZORPAY_KEY_ID: <configured-in-environment>
   - **Solution:** Check docker-compose.yml has `env_file: - ../.env`
   - Rebuild: `docker-compose build --no-cache && docker-compose up`
 
@@ -41,7 +41,7 @@ curl http://localhost:8000/api/v1/billing/config
 **Expected response:**
 ```json
 {
-  "razorpay_key_id": "rzp_test_SaFBSHMxcyEQ2P",
+  "razorpay_key_id": "<configured-in-environment>",
   "razorpay_configured": true
 }
 ```
@@ -94,7 +94,7 @@ Pharmacy bill: Razorpay order created: {...}
 Pharmacy bill: Set razorpay_order_id=... on invoice
 Pharmacy bill: Committed razorpay_order_id to DB
 Pharmacy bill: Refreshed invoice - razorpay_order_id=..., status=draft
-Pharmacy bill: Broadcasting payload - {"event": "payment_request", "razorpay_key_id": "rzp_test_...", "razorpay_order_id": "...", "invoice_id": "...", "tenant": "..."}
+Pharmacy bill: Broadcasting payload - {"event": "payment_request", "razorpay_key_id": "<configured-in-environment>", "razorpay_order_id": "...", "invoice_id": "...", "tenant": "..."}
 Pharmacy bill: Broadcasted payment_request to POS
 ```
 
