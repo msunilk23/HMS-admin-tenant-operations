@@ -33,6 +33,12 @@ ADMIN_PASSWORD = "E2eAdmin@123"
 PHARMACIST_USERNAME = "e2e_pharmacist_task7"
 PHARMACIST_EMAIL = "e2e-pharmacist-task7@example.test"
 PHARMACIST_PASSWORD = "E2ePharmacist@123"
+STORE_MANAGER_USERNAME = "e2e_store_manager_task7"
+STORE_MANAGER_EMAIL = "e2e-store-manager-task7@example.test"
+STORE_MANAGER_PASSWORD = "E2eManager@123"
+RECOUNTER_USERNAME = "e2e_recounter_task7"
+RECOUNTER_EMAIL = "e2e-recounter-task7@example.test"
+RECOUNTER_PASSWORD = "E2eRecounter@123"
 HOSPITAL_B_DOCTOR_USERNAME = "e2e_doctor_task7_b"
 HOSPITAL_B_DOCTOR_EMAIL = "e2e-doctor-task7-b@example.test"
 HOSPITAL_B_DOCTOR_PASSWORD = "E2eDoctorB@123"
@@ -43,6 +49,8 @@ DOCTOR_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor")
 RECEPTIONIST_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-receptionist")
 ADMIN_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-admin")
 PHARMACIST_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-pharmacist")
+STORE_MANAGER_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-store-manager")
+RECOUNTER_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-recounter")
 HOSPITAL_B_DOCTOR_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-b")
 DOCTOR_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-profile")
 HOSPITAL_B_DOCTOR_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-task7-doctor-profile-b")
@@ -117,6 +125,9 @@ P32_SOURCE_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p32-source")
 P32_DESTINATION_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p32-destination")
 P32_RECALL_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p32-recall-batch")
 P32_TRANSFER_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p32-transfer-batch")
+P33_LOCATION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p33-location")
+P33_COUNT_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p33-count-batch")
+P33_UNEXPECTED_BATCH_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-p33-unexpected-batch")
 
 
 def _assert_destructive_reset_allowed(database_url: str, command: str) -> None:
@@ -666,6 +677,77 @@ async def snapshot_p32():
     print(json.dumps({"ids": {"medicine": PRODUCT_A_ID, "source": P32_SOURCE_LOCATION_ID, "destination": P32_DESTINATION_LOCATION_ID}, "batches": [dict(row) for row in batches], "recalls": [dict(row) for row in recalls], "transfers": [dict(row) for row in transfers], "ledger": [dict(row) for row in ledger]}, default=str))
 
 
+async def reset_p33_scenario():
+    from app.core.config import settings
+    _assert_destructive_reset_allowed(settings.DATABASE_URL, "reset_p33_scenario")
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    batch_ids = [P33_COUNT_BATCH_ID, P33_UNEXPECTED_BATCH_ID]
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        if await conn.scalar(text("SELECT to_regclass('stock_counts') IS NOT NULL")):
+            count_ids = (await conn.execute(text("SELECT id FROM stock_counts WHERE pharmacy_location_id = :location"), {"location": P33_LOCATION_ID})).scalars().all()
+            detail_ids = (await conn.execute(text("SELECT id FROM count_details WHERE count_id = ANY(:ids)"), {"ids": count_ids})).scalars().all() if count_ids else []
+            recount_ids = (await conn.execute(text("SELECT id FROM count_recounts WHERE count_id = ANY(:ids)"), {"ids": count_ids})).scalars().all() if count_ids else []
+            if count_ids:
+                await conn.execute(text("UPDATE inventory_batches SET frozen_by_count_id = NULL, frozen_at = NULL WHERE frozen_by_count_id = ANY(:ids)"), {"ids": count_ids})
+                await conn.execute(text("DELETE FROM stock_count_operations WHERE count_id = ANY(:ids)"), {"ids": count_ids})
+            if recount_ids:
+                await conn.execute(text("DELETE FROM count_recount_details WHERE recount_id = ANY(:ids)"), {"ids": recount_ids})
+                await conn.execute(text("DELETE FROM count_recounts WHERE id = ANY(:ids)"), {"ids": recount_ids})
+            if detail_ids:
+                await conn.execute(text("DELETE FROM audit_logs WHERE resource_id = ANY(:ids)"), {"ids": [str(value) for value in detail_ids]})
+                await conn.execute(text("UPDATE count_details SET adjustment_ledger_id = NULL WHERE id = ANY(:ids)"), {"ids": detail_ids})
+                await conn.execute(text("DELETE FROM count_details WHERE id = ANY(:ids)"), {"ids": detail_ids})
+                await conn.execute(text("DELETE FROM stock_transactions WHERE reference_type = 'STOCK_COUNT_DETAIL' AND reference_id = ANY(:ids)"), {"ids": detail_ids})
+            if count_ids:
+                await conn.execute(text("DELETE FROM audit_logs WHERE resource_id = ANY(:ids)"), {"ids": [str(value) for value in count_ids]})
+                await conn.execute(text("DELETE FROM stock_counts WHERE id = ANY(:ids)"), {"ids": count_ids})
+        await conn.execute(text("DELETE FROM stock_transactions WHERE inventory_batch_id = ANY(:ids)"), {"ids": batch_ids})
+        await conn.execute(text("DELETE FROM inventory_batches WHERE id = ANY(:ids)"), {"ids": batch_ids})
+        await conn.execute(text("DELETE FROM pharmacy_locations WHERE id = :id"), {"id": P33_LOCATION_ID})
+    await engine.dispose()
+
+
+async def seed_p33_scenario():
+    await reset_p33_scenario()
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+    async with maker() as session:
+        await session.execute(text("SET search_path TO public"))
+        if await session.get(User, STORE_MANAGER_USER_ID) is None:
+            session.add(User(id=STORE_MANAGER_USER_ID, tenant_id=TENANT_A_ID, tenant_name=SCHEMA_A, email=STORE_MANAGER_EMAIL, username=STORE_MANAGER_USERNAME, hashed_password=hash_password(STORE_MANAGER_PASSWORD), full_name="E2E Store Manager", role="store_manager", is_active=True, must_change_password=False))
+        if await session.get(User, RECOUNTER_USER_ID) is None:
+            session.add(User(id=RECOUNTER_USER_ID, tenant_id=TENANT_A_ID, tenant_name=SCHEMA_A, email=RECOUNTER_EMAIL, username=RECOUNTER_USERNAME, hashed_password=hash_password(RECOUNTER_PASSWORD), full_name="E2E Recount Pharmacist", role="pharmacist", is_active=True, must_change_password=False))
+        await session.commit()
+        await session.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        session.add(PharmacyLocation(id=P33_LOCATION_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, location_code="E2E-P33", location_name="P33 Count Pharmacy", location_type="PHARMACY", active=True))
+        await session.flush()
+        session.add_all([
+            InventoryBatch(id=P33_COUNT_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P33_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P33-COUNT", manufacturing_date=date(2026, 1, 1), expiry_date=date(2029, 1, 1), purchase_rate=Decimal("100"), received_quantity=Decimal("20"), available_quantity=Decimal("20"), reserved_quantity=Decimal("0"), status="ACTIVE"),
+            InventoryBatch(id=P33_UNEXPECTED_BATCH_ID, tenant_id=TENANT_A_ID, facility_id=FACILITY_A_ID, pharmacy_location_id=P33_LOCATION_ID, medicine_id=PRODUCT_A_ID, batch_number="P33-UNEXPECTED", manufacturing_date=date(2026, 1, 1), expiry_date=date(2029, 1, 1), purchase_rate=Decimal("100"), received_quantity=Decimal("0"), available_quantity=Decimal("0"), reserved_quantity=Decimal("0"), status="INACTIVE"),
+        ])
+        await session.commit()
+    await engine.dispose()
+    print("P33 E2E seed ready")
+
+
+async def snapshot_p33():
+    from app.core.config import settings
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        batches = (await conn.execute(text("SELECT id, batch_number, available_quantity, reserved_quantity, status, frozen_by_count_id FROM inventory_batches WHERE id = ANY(:ids) ORDER BY batch_number"), {"ids": [P33_COUNT_BATCH_ID, P33_UNEXPECTED_BATCH_ID]})).mappings().all()
+        counts = (await conn.execute(text("SELECT id, reference_key, status, count_type, expected_total_quantity, physical_total_quantity, variance_quantity, recount_count, initiated_by, approved_by, applied_by FROM stock_counts WHERE pharmacy_location_id = :location ORDER BY created_at"), {"location": P33_LOCATION_ID})).mappings().all()
+        details = (await conn.execute(text("SELECT d.id, d.count_id, d.batch_number, d.system_quantity, d.physical_quantity, d.variance_quantity, d.classifications, d.adjustment_ledger_id FROM count_details d JOIN stock_counts c ON c.id = d.count_id WHERE c.pharmacy_location_id = :location ORDER BY d.batch_number"), {"location": P33_LOCATION_ID})).mappings().all()
+        recounts = (await conn.execute(text("SELECT r.attempt_number, r.status, r.assigned_to, d.count_detail_id, d.physical_quantity, d.variance_quantity, d.counted_by FROM count_recounts r JOIN count_recount_details d ON d.recount_id = r.id WHERE r.count_id IN (SELECT id FROM stock_counts WHERE pharmacy_location_id = :location) ORDER BY r.attempt_number, d.id"), {"location": P33_LOCATION_ID})).mappings().all()
+        ledger = (await conn.execute(text("SELECT transaction_type, quantity, previous_balance, new_balance, reference_id, correlation_reference FROM stock_transactions WHERE reference_type = 'STOCK_COUNT_DETAIL' AND inventory_batch_id = ANY(:ids) ORDER BY created_at"), {"ids": [P33_COUNT_BATCH_ID, P33_UNEXPECTED_BATCH_ID]})).mappings().all()
+        operation_count = await conn.scalar(text("SELECT count(*) FROM stock_count_operations WHERE count_id IN (SELECT id FROM stock_counts WHERE pharmacy_location_id = :location)"), {"location": P33_LOCATION_ID})
+        audit_count = await conn.scalar(text("SELECT count(*) FROM audit_logs WHERE resource_id IN (SELECT id::text FROM stock_counts WHERE pharmacy_location_id = :location)"), {"location": P33_LOCATION_ID})
+    await engine.dispose()
+    print(json.dumps({"ids": {"location": P33_LOCATION_ID, "batch": P33_COUNT_BATCH_ID, "unexpected_batch": P33_UNEXPECTED_BATCH_ID, "pharmacist": PHARMACIST_USER_ID, "manager": STORE_MANAGER_USER_ID, "recounter": RECOUNTER_USER_ID}, "batches": [dict(row) for row in batches], "counts": [dict(row) for row in counts], "details": [dict(row) for row in details], "recounts": [dict(row) for row in recounts], "ledger": [dict(row) for row in ledger], "operation_count": operation_count, "audit_count": audit_count}, default=str))
+
+
 async def cleanup():
     from app.core.config import settings
     _assert_destructive_reset_allowed(settings.DATABASE_URL, "cleanup")
@@ -673,7 +755,7 @@ async def cleanup():
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA_A}" CASCADE'))
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA_B}" CASCADE'))
-        await conn.execute(delete(User).where(User.id.in_([DOCTOR_USER_ID, RECEPTIONIST_USER_ID, ADMIN_USER_ID, PHARMACIST_USER_ID, HOSPITAL_B_DOCTOR_USER_ID])))
+        await conn.execute(delete(User).where(User.id.in_([DOCTOR_USER_ID, RECEPTIONIST_USER_ID, ADMIN_USER_ID, PHARMACIST_USER_ID, STORE_MANAGER_USER_ID, RECOUNTER_USER_ID, HOSPITAL_B_DOCTOR_USER_ID])))
         await conn.execute(delete(TenantFeature).where(TenantFeature.tenant_id.in_([TENANT_A_ID, TENANT_B_ID])))
         await conn.execute(delete(Tenant).where(Tenant.id.in_([TENANT_A_ID, TENANT_B_ID])))
     await engine.dispose()
@@ -902,6 +984,12 @@ if __name__ == "__main__":
         asyncio.run(seed_p32_scenario())
     elif command == "snapshot_p32":
         asyncio.run(snapshot_p32())
+    elif command == "reset_p33_scenario":
+        asyncio.run(reset_p33_scenario())
+    elif command == "seed_p33_scenario":
+        asyncio.run(seed_p33_scenario())
+    elif command == "snapshot_p33":
+        asyncio.run(snapshot_p33())
     elif command == "cleanup":
         asyncio.run(cleanup())
     elif command == "snapshot":

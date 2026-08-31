@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.tenant.inventory_batch import InventoryBatch
+from app.services.stock_ledger_service import assert_inventory_batch_not_frozen
 from app.models.tenant.invoice import Invoice, Refund
 from app.models.tenant.pharmacy_dispense import PharmacyDispense, PharmacyDispenseAllocation, PharmacyDispenseItem, PharmacyStockReservation
 from app.models.tenant.stock_transaction import StockTransaction
@@ -385,6 +386,7 @@ async def create_stock_reservations(
         ).with_for_update())
         if batch is None:
             raise ValueError("Inventory batch not found")
+        assert_inventory_batch_not_frozen(batch)
         active_reserved = batch.reserved_quantity or Decimal("0")
         if batch.status != "ACTIVE" or (batch.expiry_date is not None and batch.expiry_date < reserved_at.date()):
             raise ValueError("Inventory batch is expired or inactive")
@@ -442,6 +444,7 @@ async def release_stock_reservation(
     ).with_for_update())
     if batch is None or batch.reserved_quantity < reservation.quantity:
         raise ValueError("Reservation balance is inconsistent")
+    assert_inventory_batch_not_frozen(batch)
     batch.reserved_quantity -= reservation.quantity
     reservation.status = status
     reservation.released_at = datetime.now(timezone.utc)
@@ -953,6 +956,8 @@ async def confirm_dispense_stock_consumption(
         ).order_by(InventoryBatch.id).with_for_update()
     )).scalars().all()
     batches_by_id = {batch.id: batch for batch in batches}
+    for batch in batches:
+        assert_inventory_batch_not_frozen(batch)
 
     for allocation in allocations:
         reservation = reservations_by_batch.get(allocation.inventory_batch_id)

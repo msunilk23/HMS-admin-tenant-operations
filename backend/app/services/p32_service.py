@@ -25,7 +25,7 @@ from app.models.tenant import (
 )
 from app.schemas.p32 import RecallCreate, RecallNotificationUpdate, RecallResolve, TransferCreate, TransferReceive
 from app.services.audit_service import record_audit
-from app.services.stock_ledger_service import create_stock_ledger_transaction
+from app.services.stock_ledger_service import assert_inventory_batch_not_frozen, create_stock_ledger_transaction
 
 
 class P32NotFoundError(ValueError):
@@ -105,6 +105,8 @@ async def approve_recall(session: AsyncSession, *, recall_id: UUID, tenant_id: U
     ).order_by(InventoryBatch.id).with_for_update())).scalars().all()
     if not batches:
         raise P32NotFoundError("Affected medicine batch not found")
+    for batch in batches:
+        assert_inventory_batch_not_frozen(batch)
     batch_ids = [batch.id for batch in batches]
     reservations = (await session.execute(select(PharmacyStockReservation).where(
         PharmacyStockReservation.inventory_batch_id.in_(batch_ids), PharmacyStockReservation.status == "ACTIVE",
@@ -285,6 +287,7 @@ async def approve_transfer(session: AsyncSession, *, transfer_id: UUID, tenant_i
     batches = await _locked_batches(session, [item.inventory_batch_id for item in items], tenant_id, facility_id)
     for item in items:
         batch = batches[item.inventory_batch_id]
+        assert_inventory_batch_not_frozen(batch)
         if batch.status != "ACTIVE":
             raise ValueError("Recalled or inactive inventory batch cannot be transferred")
         available = Decimal(str(batch.available_quantity)) - Decimal(str(batch.reserved_quantity))
@@ -312,6 +315,7 @@ async def dispatch_transfer(session: AsyncSession, *, transfer_id: UUID, tenant_
     batches = await _locked_batches(session, [item.inventory_batch_id for item in items], tenant_id, facility_id)
     for item in items:
         batch = batches[item.inventory_batch_id]
+        assert_inventory_batch_not_frozen(batch)
         if batch.status != "ACTIVE":
             raise ValueError("Recalled or inactive inventory batch cannot be transferred")
         if batch.reserved_quantity < item.transfer_quantity or batch.available_quantity < item.transfer_quantity:

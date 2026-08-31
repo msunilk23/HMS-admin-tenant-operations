@@ -27,6 +27,7 @@ import PatientReturnsPage from '@/features/pharmacy/PatientReturnsPage'
 import SupplierReturnsPage from '@/features/pharmacy/SupplierReturnsPage'
 import QuarantinePage from '@/features/pharmacy/QuarantinePage'
 import P32OperationsPage from '@/features/pharmacy/P32OperationsPage'
+import InventoryCountPage from '@/features/pharmacy/InventoryCountPage'
 import LabPage from '@/features/lab/LabPage'
 import AdminDashboard from '@/features/admin/AdminDashboard'
 import TenantsPage from '@/features/super_admin/TenantsPage'
@@ -126,6 +127,7 @@ export default function App() {
             <Route path="/pharmacy/supplier-returns" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><SupplierReturnsPage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy/quarantine" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={['pharmacist', 'store_manager', 'hospital_admin']}><QuarantinePage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy/operations" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={['pharmacist', 'store_manager', 'hospital_admin']}><P32OperationsPage /></RoleGuard></FeatureGuard>} />
+            <Route path="/pharmacy/inventory-counts" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={['pharmacist', 'store_manager', 'hospital_admin', 'auditor']}><InventoryCountPage /></RoleGuard></FeatureGuard>} />
             <Route path="/admin/pharmacy/purchase-orders" element={<RoleGuard allowed={['hospital_admin', 'store_manager']}><PurchaseOrderPage /></RoleGuard>} />
             <Route path="/admin/pharmacy/goods-receipts" element={<RoleGuard allowed={['hospital_admin', 'store_manager']}><GoodsReceiptPage /></RoleGuard>} />
             <Route path="/billing" element={<FeatureGuard feature="billing"><RoleGuard allowed={BILLING}><BillingPage /></RoleGuard></FeatureGuard>} />

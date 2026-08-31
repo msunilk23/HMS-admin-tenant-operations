@@ -18,6 +18,7 @@ from app.api.v1.pharmacy import router as pharmacy_router
 from app.api.v1.prescriptions import router as prescriptions_router
 from app.api.v1.quarantine import router as quarantine_router
 from app.api.v1.p32 import recall_router, transfer_router
+from app.api.v1.p33 import router as inventory_count_router
 from app.api.v1.queue import router as queue_router
 from app.api.v1.requisitions import router as requisitions_router
 from app.api.v1.returns import router as returns_router
@@ -63,5 +64,6 @@ api_router.include_router(returns_router, prefix="/returns", tags=["returns"], *
 api_router.include_router(quarantine_router, prefix="/pharmacy/quarantines", tags=["pharmacy-quarantine"], **_tenant_guard)
 api_router.include_router(recall_router, prefix="/pharmacy/recalls", tags=["pharmacy-recall"], **_tenant_guard)
 api_router.include_router(transfer_router, prefix="/pharmacy/transfers", tags=["pharmacy-transfer"], **_tenant_guard)
+api_router.include_router(inventory_count_router, prefix="/pharmacy/inventory-counts", tags=["pharmacy-inventory-count"], **_tenant_guard)
 api_router.include_router(lab_router, prefix="/lab", tags=["lab"], **_tenant_guard)
 api_router.include_router(requisitions_router, prefix="/indents", tags=["indents"], **_tenant_guard)

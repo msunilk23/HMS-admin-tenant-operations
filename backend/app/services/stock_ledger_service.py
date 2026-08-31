@@ -15,6 +15,15 @@ def _to_decimal(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
+def assert_inventory_batch_not_frozen(
+    batch: InventoryBatch,
+    *,
+    allowed_count_id: Optional[uuid.UUID] = None,
+) -> None:
+    if batch.frozen_by_count_id is not None and batch.frozen_by_count_id != allowed_count_id:
+        raise ValueError("Inventory batch is frozen by an active stock count")
+
+
 async def create_stock_ledger_transaction(
     session: AsyncSession,
     *,
@@ -31,6 +40,7 @@ async def create_stock_ledger_transaction(
     reason: str,
     user_id: Optional[uuid.UUID] = None,
     affects_available_balance: bool = True,
+    allowed_count_id: Optional[uuid.UUID] = None,
 ) -> StockTransaction:
     """Append a signed stock ledger row and keep the batch cache consistent."""
     if inventory_batch_id is not None:
@@ -43,6 +53,7 @@ async def create_stock_ledger_transaction(
         )
         if batch is None:
             raise ValueError(f"Inventory batch {inventory_batch_id} not found")
+        assert_inventory_batch_not_frozen(batch, allowed_count_id=allowed_count_id)
         if medicine_id is None:
             medicine_id = batch.medicine_id
         pharmacy_location_id = batch.pharmacy_location_id

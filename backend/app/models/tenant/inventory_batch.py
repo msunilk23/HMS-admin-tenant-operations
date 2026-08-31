@@ -42,5 +42,9 @@ class InventoryBatch(Base, TimestampMixin):
     goods_receipt_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     goods_receipt_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="ACTIVE", index=True)
+    frozen_by_count_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("stock_counts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    frozen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)

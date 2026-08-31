@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tenant.inventory_batch import InventoryBatch
 from app.models.tenant.stock_transaction import StockTransaction
+from app.services.stock_ledger_service import assert_inventory_batch_not_frozen
 
 
 def _to_decimal(value: Any) -> Decimal:
@@ -118,9 +119,10 @@ async def _sync_inventory_batch_balance(
     if facility_id is not None:
         filters.append(InventoryBatch.facility_id == facility_id)
 
-    batch = await session.scalar(select(InventoryBatch).where(*filters))
+    batch = await session.scalar(select(InventoryBatch).where(*filters).with_for_update())
     if batch is None:
         raise ValueError("Inventory batch not found")
+    assert_inventory_batch_not_frozen(batch)
 
     result = await session.scalar(
         select(func.coalesce(func.sum(StockTransaction.quantity), Decimal("0"))).where(
@@ -199,10 +201,11 @@ async def record_stock_adjustment(
             InventoryBatch.id == inventory_batch_id,
             InventoryBatch.tenant_id == tenant_id,
             InventoryBatch.facility_id == facility_id,
-        )
+        ).with_for_update()
     )
     if batch is None:
         raise ValueError("Inventory batch not found")
+    assert_inventory_batch_not_frozen(batch)
     if batch.status != "ACTIVE":
         raise ValueError("Inventory batch is not active")
     if batch.expiry_date is not None and batch.expiry_date < (as_of_date or date.today()):

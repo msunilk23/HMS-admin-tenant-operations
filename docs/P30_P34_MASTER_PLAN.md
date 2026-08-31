@@ -393,9 +393,13 @@ Scenarios to test:
 
 ---
 
-## P33: Cycle Count + Physical Verification (TODO - 2-3 days work)
+## P33: Cycle Count + Physical Verification (COMPLETE - ACCEPTED)
 
 **Purpose**: Regular physical verification of inventory vs system
+
+**Canonical contract:** [`pharmacy/P33_STOCK_COUNT_SPECIFICATION.md`](pharmacy/P33_STOCK_COUNT_SPECIFICATION.md). That approved specification supersedes conflicting preliminary P33 model, workflow, variance, permission, and migration details in this plan.
+
+**Acceptance evidence:** [`pharmacy/P33_STOCK_VERIFICATION.md`](pharmacy/P33_STOCK_VERIFICATION.md). Migration `0087`, PostgreSQL acceptance, full backend regression, frontend gates, deterministic fixtures, and Chromium workflows passed on 2026-08-31. The illustrative legacy notes below remain non-authoritative where they differ from the canonical contract.
 
 ### Database Models
 

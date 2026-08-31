@@ -705,8 +705,8 @@ async def list_inventory_locations(
 
 @router.get("/inventory/batches", response_model=List[InventoryBatchRead])
 async def list_inventory_batches(
-    facility_id: uuid.UUID,
     pharmacy_location_id: uuid.UUID,
+    facility_id: uuid.UUID = Depends(get_facility_id),
     medicine_id: Optional[uuid.UUID] = None,
     dispensable_only: bool = True,
     limit: int = Query(100, ge=1, le=500),

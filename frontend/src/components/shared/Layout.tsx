@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { ClipboardCheck } from 'lucide-react'
 import { useAuthStore } from '@/features/auth/authStore'
 import hospitalLogo from '../../../logo/hospital-logo-design-vector-medical-cross_53876-136743.avif'
 
@@ -170,6 +171,13 @@ const NAV_ITEMS: NavItem[] = [
       </svg>
     ),
     roles: ['pharmacist', 'store_manager', 'hospital_admin'],
+    feature: 'pharmacy',
+  },
+  {
+    label: 'Inventory Counts',
+    to: '/pharmacy/inventory-counts',
+    icon: <ClipboardCheck className="h-5 w-5" />,
+    roles: ['pharmacist', 'store_manager', 'hospital_admin', 'auditor'],
     feature: 'pharmacy',
   },
   {

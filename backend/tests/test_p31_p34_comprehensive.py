@@ -207,9 +207,9 @@ class TestP33StockCount:
             tenant_id=uuid.uuid4(),
             facility_id=uuid.uuid4(),
             pharmacy_location_id=uuid.uuid4(),
-            status="INITIATED",
+            status="CREATED",
+            count_type="FULL",
             reference_key=f"CT-{uuid.uuid4().hex[:8]}",
-            count_date=datetime.utcnow(),
             total_items_counted=0,
             total_variance_items=0,
             initiated_by=uuid.uuid4(),
@@ -218,7 +218,7 @@ class TestP33StockCount:
             updated_at=datetime.utcnow(),
         )
         
-        assert count.status == "INITIATED"
+        assert count.status == "CREATED"
         assert count.total_items_counted == 0
 
     @pytest.mark.asyncio
@@ -231,9 +231,9 @@ class TestP33StockCount:
             tenant_id=uuid.uuid4(),
             facility_id=uuid.uuid4(),
             pharmacy_location_id=uuid.uuid4(),
-            status="INITIATED",
+            status="CREATED",
+            count_type="PARTIAL",
             reference_key="CT-VARIANCE",
-            count_date=datetime.utcnow(),
             initiated_by=uuid.uuid4(),
             initiated_at=datetime.utcnow(),
             created_at=datetime.utcnow(),
@@ -244,7 +244,11 @@ class TestP33StockCount:
             id=uuid.uuid4(),
             count_id=count_id,
             inventory_batch_id=uuid.uuid4(),
+            medicine_id=uuid.uuid4(),
+            batch_number="CT-VARIANCE-BATCH",
             system_quantity=Decimal("100"),
+            available_quantity=Decimal("100"),
+            reserved_quantity=Decimal("0"),
             physical_quantity=Decimal("95"),
             variance_quantity=Decimal("-5"),
             variance_reason="Possible spillage or evaporation",

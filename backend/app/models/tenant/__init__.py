@@ -40,7 +40,7 @@ from app.models.tenant.returns import PatientReturn, PatientReturnItem, PatientR
 from app.models.tenant.p31_p34 import (
     StockQuarantine, ProductRecall, RecallAffectedStock,
     StockTransfer, StockTransferItem, StockTransferDiscrepancy, PharmacyWorkflowOperation,
-    StockCount, CountDetail,
+    StockCountSettings, StockCount, CountDetail, CountRecount, CountRecountDetail, StockCountOperation,
     PharmacyAlert, PharmacyAuditTrail
 )
 
@@ -106,6 +106,10 @@ __all__ = [
     "PharmacyWorkflowOperation",
     "StockCount",
     "CountDetail",
+    "StockCountSettings",
+    "CountRecount",
+    "CountRecountDetail",
+    "StockCountOperation",
     "PharmacyAlert",
     "PharmacyAuditTrail",
 ]

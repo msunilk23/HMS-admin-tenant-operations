@@ -14,7 +14,7 @@ from typing import Optional
 
 from sqlalchemy import (
     Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint,
-    CheckConstraint, func, Boolean, Integer
+    CheckConstraint, func, Boolean, Integer, JSON
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -274,19 +274,37 @@ class PharmacyWorkflowOperation(Base):
 
 # ============ P33: CYCLE COUNT + PHYSICAL VERIFICATION ============
 
+class StockCountSettings(Base, TimestampMixin):
+    __tablename__ = "stock_count_settings"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "facility_id", name="uq_stock_count_settings_scope"),
+        CheckConstraint("quantity_tolerance_percent >= 0", name="ck_stock_count_settings_tolerance"),
+        CheckConstraint("repeated_variance_lookback_days > 0", name="ck_stock_count_settings_lookback"),
+        CheckConstraint("repeated_variance_trigger > 0", name="ck_stock_count_settings_trigger"),
+        CheckConstraint("high_value_variance_threshold >= 0", name="ck_stock_count_settings_high_value"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    facility_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    quantity_tolerance_percent: Mapped[Decimal] = mapped_column(Numeric(7, 3), nullable=False, default=Decimal("0.5"))
+    repeated_variance_lookback_days: Mapped[int] = mapped_column(nullable=False, default=90)
+    repeated_variance_trigger: Mapped[int] = mapped_column(nullable=False, default=2)
+    high_value_variance_threshold: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("5000"))
+    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+
+
 class StockCount(Base, TimestampMixin):
     """Physical inventory count sessions."""
     __tablename__ = "stock_counts"
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id",
-            "reference_key",
-            name="uq_stock_counts_tenant_reference",
-        ),
+        UniqueConstraint("tenant_id", "reference_key", name="uq_stock_counts_tenant_reference"),
         CheckConstraint(
-            "status IN ('INITIATED', 'IN_PROGRESS', 'COMPLETED', 'APPROVED', 'ADJUSTED')",
+            "status IN ('CREATED', 'IN_PROGRESS', 'SUBMITTED', 'RECOUNT_REQUIRED', 'RECOUNT_IN_PROGRESS', 'RESUBMITTED', 'APPROVED', 'APPLIED', 'CANCELLED')",
             name="ck_stock_counts_status",
         ),
+        CheckConstraint("count_type IN ('FULL', 'PARTIAL', 'SAMPLE')", name="ck_stock_counts_type"),
+        CheckConstraint("recount_count >= 0 AND recount_count <= 2", name="ck_stock_counts_recount_limit"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -296,23 +314,45 @@ class StockCount(Base, TimestampMixin):
         ForeignKey("pharmacy_locations.id"), nullable=False, index=True
     )
     
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="INITIATED", index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="CREATED", index=True)
+    count_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     reference_key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    count_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    
+    selected_batch_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    quantity_tolerance_percent: Mapped[Decimal] = mapped_column(Numeric(7, 3), nullable=False, default=Decimal("0.5"))
+    repeated_variance_lookback_days: Mapped[int] = mapped_column(nullable=False, default=90)
+    repeated_variance_trigger: Mapped[int] = mapped_column(nullable=False, default=2)
+    high_value_variance_threshold: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("5000"))
+    expected_total_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, default=Decimal("0"))
+    physical_total_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, default=Decimal("0"))
+    variance_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, default=Decimal("0"))
     total_items_counted: Mapped[int] = mapped_column(nullable=False, default=0)
     total_variance_items: Mapped[int] = mapped_column(nullable=False, default=0)
-    
+    recount_count: Mapped[int] = mapped_column(nullable=False, default=0)
     initiated_by: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     initiated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    
+    started_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancellation_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class CountDetail(Base, TimestampMixin):
     """Individual batch count details."""
     __tablename__ = "count_details"
+    __table_args__ = (
+        UniqueConstraint("count_id", "inventory_batch_id", name="uq_count_details_batch"),
+        CheckConstraint("system_quantity >= 0 AND available_quantity >= 0 AND reserved_quantity >= 0", name="ck_count_details_snapshot_nonnegative"),
+        CheckConstraint("physical_quantity IS NULL OR physical_quantity >= 0", name="ck_count_details_physical_nonnegative"),
+        CheckConstraint("version > 0", name="ck_count_details_version"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     count_id: Mapped[uuid.UUID] = mapped_column(
@@ -321,18 +361,82 @@ class CountDetail(Base, TimestampMixin):
     inventory_batch_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("inventory_batches.id"), nullable=False, index=True
     )
-    
+    medicine_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    batch_number: Mapped[str] = mapped_column(String(100), nullable=False)
     system_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
-    physical_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
-    variance_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
-    
+    available_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    reserved_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    unit_cost: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    physical_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), nullable=True)
+    variance_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), nullable=True)
+    variance_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), nullable=True)
+    variance_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    classifications: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     variance_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    counted_by: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    counted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    
-    verified_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
-    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_unexpected: Mapped[bool] = mapped_column(nullable=False, default=False)
+    evidence: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    counted_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    counted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(nullable=False, default=1)
+    adjustment_ledger_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("stock_transactions.id"), nullable=True, unique=True)
+
+
+class CountRecount(Base, TimestampMixin):
+    __tablename__ = "count_recounts"
+    __table_args__ = (
+        UniqueConstraint("count_id", "attempt_number", name="uq_count_recounts_attempt"),
+        CheckConstraint("attempt_number > 0 AND attempt_number <= 2", name="ck_count_recounts_attempt"),
+        CheckConstraint("status IN ('ASSIGNED', 'IN_PROGRESS', 'SUBMITTED')", name="ck_count_recounts_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    count_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stock_counts.id", ondelete="CASCADE"), nullable=False, index=True)
+    attempt_number: Mapped[int] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="ASSIGNED", index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    assigned_to: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    requested_by: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CountRecountDetail(Base, TimestampMixin):
+    __tablename__ = "count_recount_details"
+    __table_args__ = (
+        UniqueConstraint("recount_id", "count_detail_id", name="uq_count_recount_details_item"),
+        CheckConstraint("physical_quantity IS NULL OR physical_quantity >= 0", name="ck_count_recount_details_physical"),
+        CheckConstraint("version > 0", name="ck_count_recount_details_version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    recount_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("count_recounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    count_detail_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("count_details.id", ondelete="CASCADE"), nullable=False, index=True)
+    physical_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), nullable=True)
+    variance_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3), nullable=True)
+    variance_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    counted_by: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    counted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(nullable=False, default=1)
+
+
+class StockCountOperation(Base):
+    __tablename__ = "stock_count_operations"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "user_id", "action", "scope_resource", "idempotency_key", name="uq_stock_count_operation_scope"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    facility_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    scope_resource: Mapped[str] = mapped_column(String(36), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    count_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stock_counts.id", ondelete="CASCADE"), nullable=False, index=True)
+    response_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 # ============ P34: DASHBOARD + REPORTS + AUDIT ============
