@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete as sa_delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,7 @@ from app.db.engine import get_session
 from app.models.public.platform_audit_log import PlatformAuditLog
 from app.models.public.tenant_feature import TenantFeature
 from app.models.public.user import Tenant, User
+from app.services.logo_service import save_tenant_logo
 
 router = APIRouter(dependencies=[Depends(require_role("super_admin"))])
 
@@ -83,6 +84,12 @@ class TenantUpdate(BaseModel):
 
 class FeatureBulkSet(BaseModel):
     enabled_features: list[str]     # keys that should be enabled; rest are disabled
+
+
+class TenantLogoUploadResponse(BaseModel):
+    logo_url: str
+    primary_color: str
+    secondary_color: str
 
 
 class FeatureToggle(BaseModel):
@@ -292,6 +299,22 @@ async def get_tenant(
         admin_username=admin_username,
         admin_email=admin_email,
     )
+
+
+@router.post("/hospitals/{tenant_id}/logo", response_model=TenantLogoUploadResponse)
+async def upload_tenant_logo(
+    tenant_id: uuid.UUID,
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+) -> TenantLogoUploadResponse:
+    """Upload a tenant's logo image and auto-derive its brand colors from it."""
+    tenant = await _get_tenant_or_404(tenant_id, session)
+    logo_url, primary_color, secondary_color = await save_tenant_logo(tenant.id, file)
+    tenant.logo_url = logo_url
+    tenant.primary_color = primary_color
+    tenant.secondary_color = secondary_color
+    await session.commit()
+    return TenantLogoUploadResponse(logo_url=logo_url, primary_color=primary_color, secondary_color=secondary_color)
 
 
 @router.post(

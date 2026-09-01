@@ -21,3 +21,10 @@ class TenantPublic(BaseModel):
 class DisplayTokenRead(BaseModel):
     display_token: str
     display_url_path: str  # frontend route: /display/{schema_name}/{display_token}
+
+
+class TenantBrandingRead(BaseModel):
+    hospital_name: str
+    logo_url: str | None
+    primary_color: str | None
+    secondary_color: str | None

@@ -1,13 +1,12 @@
 from contextlib import asynccontextmanager
-from pathlib import Path
 import logging
-import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
+from app.core.uploads import get_uploads_dir
 from app.db.engine import init_db
 from app.middleware.tenant import TenantMiddleware
 from app.middleware.audit import AuditLogMiddleware
@@ -68,11 +67,7 @@ from app.websocket.router import ws_router  # noqa: E402
 app.include_router(ws_router)
 
 # Serve uploaded lab reports (and any future uploads)
-_uploads_dir = Path(os.getenv("UPLOADS_DIR", "/app/uploads"))
-if not _uploads_dir.parent.exists() or not os.access(_uploads_dir.parent, os.W_OK):
-    _uploads_dir = Path(__file__).resolve().parents[2] / "uploads"
-_uploads_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(_uploads_dir)), name="uploads")
+app.mount("/uploads", StaticFiles(directory=str(get_uploads_dir())), name="uploads")
 
 
 @app.get("/health", tags=["health"])

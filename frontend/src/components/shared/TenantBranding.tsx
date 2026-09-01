@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useAuthStore } from '@/features/auth/authStore'
+import { useTenantBranding } from '@/hooks/useTenantBranding'
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 
@@ -23,12 +23,12 @@ function hexToHsl(hex: string): string | null {
 }
 
 export default function TenantBranding() {
-  const user = useAuthStore(s => s.user)
+  const { primaryColor, secondaryColor } = useTenantBranding()
 
   useEffect(() => {
     const root = document.documentElement
-    const primary = user?.role === 'super_admin' ? null : hexToHsl(user?.primaryColor ?? '')
-    const secondary = user?.role === 'super_admin' ? null : hexToHsl(user?.secondaryColor ?? '')
+    const primary = hexToHsl(primaryColor ?? '')
+    const secondary = hexToHsl(secondaryColor ?? '')
     root.style.setProperty('--primary', primary ?? '221.2 83.2% 53.3%')
     root.style.setProperty('--ring', primary ?? '221.2 83.2% 53.3%')
     root.style.setProperty('--secondary', secondary ?? '210 40% 96.1%')
@@ -39,7 +39,7 @@ export default function TenantBranding() {
       root.style.removeProperty('--secondary')
       root.style.removeProperty('--accent')
     }
-  }, [user?.role, user?.primaryColor, user?.secondaryColor])
+  }, [primaryColor, secondaryColor])
 
   return null
 }

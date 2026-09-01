@@ -96,11 +96,25 @@ interface TenantAdminPasswordResetResponse {
   must_change_password: boolean
 }
 
+interface TenantLogoUploadResponse {
+  logo_url: string
+  primary_color: string
+  secondary_color: string
+}
+
 const superApi = {
   listTenants: () => apiClient.get<TenantListItem[]>('/super/hospitals').then((r) => r.data),
   getTenant: (id: string) => apiClient.get<TenantDetail>(`/super/hospitals/${id}`).then((r) => r.data),
   updateTenant: (id: string, body: { hospital_name?: string; contact_email?: string; contact_phone?: string; plan?: string; is_active?: boolean; logo_url?: string; primary_color?: string; secondary_color?: string }) =>
     apiClient.patch<TenantDetail>(`/super/hospitals/${id}`, body).then((r) => r.data),
+  uploadLogo: (id: string, file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    // Let the browser set the multipart boundary — override apiClient's default JSON content type.
+    return apiClient
+      .post<TenantLogoUploadResponse>(`/super/hospitals/${id}/logo`, formData, { headers: { 'Content-Type': undefined } })
+      .then((r) => r.data)
+  },
   bulkSetFeatures: (id: string, enabledFeatures: string[]) =>
     apiClient.put<TenantDetail>(`/super/hospitals/${id}/features`, { enabled_features: enabledFeatures }).then((r) => r.data),
   toggleFeature: (id: string, feature: string, enabled: boolean) =>
@@ -201,6 +215,27 @@ function EditTenantModal({
     || secondaryColor !== (tenant.secondary_color ?? '')
   const canSave = changed && hospitalName.trim().length > 0 && contactEmail.trim().length > 0 && !save.isPending
 
+  const uploadLogo = useMutation({
+    mutationFn: (file: File) => superApi.uploadLogo(tenant.id, file),
+    onSuccess: (result) => {
+      setLogoUrl(result.logo_url)
+      setPrimaryColor(result.primary_color)
+      setSecondaryColor(result.secondary_color)
+      qc.invalidateQueries({ queryKey: ['super-tenants'] })
+      qc.invalidateQueries({ queryKey: ['super-tenant', tenant.id] })
+      onToast('Logo uploaded — brand colors updated automatically')
+    },
+    onError: (err: any) => {
+      onToast(err?.response?.data?.detail ?? 'Failed to upload logo', 'error')
+    },
+  })
+
+  const handleLogoFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (file) uploadLogo.mutate(file)
+  }
+
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/40" onClick={onClose} />
@@ -250,7 +285,26 @@ function EditTenantModal({
             <div className="border-t border-gray-100 pt-4 space-y-4">
               <h3 className="text-sm font-semibold text-gray-800">Hospital Branding</h3>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Logo URL <span className="text-gray-400 font-normal">(optional)</span></label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Logo image</label>
+                <div className="flex items-center gap-3">
+                  {logoUrl && (
+                    <img src={logoUrl} alt="Hospital logo preview" className="h-10 w-10 flex-shrink-0 rounded-full border border-gray-200 object-cover" />
+                  )}
+                  <label className="flex-1 cursor-pointer rounded-lg border border-dashed border-gray-300 px-3 py-2 text-center text-sm text-gray-600 hover:bg-gray-50">
+                    {uploadLogo.isPending ? 'Uploading…' : 'Upload PNG, JPEG, or WEBP'}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={handleLogoFileChange}
+                      disabled={uploadLogo.isPending}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                <p className="mt-1 text-xs text-gray-400">Brand colors below are picked from the uploaded logo automatically — adjust if needed.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Logo URL <span className="text-gray-400 font-normal">(optional — used only if no image is uploaded)</span></label>
                 <input type="url" value={logoUrl} onChange={e => setLogoUrl(e.target.value)} placeholder="https://cdn.example.com/logo.png" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
               </div>
               <div className="grid grid-cols-2 gap-3">

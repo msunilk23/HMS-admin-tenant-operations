@@ -27,6 +27,9 @@ httpx==0.28.1
 # PDF generation
 reportlab==4.2.5
 
+# Image processing (tenant logo brand-color extraction)
+pillow==11.0.0
+
 # Notifications (SMS/WhatsApp)
 twilio==9.3.7
 

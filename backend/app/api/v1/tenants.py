@@ -3,10 +3,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.engine import get_session
-from app.core.dependencies import require_role
+from app.core.dependencies import require_role, require_tenant_user
 from app.core.security import hash_password
 from app.models.public.user import Tenant, User
-from app.schemas.tenant import DisplayTokenRead, TenantCreate, TenantPublic
+from app.schemas.tenant import DisplayTokenRead, TenantBrandingRead, TenantCreate, TenantPublic
 
 import secrets
 import uuid
@@ -72,6 +72,24 @@ def _display_token_response(tenant: Tenant) -> DisplayTokenRead:
     return DisplayTokenRead(
         display_token=tenant.display_token,
         display_url_path=f"/display/{tenant.schema_name}/{tenant.display_token}",
+    )
+
+
+@router.get("/branding", response_model=TenantBrandingRead)
+async def get_tenant_branding(
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_tenant_user),
+):
+    """Live logo/colors for the current tenant — polled so branding updates
+    without waiting for the user's JWT to be reissued on next login/refresh."""
+    tenant = await session.get(Tenant, uuid.UUID(current_user["tenant_id"]))
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return TenantBrandingRead(
+        hospital_name=tenant.hospital_name,
+        logo_url=tenant.logo_url,
+        primary_color=tenant.primary_color,
+        secondary_color=tenant.secondary_color,
     )
 
 

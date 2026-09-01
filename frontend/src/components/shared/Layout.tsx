@@ -2,18 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Menu } from 'lucide-react'
 import { useAuthStore } from '@/features/auth/authStore'
+import { useTenantBranding } from '@/hooks/useTenantBranding'
 import Sidebar from './Sidebar'
 import hospitalLogo from '../../../logo/hospital-logo-design-vector-medical-cross_53876-136743.avif'
 
 export default function AppLayout() {
   const { user, logout, refreshToken } = useAuthStore()
+  const { logoUrl, hospitalName } = useTenantBranding()
   const navigate = useNavigate()
   const location = useLocation()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const hospitalName = user?.hospitalName ?? 'Hospital'
-  const tenantLogo = user?.logoUrl || hospitalLogo
+  const tenantLogo = logoUrl || hospitalLogo
 
   // Close the mobile drawer whenever the route changes (e.g. back/forward nav).
   useEffect(() => {
@@ -67,7 +68,7 @@ export default function AppLayout() {
           {/* Left: logo + hospital / platform name — always visible */}
           <div className="flex items-center gap-2 min-w-0">
             {user?.role !== 'super_admin' && (
-              <img src={tenantLogo} alt={`${hospitalName} logo`} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+              <img src={tenantLogo} alt={`${hospitalName ?? 'Hospital'} logo`} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
             )}
             {user?.role === 'super_admin' ? (
               <div>
@@ -75,7 +76,7 @@ export default function AppLayout() {
                 <p className="text-xs text-gray-400">Super Admin Console</p>
               </div>
             ) : (
-              <p className="text-base font-bold text-gray-900 truncate">{user?.hospitalName ?? 'Hospital'}</p>
+              <p className="text-base font-bold text-gray-900 truncate">{hospitalName ?? 'Hospital'}</p>
             )}
           </div>
           <div className="flex-1" />
