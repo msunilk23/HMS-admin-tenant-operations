@@ -79,24 +79,28 @@ revert past `0089` in a disaster-recovery scenario:
 
 ## Current execution evidence
 
-Execution date: 2026-08-31 UTC.
+Execution date: 2026-09-01 UTC (RA-1 through RA-4 implementation and validation), live Docker stack (`hospital_postgres`, `hospital_redis`, `hospital_backend`, `hospital_frontend`, `hospital_nginx`, `hospital_pgadmin`).
 
 | Gate | Result | Evidence/limitation |
 | --- | --- | --- |
-| Target synchronization | PASS | Local review branch equals `origin/phase1-stabilization` at `4334f22`, ahead `0`, behind `0` |
-| Repository migration graph | PASS | Static analysis and `alembic heads` return only `0089 (head)` |
-| Fresh backend dependency install | PASS | New Python 3.12 virtual environment installed only `backend/requirements.txt` |
-| Fresh frontend dependency install | PASS | `npm ci` installed the lockfile successfully |
-| Backend compile | PASS | `python -m compileall -q app` |
-| Backend suite without PostgreSQL | PARTIAL | `279 passed, 92 skipped`; database-dependent skips are not accepted as release evidence |
+| Target synchronization | PASS | Local review branch equals `origin/phase1-stabilization` at `4334f22`, ahead `0`, behind `0`; no commits made this session |
+| Repository migration graph | PASS | `alembic heads` returns only `0089 (head)` |
+| Reversible boundary + forward-only 0089 | PASS | `alembic upgrade 0088 -> downgrade 0087 -> upgrade 0088 -> upgrade 0089` completed cleanly on a disposable database; single head `0089` confirmed |
+| Database head — public schema | PASS | `public.alembic_version.version_num = 0089` |
+| Database head — shankar_hospitals tenant | PASS | `shankar_hospitals.alembic_version.version_num = 0089` (sole real tenant; a leftover orphaned test schema `test_mig_taskg_*` from an earlier interrupted test run was found and removed) |
+| Backend suite with PostgreSQL + Redis | PASS | `405 passed` / `406` (1 known transient full-suite-only flake in `test_p30_comprehensive_acceptance.py`, confirmed passing 3/3 times in isolation — Redis RDB background-save timing, not a logic defect) |
 | TypeScript | PASS | `npm run type-check` |
 | ESLint | PASS | `npm run lint` |
-| Frontend unit tests | PASS | `35 passed` |
-| Frontend production build | PASS WITH ADVISORY | Build completed; existing bundle-size warning remains |
-| Docker/Compose build and health | BLOCKED | Docker is not installed in the review runner |
-| PostgreSQL/Redis startup and migrations | BLOCKED | No Docker or external service endpoints are available in the review runner |
-| Browser role workflows | BLOCKED | Requires the PostgreSQL-backed application stack |
-| Backup/restore execution | BLOCKED | Requires PostgreSQL client/server access; automated gate added to CI |
+| Frontend unit tests | PASS | `67 passed` |
+| Frontend production build | PASS WITH ADVISORY | `tsc -b && vite build` succeeds; pre-existing bundle-size (>500kB) and browserslist-data-age advisories remain, not errors |
+| Docker Compose configuration | PASS | `docker compose config --quiet` validates cleanly with documented `.env`/pgAdmin variables |
+| Container health | PASS | All 6 containers running; postgres and redis report `healthy` |
+| Backend `/health`, OpenAPI, frontend, Nginx | PASS | All return HTTP 200 |
+| Disposable PostgreSQL backup/restore exercise | PASS | `pg_dump -Fc` → `createdb` → `pg_restore --exit-on-error` into `release_a_restore`; restored DB confirmed `alembic_version` present and `= 0089`, and `shankar_hospitals` tenant schema present; disposable database dropped afterward |
+| No credentials in logs | PASS | `docker logs hospital_backend` scanned for password/secret patterns — only DDL column names matched, no credential values |
+| Chromium E2E regression (existing suites) | PASS | 24/24: `task7.spec.ts` (8/8 — Doctor ICD-10/medicine search, cross-tenant denial, document immutability, session security), `nurse-vitals.spec.ts` (4/4), `pharmacy-prescription.spec.ts` (4/4) — run against the live Docker stack, proving RA-1/2/3 changes did not regress the existing OPD chain |
+| Chromium E2E — new Nurse Roster / controlled Lab ordering UI | NOT PERFORMED | Live browser click-through attempted but the previously-known `hospitaladmin` credential no longer authenticates (confirmed via direct API call); resetting live tenant credentials was judged out of scope without explicit authorization. Coverage instead comes from RA-2 (13/13) and RA-3 (9/9) real-Postgres API tests plus clean type-check/lint/build of the actual UI components |
+| Full new RA-4 chain E2E (Admin config → Roster → Schedule → Reception → Check-in → Vitals → Consultation → controlled Lab → Lab workflow → Pharmacy → Billing, all 8 role users) | NOT BUILT | Documented gap — see Finding Register RA-4-001 |
 | Business role UAT | PENDING | Must be performed by named Hospital UAT users |
 
 ## Hospital role UAT
@@ -183,10 +187,12 @@ Use one classification: `DEFECT`, `UX IMPROVEMENT`, `CONFIGURATION`,
 
 | ID | Classification | Severity | Role/module | Scenario | Expected | Actual | Evidence | Owner | Decision/status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| RA-001 | CONFIGURATION | High | Release environment | Execute Docker/DB gates | Docker and PostgreSQL available | Pending execution in an authorized release runner | This record | DevOps | OPEN |
+| RA-001 | CONFIGURATION | High | Release environment | Execute Docker/DB gates | Docker and PostgreSQL available | Executed 2026-09-01 against the live Docker stack — all containers healthy, compose config valid, backup/restore verified at head `0089` | This record | DevOps | CLOSED |
 | RA-002 | NEW REQUIREMENT | High | Business UAT | Obtain hospital sign-off | Named role users complete UAT | Business execution not yet recorded | Role checklist above | Business owner | OPEN |
 | RA-003 | DEFECT | High | Payment security | Review committed documentation | No secret values in repository content/history | A webhook-secret value was committed in the payment guide; working-tree documentation is redacted | `PAYMENT_TESTING_GUIDE.md` | Security/DevOps | ROTATE BEFORE UAT |
 | RA-004 | DEFECT | High | Docker Compose | Start from documented repository files | Compose resolves PostgreSQL and pgAdmin configuration without embedded credentials | Compose referenced an absent `infra/postgres.env`; corrected to require documented root `.env` variables with no credential fallbacks | `infra/docker-compose.yml` | Development | FIXED, CI RETEST PENDING |
+| RA-005 | CONFIGURATION | P1 | Release environment / Shankar Hospitals tenant | Live-browser-verify the new Nurse Roster admin UI and controlled Lab Test selector as hospital_admin | Known `hospitaladmin` credential authenticates | Credential no longer valid (confirmed via direct `/api/v1/auth/login` call, `401 Invalid email/username or password`); not reset without explicit authorization since it is live tenant data | This record | Business owner / DevOps | OPEN — reset or provide current credential to unblock live UI verification |
+| RA-006 | NEW REQUIREMENT | P1 | RA-4 / full OPD regression | Build the full end-to-end Chromium chain (Hospital Admin config → Nurse roster → Doctor schedule → Reception → Appointment/walk-in → Check-in → Vitals → Consultation → controlled Lab order → Lab workflow → Pharmacy → Billing) with all 8 real role users, capacity/concurrency, payment webhook, and Super Admin negative tests | Dedicated new spec exists and passes | Not built this session — existing `task7`/`nurse-vitals`/`pharmacy-prescription` specs (24/24 passing) provide regression coverage for the pre-existing chain only, not the new pieces end-to-end together | This record | Development | OPEN — recommended as the next dedicated effort |
 
 ## Release notes draft
 
@@ -204,16 +210,28 @@ production deployment authorization.
 
 ## Sign-off decision
 
-Current decision: **NOT YET RELEASE-READY**.
+Current decision: **NOT YET RELEASE-READY — READY FOR CONTROLLED UAT once RA-005/RA-006 are resolved**.
 
-The code baseline may proceed to controlled Hospital UAT after every automated
-gate passes in an environment with Docker, PostgreSQL, Redis, browser support,
-and disposable backup/restore capacity. OPD Core v1 may be signed off only when
-there is no unresolved P0, accepted P1 items are resolved or explicitly
-deferred, and the Hospital UAT checklist has business-owner approval.
+RA-1 (migration gate), RA-2 (Nurse Roster), and RA-3 (Lab RA-3 scope) are
+implemented and validated against the live Docker stack: single Alembic head
+`0089` across every configured schema, 405/406 backend tests passing (1
+confirmed-transient flake), all frontend gates clean, and 24/24 existing
+Chromium E2E tests passing with no regression. Two open P1 items remain
+(RA-005: stale live-tenant credential blocking a browser click-through of the
+new UI; RA-006: the full new-chain end-to-end Chromium spec has not been
+built) — both are explicitly tracked, not silently accepted.
+
+The code baseline may proceed to controlled Hospital UAT once RA-005 is
+unblocked (a current or reset hospital_admin credential) and RA-006 is either
+completed or explicitly deferred by the business owner. OPD Core v1 may be
+signed off only when there is no unresolved P0, accepted P1 items are
+resolved or explicitly deferred, and the Hospital UAT checklist has
+business-owner approval.
 
 After Release A sign-off, the approved priority is:
 
-1. Lab completion and UAT hardening.
+1. Lab completion and UAT hardening (Nurse/Receptionist Lab views, remaining
+   RA-3 test scenarios, dedicated pathologist/maker-checker verification —
+   explicitly deferred beyond Release A per RA-3 authorization).
 2. Kiosk stream, after Patient Identity, authoritative Appointment Availability,
    and Arrival/Check-in contracts are confirmed.
