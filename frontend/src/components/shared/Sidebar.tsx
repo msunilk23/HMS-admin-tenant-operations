@@ -36,7 +36,7 @@ function NavLeafRow({ item, isExpanded, pathname, indent, onSelect }: NavLeafRow
   const Icon = item.icon
   const layout = isExpanded ? `${indent ? 'pl-8' : 'px-3'} pr-3` : 'justify-center px-0'
   const border = isExpanded ? (active ? 'border-l-2 border-primary' : 'border-l-2 border-transparent') : ''
-  const state = active ? 'bg-primary/10 text-primary font-medium' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+  const state = active ? 'bg-primary/10 text-primary font-medium' : 'text-gray-600 hover:bg-primary-tint hover:text-gray-900'
 
   return (
     <Link
@@ -97,7 +97,7 @@ function DomainRow({
         title={!isExpanded ? domain.label : undefined}
         className={`flex w-full items-center gap-3 rounded-lg py-2 text-sm font-medium transition-colors ${
           isExpanded ? 'px-3' : 'justify-center px-0'
-        } ${isDomainActive ? 'text-primary' : 'text-gray-700 hover:bg-gray-100'}`}
+        } ${isDomainActive ? 'text-primary' : 'text-gray-700 hover:bg-primary-tint'}`}
       >
         <Icon className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
         {isExpanded && <span className="flex-1 truncate text-left">{domain.label}</span>}

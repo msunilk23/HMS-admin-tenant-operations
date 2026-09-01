@@ -17,6 +17,7 @@ import PosScreen from '@/features/billing/PosScreen'
 import DoctorsAdminPage from '@/features/admin/DoctorsAdminPage'
 import DoctorSchedulesPage from '@/features/admin/DoctorSchedulesPage'
 import UsersAdminPage from '@/features/admin/UsersAdminPage'
+import BrandingPage from '@/features/admin/BrandingPage'
 import AppointmentsPage from '@/features/appointments/AppointmentsPage'
 import RegisterVisitPage from '@/features/reception/RegisterVisitPage'
 import ChangePasswordPage from '@/features/auth/ChangePasswordPage'
@@ -139,6 +140,7 @@ export default function App() {
             <Route path="/admin/doctors" element={<RoleGuard allowed={ADMIN}><DoctorsAdminPage /></RoleGuard>} />
             <Route path="/admin/doctors/schedules" element={<RoleGuard allowed={ADMIN}><DoctorSchedulesPage /></RoleGuard>} />
             <Route path="/admin/users" element={<RoleGuard allowed={['hospital_admin']}><UsersAdminPage /></RoleGuard>} />
+            <Route path="/admin/branding" element={<RoleGuard allowed={ADMIN}><BrandingPage /></RoleGuard>} />
             <Route path="/admin/pharmacy" element={<RoleGuard allowed={ADMIN}><PharmacyAdminPage /></RoleGuard>} />
             <Route path="/super/hospitals" element={<RoleGuard allowed={['super_admin']}><TenantsPage /></RoleGuard>} />
             <Route path="/change-password" element={<ChangePasswordPage />} />

@@ -42,6 +42,7 @@ import {
   CalendarRange,
   IdCard,
   Building,
+  Palette,
 } from 'lucide-react'
 import { P34_PERMISSIONS } from '@/services/pharmacyDashboardService'
 
@@ -251,6 +252,14 @@ export const NAV_TREE: NavEntry[] = [
         label: 'Staff Management',
         items: [
           { kind: 'link', id: 'staff-users', label: 'Staff Users', to: '/admin/users', icon: IdCard, roles: ADMIN },
+        ],
+      },
+      {
+        kind: 'subsection',
+        id: 'hospital-branding',
+        label: 'Hospital Branding',
+        items: [
+          { kind: 'link', id: 'branding', label: 'Logo & Colors', to: '/admin/branding', icon: Palette, roles: ADMIN },
         ],
       },
     ],

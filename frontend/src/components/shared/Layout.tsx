@@ -48,13 +48,13 @@ export default function AppLayout() {
   }
 
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden">
+    <div className="flex h-screen bg-primary-tint overflow-hidden">
       <Sidebar mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} />
 
       {/* Main content */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
-        <header className="h-16 flex-shrink-0 bg-white border-b border-gray-200 flex items-center px-4 sm:px-6 gap-2">
+        <header className="h-16 flex-shrink-0 bg-white border-b-2 border-primary-tint flex items-center px-4 sm:px-6 gap-2">
           {/* Mobile nav toggle — sidebar becomes an overlay drawer below the lg breakpoint */}
           <button
             type="button"
