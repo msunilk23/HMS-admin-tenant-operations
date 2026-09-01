@@ -13,7 +13,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { visitService } from '@/services/visitService'
 import { prescriptionService } from '@/services/clinicalService'
-import { masterDataService, type FormularyMedicineSearchResult } from '@/services/masterDataService'
+import { masterDataService, type FormularyMedicineSearchResult, type LabTestMaster } from '@/services/masterDataService'
 
 const PRESET_FREQUENCIES: { value: string; label: string }[] = [
   { value: 'OD',  label: 'OD — Once Daily' },
@@ -121,9 +121,51 @@ function MedicineSelector({ index, value, departmentId, setValue }: { index: num
 }
 
 const labTestSchema = z.object({
-  test_name: z.string().min(1, 'Test name required'),
+  test_id: z.string().min(1, 'Select a lab test'),
+  test_name: z.string().optional(),
+  test_code: z.string().optional(),
   notes: z.string().optional(),
 })
+
+function LabTestSelector({ index, value, excludeTestIds, setValue }: { index: number; value: string; excludeTestIds: string[]; setValue: (name: string, value: string) => void }) {
+  const [query, setQuery] = useState(value ?? '')
+  const { data = [] } = useQuery({
+    queryKey: ['lab-test-search', query],
+    queryFn: () => masterDataService.searchLabTests(query),
+    enabled: query.trim().length >= 2,
+    staleTime: 30_000,
+  })
+  const results = data.filter(item => !excludeTestIds.includes(item.id))
+  return (
+    <div className="relative">
+      <input
+        value={query}
+        onChange={e => { setQuery(e.target.value); setValue(`lab_tests.${index}.test_id`, ''); setValue(`lab_tests.${index}.test_name`, e.target.value) }}
+        placeholder="Search lab test by code, name, or category"
+        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+      />
+      {results.length > 0 && (
+        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-auto">
+          {results.map((item: LabTestMaster) => (
+            <button
+              type="button"
+              key={item.id}
+              className="block w-full text-left px-3 py-2 hover:bg-blue-50 text-sm"
+              onClick={() => {
+                setQuery(`${item.code} — ${item.name}`)
+                setValue(`lab_tests.${index}.test_id`, item.id)
+                setValue(`lab_tests.${index}.test_name`, item.name)
+                setValue(`lab_tests.${index}.test_code`, item.code)
+              }}
+            >
+              <strong>{item.code}</strong> · {item.name}{item.category ? ` · ${item.category}` : ''}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 const rxSchema = z.object({
   medicines: z.array(medicineSchema),
@@ -137,6 +179,13 @@ const rxSchema = z.object({
       path: ['_form'],
     })
   }
+  const seenTestIds = new Set<string>()
+  data.lab_tests.forEach((test, i) => {
+    if (test.test_id && seenTestIds.has(test.test_id)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'This test is already added to this order', path: ['lab_tests', i, 'test_id'] })
+    }
+    seenTestIds.add(test.test_id)
+  })
 })
 
 type RxForm = z.infer<typeof rxSchema>
@@ -197,7 +246,12 @@ export default function PrescriptionPage() {
         notes: item.instructions ?? '',
       })),
       instructions: existingPrescription.instructions ?? '',
-      lab_tests: existingPrescription.lab_tests ?? [],
+      lab_tests: (existingPrescription.lab_tests ?? []).map((t: Record<string, unknown>) => ({
+        test_id: (t.test_id as string) ?? '',
+        test_name: (t.test_name as string) ?? (t.test as string) ?? '',
+        test_code: (t.test_code as string) ?? '',
+        notes: (t.notes as string) ?? '',
+      })),
     })
   }, [existingPrescription, reset])
 
@@ -222,7 +276,7 @@ export default function PrescriptionPage() {
         timing_relative_to_food: item.food_instruction,
       })),
       instructions: data.instructions,
-      lab_tests: data.lab_tests?.length ? data.lab_tests : undefined,
+      lab_tests: data.lab_tests?.length ? data.lab_tests.map(t => ({ test_id: t.test_id, notes: t.notes?.trim() || undefined })) : undefined,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['visits'] })
@@ -381,7 +435,7 @@ export default function PrescriptionPage() {
             <h2 className="text-sm font-semibold text-gray-700">Lab Tests</h2>
             <button
               type="button"
-              onClick={() => appendLab({ test_name: '', notes: '' })}
+              onClick={() => appendLab({ test_id: '', test_name: '', test_code: '', notes: '' })}
               className="text-xs text-primary hover:underline font-medium flex items-center gap-1"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -399,13 +453,14 @@ export default function PrescriptionPage() {
                 <div key={field.id} className="px-5 py-3">
                   <div className="flex items-center gap-3">
                     <div className="flex-1">
-                      <input
-                        {...register(`lab_tests.${i}.test_name`)}
-                        placeholder="e.g. CBC, Blood Sugar, Urine Routine…"
-                        className={rx_input(!!errors.lab_tests?.[i]?.test_name)}
+                      <LabTestSelector
+                        index={i}
+                        value={watch(`lab_tests.${i}.test_name`) ?? ''}
+                        excludeTestIds={(watch('lab_tests') ?? []).filter((_, idx) => idx !== i).map(t => t.test_id).filter(Boolean)}
+                        setValue={(name, value) => setValue(name as never, value as never)}
                       />
-                      {errors.lab_tests?.[i]?.test_name && (
-                        <p className="text-xs text-red-600 mt-0.5">{errors.lab_tests[i]?.test_name?.message}</p>
+                      {errors.lab_tests?.[i]?.test_id && (
+                        <p className="text-xs text-red-600 mt-0.5">{errors.lab_tests[i]?.test_id?.message}</p>
                       )}
                     </div>
                     <div className="flex-1">

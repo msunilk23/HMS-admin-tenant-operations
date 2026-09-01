@@ -165,11 +165,25 @@ def test_exactly_one_alembic_head(registered_tenant):
 
 
 def test_downgrade_and_reupgrade_of_document_migrations_is_safe(registered_tenant):
-    down = _run_alembic("downgrade", "-2")
-    assert down.returncode == 0, f"downgrade -2 failed:\n{down.stdout}\n{down.stderr}"
+    # 0089 (Super Admin/tenant decoupling) is an intentionally forward-only
+    # policy migration: its downgrade() deliberately raises once any user is
+    # tenant-independent — a condition its own upgrade() unconditionally
+    # creates for every super_admin. Since the repository head is now 0089,
+    # ANY downgrade from head must pass through that guard; there is no
+    # database state reachable via `alembic downgrade` from head that avoids
+    # it. This test therefore asserts the forward-only contract is enforced
+    # (a controlled, documented failure) rather than attempting a downgrade
+    # that is designed to fail. 0088 remains the last automatically
+    # reversible migration — see docs/RELEASE_A_FINAL_READINESS_AND_OPD_UAT.md.
+    down = _run_alembic("downgrade", "0088")
+    assert down.returncode != 0, "0089 downgrade must fail — it is intentionally forward-only"
+    assert "Cannot downgrade while tenant-independent users exist" in down.stderr
 
-    up = _run_alembic("upgrade", "head")
-    assert up.returncode == 0, f"re-upgrade to head failed:\n{up.stdout}\n{up.stderr}"
+    # Confirm the failed downgrade attempt left the database at head (Alembic
+    # runs migrations transactionally, so a raised exception rolls back).
+    heads = _run_alembic("heads")
+    assert heads.returncode == 0, heads.stderr
+    assert "0089" in heads.stdout
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")

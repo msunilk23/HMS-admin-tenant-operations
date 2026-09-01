@@ -49,10 +49,24 @@ const create = <T>(resource: Resource, data: unknown) => apiClient.post<T>(`/mas
 const update = <T>(resource: Resource, id: string, data: unknown) => apiClient.put<T>(`/master-data/${resource}/${id}`, data).then(r => r.data)
 const deactivate = <T>(resource: Resource, id: string) => apiClient.post<T>(`/master-data/${resource}/${id}/deactivate`).then(r => r.data)
 
+export interface LabTestMaster {
+  id: string
+  code: string
+  name: string
+  category?: string
+  sample_type?: string
+  description?: string
+  price: number
+  unit?: string
+  reference_range?: string
+  is_active: boolean
+}
+
 export const masterDataService = {
   searchIcd10: (q: string) => apiClient.get<ICD10Code[]>('/master-data/icd10', { params: { q, limit: 20 } }).then(r => r.data),
   searchMedicines: (q: string) => apiClient.get<MedicineMaster[]>('/master-data/medicines', { params: { q, limit: 20 } }).then(r => r.data),
   searchFormularyMedicines: (q: string, departmentId?: string) => apiClient.get<FormularyMedicineSearchResult[]>('/pharmacy/medicines/search', { params: { q, department_id: departmentId, prescribable_only: true, limit: 20 } }).then(r => r.data),
+  searchLabTests: (q: string) => apiClient.get<LabTestMaster[]>('/master-data/lab-tests', { params: { q, limit: 20 } }).then(r => r.data),
   listGenericMedicines: (q?: string) => search<GenericMedicine>('generic-medicines', q),
   createGenericMedicine: (data: unknown) => create<GenericMedicine>('generic-medicines', data),
   updateGenericMedicine: (id: string, data: unknown) => update<GenericMedicine>('generic-medicines', id, data),

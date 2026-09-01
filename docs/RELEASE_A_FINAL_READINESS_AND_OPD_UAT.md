@@ -14,20 +14,58 @@ Lab expansion, Kiosk, IP, ER, OT, ICU, deployment, or production changes.
 | Branch | `phase1-stabilization` |
 | Merge commit | `4c226db4840a76a4ce976180b72ea473beb29c54` |
 | Alembic heads | One |
-| Approved head | `0088` |
+| P34 accepted head (historical, do not change) | `0088` |
+| Current Release A candidate head | `0089` |
 | Backend accepted baseline | `371 passed` with PostgreSQL available |
 | Frontend unit baseline | `35 passed` |
 | P34 PostgreSQL baseline | `4 passed` |
 | P34/general-dashboard Chromium baseline | `6 passed` |
 
+## Migration policy for `0089`
+
+`0089_decouple_super_admin_from_tenants.py` is an **intentionally forward-only
+policy migration**, not a defect. Its `upgrade()` unconditionally sets
+`tenant_id = NULL` and `tenant_name = NULL` for every `role = 'super_admin'`
+user, and its `downgrade()` deliberately raises `RuntimeError` whenever any
+user row is tenant-independent — which is guaranteed immediately after
+upgrade. This is approved, permanent behaviour: Super Admin must remain
+platform-level and tenant-independent going forward.
+
+- `0088` remains the last automatically reversible Pharmacy (P25–P34)
+  migration; CI's downgrade/re-upgrade smoke exercise is scoped to
+  `0088 -> 0087 -> 0088` and then advances forward to `0089` — it does not
+  attempt an automated downgrade from `0089`.
+- Do not modify migration `0089` — it has already been applied to a
+  persistent database (`shankar_hospitals`/`public` in the reviewed
+  environment) and per policy an already-applied migration is not edited.
+
+### Controlled manual rollback runbook (disaster recovery only)
+
+Automated tooling must never attempt this. If an operator must genuinely
+revert past `0089` in a disaster-recovery scenario:
+
+1. Confirm the business decision to restore Super Admin users to a specific
+   tenant is intentional and approved — this is a real data/policy change,
+   not a mechanical reversal.
+2. For each affected `role = 'super_admin'` row, manually decide and set an
+   explicit `tenant_id`/`tenant_name` (there is no automatic or fabricated
+   default — assigning a tenant to a platform-level user is a business
+   decision that must be made explicitly, per user, by an authorized owner).
+3. Only after every `public.users` row has a non-null `tenant_id` and
+   `tenant_name` will `alembic downgrade 0088` succeed (its guard clause
+   checks exactly this).
+4. Prefer restoring from a pre-`0089` backup over a live downgrade whenever
+   possible; a live downgrade changes the meaning of existing Super Admin
+   accounts and should be a last resort.
+
 ## Automated release gates
 
 - [ ] Fresh dependencies install from declared manifests.
 - [ ] GitHub Actions secrets `CI_POSTGRES_PASSWORD` and `CI_SECRET_KEY` are configured with CI-only values.
-- [ ] Clean database upgrades to sole head `0088`.
-- [ ] Representative existing database upgrades to `0088`.
-- [ ] Approved downgrade and re-upgrade completes.
-- [ ] Every configured schema reports `0088`.
+- [ ] Clean database upgrades to sole head `0089`.
+- [ ] Representative existing database upgrades to `0089`.
+- [ ] Reversible boundary `0088 -> 0087 -> 0088` completes, then forward upgrade to `0089` succeeds (no automated downgrade past `0089`).
+- [ ] Every configured schema reports `0089`.
 - [ ] Complete backend suite passes with zero unexpected skips.
 - [ ] TypeScript, ESLint, unit tests, and production build pass.
 - [ ] Docker Compose configuration validates.
@@ -45,8 +83,8 @@ Execution date: 2026-08-31 UTC.
 
 | Gate | Result | Evidence/limitation |
 | --- | --- | --- |
-| Target synchronization | PASS | Local review branch equals `origin/phase1-stabilization` at `4c226db`, ahead `0`, behind `0` |
-| Repository migration graph | PASS | Static analysis and `alembic heads` return only `0088 (head)` |
+| Target synchronization | PASS | Local review branch equals `origin/phase1-stabilization` at `4334f22`, ahead `0`, behind `0` |
+| Repository migration graph | PASS | Static analysis and `alembic heads` return only `0089 (head)` |
 | Fresh backend dependency install | PASS | New Python 3.12 virtual environment installed only `backend/requirements.txt` |
 | Fresh frontend dependency install | PASS | `npm ci` installed the lockfile successfully |
 | Backend compile | PASS | `python -m compileall -q app` |
@@ -160,7 +198,7 @@ SLA/priority, Pharmacy procurement/inventory/dispensing/billing/returns/stock
 control/reporting, Lab master/order/result/billing linkage, Billing/payment,
 audit, RBAC, feature enforcement, and operational documentation.
 
-The database target is sole Alembic head `0088`. This candidate is for
+The database target is sole Alembic head `0089`. This candidate is for
 controlled UAT only after the automated release workflow passes. It is not a
 production deployment authorization.
 

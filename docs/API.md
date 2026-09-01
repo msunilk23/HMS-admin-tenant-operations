@@ -19,7 +19,7 @@ Authenticated tenant APIs use `Authorization: Bearer <access-token>`. Tenant ide
 | Pre-vitals | `/api/v1/vitals` | Visit |
 | Consultation | `/api/v1/consultations` | Visit |
 | Prescriptions | `/api/v1/prescriptions` | Visit and consultation |
-| Lab | `/api/v1/lab` | Visit and independent lab status |
+| Lab | `/api/v1/lab` | Visit and independent lab status; `visit_id` is a real, backend-enforced filter and Doctor requests are additionally scoped server-side to their own visits |
 | Pharmacy | `/api/v1/pharmacy` | Prescription and visit |
 | Billing | `/api/v1/billing` | Visit, invoice, payment, refund |
 | Feedback | `/api/v1/feedback` | One feedback record per visit |

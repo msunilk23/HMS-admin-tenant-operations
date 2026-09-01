@@ -283,6 +283,13 @@ Typical:
 
 LabOrder status is independent of Visit status.
 
+New LabOrder tests are ordered exclusively against the active Lab Test
+Master catalog (`test_id` required per test). The server snapshots
+`test_code`/`test_name`/`category`/`sample_type`/`unit`/`reference_range`/
+`price` onto the order at creation time — client-supplied values for those
+fields are never authoritative. Legacy free-text orders (created before this
+contract) remain stored and readable but new free-text orders are rejected.
+
 ---
 
 # 12. LabResult

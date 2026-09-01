@@ -9,6 +9,11 @@ from app.models.tenant.patient import Patient
 from app.services.audit_service import record_audit
 
 
+class LabPricingError(Exception):
+    """Raised when a test snapshot has no server-derived price at all —
+    distinct from an intentionally configured zero price, which is valid."""
+
+
 async def create_lab_invoice_if_needed(
     session: AsyncSession,
     lab_order_id: uuid.UUID,
@@ -48,12 +53,21 @@ async def create_lab_invoice_if_needed(
     # Get patient for UHID
     patient = await session.get(Patient, patient_id)
     
-    # Extract test prices and create line items
+    # Extract test prices and create line items. A test dict with no "price"
+    # key at all means it was never snapshotted from the Lab Test Master
+    # (e.g. a legacy free-text order) — that is a data-contract error and
+    # must not silently become a zero charge. An explicit price of 0.0 (a
+    # genuinely free test in the master catalog) is valid and billed as such.
     line_items = []
     total_amount = 0.0
-    
+
     for test in tests:
-        test_price = float(test.get("price", 0.0))
+        if "price" not in test:
+            raise LabPricingError(
+                f"Lab test '{test.get('test_name') or test.get('test') or test.get('test_code') or 'unknown'}' "
+                "has no server-snapshotted price and cannot be billed."
+            )
+        test_price = float(test["price"])
         test_name = test.get("test_name") or test.get("test", "Lab Test")
         test_code = test.get("test_code", "")
         

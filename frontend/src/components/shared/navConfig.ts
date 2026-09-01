@@ -252,6 +252,7 @@ export const NAV_TREE: NavEntry[] = [
         label: 'Staff Management',
         items: [
           { kind: 'link', id: 'staff-users', label: 'Staff Users', to: '/admin/users', icon: IdCard, roles: ADMIN },
+          { kind: 'link', id: 'nurse-roster-admin', label: 'Nurse Roster', to: '/admin/nurse-roster', icon: CalendarDays, roles: ADMIN, feature: 'nurse_roster' },
         ],
       },
       {

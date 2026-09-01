@@ -223,7 +223,7 @@ async def create_prescription(
 
     # Upsert — each visit has at most one prescription
     existing_rx = (await session.execute(
-        select(Prescription).where(Prescription.visit_id == payload.visit_id).limit(1)
+        select(Prescription).options(selectinload(Prescription.items)).where(Prescription.visit_id == payload.visit_id).limit(1)
     )).scalar_one_or_none()
 
     if existing_rx:
@@ -249,19 +249,29 @@ async def create_prescription(
         session.add(prescription)
 
     # If doctor included lab tests, upsert a LabOrder alongside the prescription
+    # Every test must reference an active Lab Test Master entry — the server
+    # snapshots code/name/category/sample_type/unit/reference_range/price;
+    # client-supplied values for those fields are never authoritative.
     if payload.lab_tests:
+        from app.services.lab_order_service import reject_duplicate_test_ids, snapshot_lab_test
+
+        reject_duplicate_test_ids([item.test_id for item in payload.lab_tests])
+        snapshotted_tests = [
+            await snapshot_lab_test(session, item.test_id, notes=item.notes)
+            for item in payload.lab_tests
+        ]
         existing_order = (await session.execute(
             select(LabOrder).where(LabOrder.visit_id == payload.visit_id).limit(1)
         )).scalar_one_or_none()
         if existing_order:
-            existing_order.tests = [t.model_dump() for t in payload.lab_tests]
+            existing_order.tests = snapshotted_tests
             existing_order.status = "ordered"
         else:
             lab_order = LabOrder(
                 id=uuid.uuid4(),
                 visit_id=payload.visit_id,
                 uhid=uhid,
-                tests=[t.model_dump() for t in payload.lab_tests],
+                tests=snapshotted_tests,
                 status="ordered",
             )
             session.add(lab_order)

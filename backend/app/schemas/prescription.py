@@ -24,7 +24,10 @@ class MedicineItem(BaseModel):
 
 
 class LabTestItem(BaseModel):
-    test_name: str
+    """Controlled Lab Test Master reference — free-text ordering is not
+    accepted for new prescriptions (legacy free-text LabOrder rows remain
+    readable via LabOrderRead, but are never produced by this schema)."""
+    test_id: uuid.UUID
     notes: Optional[str] = None
 
 

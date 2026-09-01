@@ -37,6 +37,7 @@ class NurseRosterUpdate(BaseModel):
     substitute_user_id: Optional[uuid.UUID] = None
     substitution_reason: Optional[str] = None
     is_active: Optional[bool] = None
+    reason: Optional[str] = None  # audit-only note (e.g. why deactivated) — not persisted on the row
 
     @field_validator("shift")
     @classmethod
@@ -61,6 +62,7 @@ class NurseRosterRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     nurse_name: Optional[str] = None
+    substitute_name: Optional[str] = None
     department_name: Optional[str] = None
     doctor_name: Optional[str] = None
 

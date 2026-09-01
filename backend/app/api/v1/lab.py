@@ -13,12 +13,11 @@ from app.core.dependencies import require_role, require_feature
 from app.db.engine import get_session
 from app.models.tenant.doctor import Doctor
 from app.models.tenant.lab_order import LabOrder, LabResult, LAB_STATUS_TRANSITIONS, can_transition_lab_order
-from app.models.tenant.lab_test_master import LabTestMaster
 from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit
 from app.schemas.lab import LabOrderCreate, LabOrderRead, LabResultCreate, LabResultRead
-from app.websocket.manager import ws_manager
 from app.services.audit_service import record_audit
+from app.services.lab_order_service import reject_duplicate_test_ids, snapshot_lab_test
 
 router = APIRouter(dependencies=[Depends(require_feature("lab"))])
 
@@ -45,32 +44,16 @@ async def create_lab_order(
         raise HTTPException(status_code=404, detail="Visit not found")
 
     patient = await session.get(Patient, visit.patient_id)
-    
-    # Validate and enrich test items with metadata from master
-    enriched_tests = []
-    for test_item in payload.tests:
-        test_data = test_item.model_dump()
-        
-        # If test_id is provided, validate and capture metadata
-        if test_item.test_id:
-            test_master = await session.get(LabTestMaster, test_item.test_id)
-            if not test_master:
-                raise HTTPException(status_code=404, detail=f"Lab test not found: {test_item.test_id}")
-            if not test_master.is_active:
-                raise HTTPException(status_code=400, detail=f"Lab test is inactive: {test_master.code}")
-            
-            # Snapshot test metadata at order time for audit trail and billing
-            test_data["test_id"] = str(test_item.test_id)
-            test_data["test_code"] = test_master.code
-            test_data["test_name"] = test_master.name
-            test_data["category"] = test_master.category
-            test_data["sample_type"] = test_master.sample_type
-            test_data["price"] = float(test_master.price)  # Server-authoritative pricing
-        elif not test_item.test:
-            raise HTTPException(status_code=400, detail="Either test_id or test must be provided")
-        
-        enriched_tests.append(test_data)
-    
+
+    # Every test must reference an active Lab Test Master entry — the server
+    # snapshots code/name/category/sample_type/unit/reference_range/price;
+    # client-supplied values for those fields are never authoritative.
+    reject_duplicate_test_ids([item.test_id for item in payload.tests])
+    enriched_tests = [
+        await snapshot_lab_test(session, item.test_id, notes=item.notes)
+        for item in payload.tests
+    ]
+
     order = LabOrder(
         id=uuid.uuid4(),
         visit_id=payload.visit_id,
@@ -105,17 +88,32 @@ async def create_lab_order(
 @router.get("", response_model=List[LabOrderRead])
 async def list_lab_orders(
     status_filter: Optional[str] = Query(None, alias="status"),
+    visit_id: Optional[uuid.UUID] = Query(None),
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("nurse", "doctor", "lab_technician", "receptionist", "hospital_admin")),
 ):
     stmt = select(LabOrder).order_by(LabOrder.ordered_at.asc())
     if status_filter:
         stmt = stmt.where(LabOrder.status == status_filter)
+    if visit_id:
+        stmt = stmt.where(LabOrder.visit_id == visit_id)
 
-    # Lab technicians only need to act on orders not yet finalized.
-    # LabOrder maintains its own status independent of the OPD visit lifecycle.
+    # Doctors may only ever see lab orders for visits assigned to them —
+    # never every tenant lab order regardless of the visit_id filter above.
+    if current_user.get("role") == "doctor":
+        doctor_row = (await session.execute(
+            select(Doctor).where(Doctor.user_id == uuid.UUID(current_user["sub"]))
+        )).scalar_one_or_none()
+        if not doctor_row:
+            return []
+        stmt = stmt.join(Visit, Visit.id == LabOrder.visit_id).where(Visit.doctor_id == doctor_row.id)
+
+    # Lab technicians act on everything except fully completed/rejected orders
+    # — result_ready and verified must remain visible so they can verify and
+    # complete them; hiding result_ready here was a bug (orders disappeared
+    # right before verification).
     if current_user.get("role") == "lab_technician":
-        stmt = stmt.where(LabOrder.status.notin_(["resulted", "result_ready", "verified", "completed", "rejected"]))
+        stmt = stmt.where(LabOrder.status.notin_(["completed"]))
 
     rows = (await session.execute(stmt)).scalars().all()
     return [await _enrich_order(o, session) for o in rows]
@@ -227,6 +225,7 @@ async def enter_lab_results(
         uhid=patient.uhid if patient else None,
         results=payload.results,
         notes=payload.notes,
+        critical_flags=payload.critical_flags,
         reported_by_user_id=uuid.UUID(current_user["sub"]),
     )
     session.add(result)
@@ -289,7 +288,13 @@ async def verify_lab_results(
         new_value={"status": "verified", "verified_by_user_id": current_user.get("sub")},
     )
     
-    # Create billing invoice for lab charges if needed
+    # Create billing invoice for lab charges — transactional with verification:
+    # if invoice creation fails, the whole verification (status change, result
+    # verification fields, audit entry) must roll back rather than leave a
+    # verified order with no required invoice. A retry after a rollback finds
+    # the order still "result_ready" and can safely re-attempt both steps;
+    # create_lab_invoice_if_needed's own unique-constraint idempotency check
+    # guarantees only one invoice is ever created even under concurrent retries.
     visit = await session.get(Visit, order.visit_id)
     try:
         await create_lab_invoice_if_needed(
@@ -300,12 +305,16 @@ async def verify_lab_results(
             patient_id=visit.patient_id if visit else None,
             current_user=current_user,
         )
-    except Exception as e:
-        # Log billing error but don't fail lab verification
+    except Exception as exc:
         import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Failed to create lab invoice for order {order_id}: {str(e)}", exc_info=True)
-    
+        logging.getLogger(__name__).error(
+            f"Failed to create lab invoice for order {order_id}: {exc}", exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Lab verification requires a billing invoice, which could not be created. No changes were saved — please retry.",
+        ) from exc
+
     await session.commit()
     await session.refresh(order)
     return await _enrich_order(order, session)
@@ -477,11 +486,15 @@ async def get_lab_results(
 
 async def _enrich_order(order: LabOrder, session) -> LabOrderRead:
     item = LabOrderRead.model_validate(order)
-    # Normalise tests: prescriptions store {"test_name": ...} but the lab schema uses {"test": ...}
+    # Legacy free-text prescriptions stored {"test_name": ...} with no
+    # test_id/test_code — normalise those (read-compat only) to the older
+    # {"test": ...} shape. Controlled Lab Test Master snapshots (test_id
+    # present) are left untouched so test_code/category/sample_type/unit/
+    # reference_range/price all remain visible to the frontend.
     if item.tests:
         normalised = []
         for t in item.tests:
-            if isinstance(t, dict) and "test_name" in t and "test" not in t:
+            if isinstance(t, dict) and "test_name" in t and "test" not in t and not t.get("test_id"):
                 t = {"test": t["test_name"], "notes": t.get("notes")}
             normalised.append(t)
         item.tests = normalised

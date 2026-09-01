@@ -1,41 +1,22 @@
 /**
  * Doctor Lab Results Page
  *
- * Displays lab results for doctor's patients/visits
- * Features: test details, result values, critical flags, verification status
- * 
- * Layout:
- * - Patient/Visit filter
- * - Lab results table: test_code | test_name | result | unit | ref_range | flags | status | verified_at
- * - Color-coded critical results (red for abnormal)
+ * Displays verified lab results for visits assigned to the authenticated
+ * Doctor only. Uses the authenticated apiClient (JWT + silent refresh) via
+ * labService/visitService — never raw fetch(). visit_id is a real backend
+ * filter; the server further restricts results to the doctor's own visits.
  */
 
 import { useState, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useWebSocket } from '@/hooks/useWebSocket'
+import { labService } from '@/services/labService'
+import { visitService } from '@/services/visitService'
 import type { LabOrder, Visit } from '@/types/common'
-
-// Service to fetch lab results
-const labResultsService = {
-  getLabOrdersByVisit: (visitId: string) =>
-    fetch(`/api/v1/lab?visit_id=${visitId}&status_filter=verified`)
-      .then(r => r.json()),
-  
-  getLabResults: (orderId: string) =>
-    fetch(`/api/v1/lab/${orderId}/results`)
-      .then(r => r.json()),
-  
-  getVisits: (filters?: { status?: string; limit?: number }) => {
-    const params = new URLSearchParams()
-    if (filters?.status) params.set('status', filters.status)
-    if (filters?.limit !== undefined) params.set('limit', String(filters.limit))
-    return fetch(`/api/v1/visits?${params}`)
-      .then(r => r.json())
-  },
-}
 
 interface LabTestDisplay {
   test?: string
+  test_id?: string
   test_code?: string
   test_name?: string
   unit?: string
@@ -48,8 +29,7 @@ interface LabResultDisplay {
   resultValue: string | null
   unit: string
   referenceRange: string
-  normalFlag?: boolean
-  criticalFlag?: boolean
+  criticalFlag: boolean
   status: string
   verifiedAt?: string
   verifiedBy?: string
@@ -87,17 +67,17 @@ export default function DoctorLabResultsPage() {
   const [selectedVisitId, setSelectedVisitId] = useState<string | null>(null)
   const [dateRange, setDateRange] = useState<{ from?: string; to?: string }>({})
 
-  // Fetch visits for dropdown
+  // The backend already scopes visits to this doctor's own patients for
+  // role=doctor — no client-side filtering needed or trusted.
   const { data: visits = [] } = useQuery({
-    queryKey: ['my-visits'],
-    queryFn: () => labResultsService.getVisits({ status: 'completed', limit: 50 }),
+    queryKey: ['my-visits', 'lab-results'],
+    queryFn: () => visitService.list({ status: 'CONSULTATION_COMPLETED' }),
     staleTime: 5 * 60 * 1000,
   })
 
-  // Fetch lab orders for selected visit
-  const { data: labOrders = [] } = useQuery({
+  const { data: labOrders = [], isLoading, isError } = useQuery({
     queryKey: ['lab-results', selectedVisitId],
-    queryFn: () => selectedVisitId ? labResultsService.getLabOrdersByVisit(selectedVisitId) : Promise.resolve([]),
+    queryFn: () => labService.listOrders({ visit_id: selectedVisitId!, status: 'verified' }),
     enabled: !!selectedVisitId,
     staleTime: 3 * 60 * 1000,
   })
@@ -112,21 +92,21 @@ export default function DoctorLabResultsPage() {
   // Transform lab orders + results into display table
   const tableRows: LabResultDisplay[] = labOrders.flatMap((order: LabOrder) => {
     const results = order.result?.results || {}
+    const criticalFlags = order.result?.critical_flags || {}
     const testsArray = order.tests || []
-    
+
     return testsArray.map((test: LabTestDisplay, idx: number) => {
       const resultKey = test.test_code || test.test
       return {
-      testCode: resultKey || `Test ${idx + 1}`,
-      testName: test.test_name || test.test || 'Unknown Test',
-      resultValue: resultKey ? results[resultKey] || null : null,
-      unit: test.unit || '—',
-      referenceRange: test.reference_range || '—',
-      normalFlag: true,
-      criticalFlag: false,
-      status: order.status,
-      verifiedAt: order.result?.verified_at,
-      verifiedBy: order.result?.verified_by_user_id,
+        testCode: resultKey || `Test ${idx + 1}`,
+        testName: test.test_name || test.test || 'Unknown Test',
+        resultValue: resultKey ? results[resultKey] || null : null,
+        unit: test.unit || '—',
+        referenceRange: test.reference_range || '—',
+        criticalFlag: resultKey ? Boolean(criticalFlags[resultKey]) : false,
+        status: order.status,
+        verifiedAt: order.result?.verified_at,
+        verifiedBy: order.result?.verified_by_user_id,
       }
     })
   })
@@ -198,7 +178,15 @@ export default function DoctorLabResultsPage() {
         {/* Results Table */}
         {selectedVisitId ? (
           <div className="bg-white rounded-lg shadow overflow-hidden">
-            {filteredRows.length > 0 ? (
+            {isLoading ? (
+              <div className="text-center py-12" role="status">
+                <p className="text-gray-500 text-sm">Loading lab results…</p>
+              </div>
+            ) : isError ? (
+              <div className="text-center py-12" role="alert">
+                <p className="text-red-600 text-sm">Could not load lab results. Please try again.</p>
+              </div>
+            ) : filteredRows.length > 0 ? (
               <table className="w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>

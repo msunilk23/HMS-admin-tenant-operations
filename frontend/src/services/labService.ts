@@ -7,7 +7,7 @@ export interface LabResultPayload {
 }
 
 export const labService = {
-  listOrders: (params?: { status?: string }) =>
+  listOrders: (params?: { status?: string; visit_id?: string }) =>
     apiClient.get<LabOrder[]>('/lab', { params }).then(r => r.data),
 
   updateStatus: (orderId: string, new_status: string) =>

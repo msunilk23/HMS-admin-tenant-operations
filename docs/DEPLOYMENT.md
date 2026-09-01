@@ -88,10 +88,11 @@ psql -h localhost -p 5433 -U hospital_user -d hms_release_a_restore \
   -c "SELECT * FROM public.alembic_version;"
 ```
 
-Verify that `public.alembic_version` reports the approved head, all expected
-tenant schemas exist, representative patient/visit/audit records have matching
-counts, and application read-only smoke queries succeed. Drop only the named
-disposable restore database after evidence has been retained:
+Verify that `public.alembic_version` reports the approved head (`0089` for the
+current Release A candidate), all expected tenant schemas exist, representative
+patient/visit/audit records have matching counts, and application read-only
+smoke queries succeed. Drop only the named disposable restore database after
+evidence has been retained:
 
 ```bash
 dropdb -h localhost -p 5433 -U hospital_user hms_release_a_restore

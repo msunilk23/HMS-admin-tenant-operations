@@ -42,12 +42,48 @@ jobs:
       - name: Upgrade database
         working-directory: backend
         run: alembic upgrade head
-      - name: Verify migration downgrade and re-upgrade
+      - name: Verify reversible migration boundary and forward-only 0089 policy
         working-directory: backend
+        shell: bash
         run: |
-          alembic downgrade -2
-          alembic upgrade head
+          set -euo pipefail
+          # 0088 is the last automatically reversible Pharmacy (P25-P34) migration.
+          # 0089 (Super Admin/tenant decoupling) is an intentionally forward-only
+          # policy migration: its downgrade() deliberately raises once any user
+          # row has tenant_id/tenant_name = NULL, which is guaranteed immediately
+          # after upgrade (it nulls those columns for role='super_admin'). Do not
+          # attempt an automated downgrade from 0089 to 0088 — it is designed to
+          # fail. See docs/RELEASE_A_FINAL_READINESS_AND_OPD_UAT.md for the
+          # controlled manual rollback runbook.
+          alembic upgrade 0088
+          alembic downgrade 0087
+          alembic upgrade 0088
+          alembic upgrade 0089
           test "$(alembic heads | grep -c '(head)')" -eq 1
+          # Forward-only contract: 0089 must leave every Super Admin user
+          # tenant-independent (tenant_id and tenant_name both NULL).
+          python - <<'PY'
+          import asyncio, os
+          from sqlalchemy import text
+          from sqlalchemy.ext.asyncio import create_async_engine
+
+          async def main() -> None:
+              engine = create_async_engine(os.environ["DATABASE_URL"])
+              async with engine.begin() as conn:
+                  orphaned_non_super_admin = (await conn.execute(text(
+                      "SELECT count(*) FROM public.users "
+                      "WHERE role != 'super_admin' AND (tenant_id IS NULL OR tenant_name IS NULL)"
+                  ))).scalar_one()
+                  assert orphaned_non_super_admin == 0, "non-super_admin users must remain tenant-bound"
+                  misbound_super_admins = (await conn.execute(text(
+                      "SELECT count(*) FROM public.users "
+                      "WHERE role = 'super_admin' AND (tenant_id IS NOT NULL OR tenant_name IS NOT NULL)"
+                  ))).scalar_one()
+                  assert misbound_super_admins == 0, "0089 must leave every Super Admin tenant-independent"
+              await engine.dispose()
+
+          asyncio.run(main())
+          PY
       - name: Run backend regression suite
         working-directory: backend
         run: pytest tests/ -q
@@ -88,7 +124,7 @@ jobs:
           createdb -h localhost -p 5433 -U hospital_user release_a_restore
           pg_restore -h localhost -p 5433 -U hospital_user -d release_a_restore --exit-on-error release-a.dump
           test "$(psql -h localhost -p 5433 -U hospital_user -d release_a_restore -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'alembic_version'")" = "1"
-          test "$(psql -h localhost -p 5433 -U hospital_user -d release_a_restore -Atc "SELECT count(*) FROM public.alembic_version WHERE version_num = '0088'")" = "1"
+          test "$(psql -h localhost -p 5433 -U hospital_user -d release_a_restore -Atc "SELECT count(*) FROM public.alembic_version WHERE version_num = '0089'")" = "1"
           dropdb -h localhost -p 5433 -U hospital_user release_a_restore
       - name: Install Playwright Chromium
         working-directory: frontend

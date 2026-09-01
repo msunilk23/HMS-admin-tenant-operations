@@ -700,7 +700,7 @@ function PatientHistoryPanel({ history, loading }: { history: PatientHistoryItem
                         <div key={i} className="border border-gray-100 rounded-lg p-3">
                           <div className="flex items-center justify-between mb-1.5">
                             <p className="text-xs font-medium text-gray-700">
-                              {lo.tests?.map((t: { test: string }) => t.test).join(', ') || 'Lab tests'}
+                              {lo.tests?.map((t: { test?: string; test_name?: string }) => t.test_name || t.test).join(', ') || 'Lab tests'}
                             </p>
                             {lo.status === 'resulted'
                               ? <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">Results available</span>

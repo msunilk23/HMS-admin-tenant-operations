@@ -24,7 +24,7 @@ export interface PrescriptionCreate {
   visit_id: string
   medicines?: MedicineItemCreate[]
   instructions?: string
-  lab_tests?: { test_name: string; notes?: string }[]
+  lab_tests?: { test_id: string; notes?: string }[]
 }
 
 export interface InvoiceCreate {

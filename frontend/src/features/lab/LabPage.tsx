@@ -50,7 +50,10 @@ export default function LabPage() {
 
   const openResultsModal = (order: LabOrder) => {
     const initial: Record<string, string> = {}
-    order.tests.forEach(t => { initial[t.test] = '' })
+    order.tests.forEach(t => {
+      const key = t.test_code || t.test
+      if (key) initial[key] = ''
+    })
     setTestResults(initial)
     setLabNotes('')
     setReportFile(null)
@@ -313,7 +316,7 @@ function LabOrderCard({
             <div className="flex flex-wrap gap-1.5">
               {order.tests.map((t, i) => (
                 <span key={i} className="bg-gray-100 text-gray-700 text-xs px-2 py-0.5 rounded-full">
-                  {t.test}{t.notes ? ` (${t.notes})` : ''}
+                  {t.test_code ? `${t.test_code} — ${t.test_name}` : t.test}{t.notes ? ` (${t.notes})` : ''}
                 </span>
               ))}
             </div>

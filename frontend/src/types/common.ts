@@ -316,7 +316,18 @@ export interface NurseDepartment {
 export interface LabOrder {
   id: UUID
   visit_id: UUID
-  tests: { test: string; notes?: string }[]
+  tests: {
+    test?: string
+    test_id?: string
+    test_code?: string
+    test_name?: string
+    category?: string
+    sample_type?: string
+    unit?: string
+    reference_range?: string
+    price?: number
+    notes?: string
+  }[]
   status: 'ordered' | 'sample_pending' | 'sample_collected' | 'processing' | 'result_ready' | 'verified' | 'completed' | 'rejected'
   ordered_at: string
   patient_name?: string
@@ -329,6 +340,7 @@ export interface LabResult {
   lab_order_id: UUID
   results: Record<string, string>
   notes?: string
+  critical_flags?: Record<string, boolean>
   report_url?: string
   reported_by_user_id?: UUID
   reported_at: string

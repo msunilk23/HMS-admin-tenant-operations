@@ -220,16 +220,25 @@ async def test_visit_id_linked_token_never_falls_back_to_an_unrelated_legacy_tok
 
 @pytest.mark.asyncio
 async def test_lab_technician_sees_orders_regardless_of_canonical_visit_status(session):
+    # "resulted" is a dead legacy status string (migration 0027 renamed it to
+    # "result_ready" and backfilled every persisted row) — it can no longer
+    # occur in a real database, so it is not a meaningful worklist-visibility
+    # case. The approved Release A contract instead requires "completed" to
+    # be the only status excluded from the Lab Technician's default worklist
+    # (result_ready/verified must remain visible so they can be verified and
+    # completed — see app/api/v1/lab.py::list_lab_orders).
     patient = _make_patient()
     visit = _make_visit(patient, status=VisitStatus.CONSULTATION_COMPLETED.value)
     ordered = LabOrder(id=uuid.uuid4(), visit_id=visit.id, uhid=patient.uhid, tests=[{"test": "CBC"}], status="ordered")
-    resulted = LabOrder(id=uuid.uuid4(), visit_id=visit.id, uhid=patient.uhid, tests=[{"test": "LFT"}], status="resulted")
-    session.add_all([patient, visit, ordered, resulted])
+    result_ready = LabOrder(id=uuid.uuid4(), visit_id=visit.id, uhid=patient.uhid, tests=[{"test": "LFT"}], status="result_ready")
+    completed = LabOrder(id=uuid.uuid4(), visit_id=visit.id, uhid=patient.uhid, tests=[{"test": "TSH"}], status="completed")
+    session.add_all([patient, visit, ordered, result_ready, completed])
     await session.commit()
 
     lab_tech_user = {"role": "lab_technician", "sub": str(uuid.uuid4()), "tenant_schema": "test_tenant"}
-    results = await list_lab_orders(status_filter=None, session=session, current_user=lab_tech_user)
+    results = await list_lab_orders(status_filter=None, visit_id=None, session=session, current_user=lab_tech_user)
     ids = {r.id for r in results}
 
     assert ordered.id in ids
-    assert resulted.id not in ids
+    assert result_ready.id in ids, "result_ready must remain visible to the verifier"
+    assert completed.id not in ids
