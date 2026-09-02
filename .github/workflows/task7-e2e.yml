@@ -153,25 +153,29 @@ jobs:
         env:
           POSTGRES_USER: hospital_user
           POSTGRES_DB: hospital
-          POSTGRES_DB_URL_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
           PGADMIN_DEFAULT_EMAIL: ci-admin@example.invalid
-          PGADMIN_DEFAULT_PASSWORD: ${{ secrets.CI_SECRET_KEY }}
           POSTGRES_HOST_PORT: '55433'
           REDIS_HOST_PORT: '56379'
           BACKEND_HOST_PORT: '58000'
           FRONTEND_HOST_PORT: '55173'
         run: |
+          set -euo pipefail
+          umask 077
+          compose_db_password="$(openssl rand -hex 32)"
+          compose_secret_key="$(openssl rand -hex 32)"
+          compose_pgadmin_password="$(openssl rand -hex 32)"
+          compose_webhook_secret="$(openssl rand -hex 32)"
           printf '%s\n' \
             "ENVIRONMENT=test" \
             "DEBUG=false" \
-            "SECRET_KEY=$SECRET_KEY" \
+            "SECRET_KEY=$compose_secret_key" \
             "POSTGRES_USER=$POSTGRES_USER" \
             "POSTGRES_DB=$POSTGRES_DB" \
-            "POSTGRES_DB_URL_PASSWORD=$POSTGRES_DB_URL_PASSWORD" \
+            "POSTGRES_DB_URL_PASSWORD=$compose_db_password" \
             "PGADMIN_DEFAULT_EMAIL=$PGADMIN_DEFAULT_EMAIL" \
-            "PGADMIN_DEFAULT_PASSWORD=$PGADMIN_DEFAULT_PASSWORD" \
+            "PGADMIN_DEFAULT_PASSWORD=$compose_pgadmin_password" \
             "REDIS_URL=redis://redis:6379" \
-            "RAZORPAY_WEBHOOK_SECRET=$RAZORPAY_WEBHOOK_SECRET" > .env
+            "RAZORPAY_WEBHOOK_SECRET=$compose_webhook_secret" > .env
           docker compose -f infra/docker-compose.yml config --quiet
           docker compose -f infra/docker-compose.yml build backend frontend
           docker compose -f infra/docker-compose.yml up -d --wait postgres redis backend frontend
@@ -179,13 +183,13 @@ jobs:
           curl --fail --silent --show-error http://localhost:55173/ > /dev/null
       - name: Stop Compose health stack
         if: always()
-        env:
-          POSTGRES_USER: hospital_user
-          POSTGRES_DB: hospital
-          POSTGRES_DB_URL_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
-          PGADMIN_DEFAULT_EMAIL: ci-admin@example.invalid
-          PGADMIN_DEFAULT_PASSWORD: ${{ secrets.CI_SECRET_KEY }}
-        run: docker compose -f infra/docker-compose.yml down --volumes --remove-orphans
+        run: |
+          if test -f .env; then
+            cleanup_status=0
+            docker compose -f infra/docker-compose.yml down --volumes --remove-orphans || cleanup_status=$?
+            rm -f .env
+            exit "$cleanup_status"
+          fi
       - name: Validate PostgreSQL backup and restore
         env:
           PGPASSWORD: release_a_ci_only_password
