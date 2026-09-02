@@ -92,6 +92,7 @@ async def test_start_and_validate_dispense_snapshots_prescription_without_stock_
         pharmacy_location_id=location.id, started_by=user_id,
     )
     assert dispense.id == repeated.id
+    assert dispense.classification == "OPD_PRESCRIPTION"
     assert dispense.status == "DRAFT"
 
     validated = await validate_pharmacy_dispense(

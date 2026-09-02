@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -42,6 +42,7 @@ class PharmacyDispenseRead(BaseModel):
     prescription_version: int
     visit_id: uuid.UUID
     patient_id: uuid.UUID
+    classification: Literal["OPD_PRESCRIPTION"]
     status: str
     billing_status: str
 

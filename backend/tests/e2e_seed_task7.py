@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import delete, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.security import hash_password
@@ -185,6 +186,12 @@ def _assert_destructive_reset_allowed(database_url: str, command: str) -> None:
     if not any(host in lowered for host in safe_hosts):
         raise SystemExit(
             f"Refusing '{command}': DATABASE_URL must target localhost/127.0.0.1 for destructive E2E reset."
+        )
+    expected_database = os.getenv("E2E_EXPECTED_DATABASE", "").strip()
+    actual_database = make_url(database_url).database
+    if not expected_database or actual_database != expected_database:
+        raise SystemExit(
+            f"Refusing '{command}': E2E_EXPECTED_DATABASE must exactly match the target database name."
         )
 
 
@@ -679,6 +686,7 @@ async def seed_ra5_scenario():
         "webhook_invoice_id": str(RA5_WEBHOOK_INVOICE_ID),
         "webhook_order_id": RA5_WEBHOOK_ORDER_ID,
         "pharmacy_location_id": str(RA4_LOCATION_ID),
+        "retail_product_id": str(PRODUCT_A_ID),
         "slot_date": slot_date.isoformat(),
     }))
 

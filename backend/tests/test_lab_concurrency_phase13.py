@@ -10,7 +10,6 @@ from urllib.parse import urlparse
 import pytest
 import pytest_asyncio
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.db.base import Base
@@ -147,14 +146,9 @@ async def test_concurrent_lab_to_billing_trigger(lab_context):
 
     async def create_invoice():
         async with await lab_context["new_session"]() as session:
-            try:
-                invoice = await create_lab_invoice_if_needed(session, order_id, lab_context["visit_id"], [{"test": "CBC", "test_code": "CBC", "price": 200.0}, {"test": "TSH", "test_code": "TSH", "price": 300.0}], lab_context["patient_id"], {"sub": str(uuid.uuid4()), "role": "lab_technician", "tenant_schema": lab_context["schema"]})
-                await session.commit()
-                return invoice.id
-            except IntegrityError:
-                await session.rollback()
-                async with await lab_context["new_session"]() as retry:
-                    return (await retry.scalar(select(Invoice.id).where(Invoice.lab_order_id == order_id)))
+            invoice = await create_lab_invoice_if_needed(session, order_id, lab_context["visit_id"], [{"test": "CBC", "test_code": "CBC", "price": 200.0}, {"test": "TSH", "test_code": "TSH", "price": 300.0}], lab_context["patient_id"], {"sub": str(uuid.uuid4()), "role": "lab_technician", "tenant_schema": lab_context["schema"]})
+            await session.commit()
+            return invoice.id
 
     invoice_ids = await asyncio.wait_for(asyncio.gather(create_invoice(), create_invoice()), timeout=10)
     async with await lab_context["new_session"]() as verify:

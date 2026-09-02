@@ -159,6 +159,7 @@ async def _eligible_batches(
         InventoryBatch.pharmacy_location_id == location_id,
         InventoryBatch.medicine_id == product_id,
         InventoryBatch.status == "ACTIVE",
+        InventoryBatch.frozen_by_count_id.is_(None),
         InventoryBatch.available_quantity > 0,
         InventoryBatch.expiry_date.is_not(None),
         InventoryBatch.expiry_date >= date.today(),
@@ -241,10 +242,8 @@ async def create_retail_sale(
         if payload.classification == "EXTERNAL_PRESCRIPTION":
             if prescribed_quantity is None:
                 raise ValueError("Prescribed quantity is required or must be unambiguously calculable")
-            if requested_item.quantity > prescribed_quantity:
-                raise ValueError("Dispensed quantity cannot exceed prescribed quantity")
-            if product.is_controlled_drug and requested_item.quantity != prescribed_quantity:
-                raise ValueError("Controlled medicine quantity must exactly match the prescribed quantity")
+            if requested_item.quantity != prescribed_quantity:
+                raise ValueError("Dispensed quantity must exactly match the prescribed quantity")
         controlled_sale = controlled_sale or product.is_controlled_drug
         product_rows.append((product, requested_item, prescribed_quantity, duration_days))
 
@@ -381,11 +380,34 @@ async def dispense_retail_sale(
 
     items = list((await session.execute(select(PharmacyRetailSaleItem).where(
         PharmacyRetailSaleItem.sale_id == sale.id,
-    ))).scalars().all())
+    ).with_for_update())).scalars().all())
+    products = {
+        product.id: product
+        for product in (await session.execute(select(MedicineProduct).where(
+            MedicineProduct.id.in_([item.medicine_product_id for item in items]),
+        ).with_for_update())).scalars().all()
+    }
+    if sale.classification == "EXTERNAL_PRESCRIPTION":
+        _validate_external_identity(sale, sale.controlled_sale)
+        configuration = await retail_configuration(session, tenant_id)
+        validity_days = configuration.controlled_validity_days if sale.controlled_sale else configuration.non_controlled_validity_days
+        max_supply_days = configuration.controlled_max_supply_days if sale.controlled_sale else configuration.non_controlled_max_supply_days
+        if sale.prescription_date > date.today():
+            raise ValueError("Prescription date cannot be in the future")
+        if (date.today() - sale.prescription_date).days > validity_days:
+            raise ValueError("External prescription has expired")
+        if any(item.prescribed_quantity is None or item.quantity != item.prescribed_quantity for item in items):
+            raise ValueError("Dispensed quantity must exactly match the prescribed quantity")
+        if any(item.prescribed_duration_days is None or item.prescribed_duration_days > max_supply_days for item in items):
+            raise ValueError(f"Prescribed duration must be explicit and no more than {max_supply_days} days")
+        current_controlled = any(product.is_controlled_drug for product in products.values())
+        if current_controlled != sale.controlled_sale:
+            raise ValueError("Medicine control classification changed after prescription verification")
+
     sale_subtotal = Decimal("0")
     sale_tax = Decimal("0")
     for item in items:
-        product = await session.get(MedicineProduct, item.medicine_product_id)
+        product = products.get(item.medicine_product_id)
         if product is None or not product.is_active:
             raise ValueError("Medicine product became inactive before dispensing")
         if sale.classification == "OTC" and (product.requires_prescription or product.is_controlled_drug):

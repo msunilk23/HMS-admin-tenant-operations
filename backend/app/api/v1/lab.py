@@ -18,6 +18,7 @@ from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit
 from app.schemas.lab import LabOrderCreate, LabOrderRead, LabResultCreate, LabResultRead, NurseLabOrderRead, ReceptionLabOrderRead
 from app.services.audit_service import record_audit
+from app.services.clinical_visit_access import authorized_clinical_visit
 from app.services.lab_order_service import reject_duplicate_test_ids, snapshot_lab_test
 from app.websocket.manager import ws_manager
 
@@ -76,11 +77,9 @@ async def create_lab_order(
     facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     """Doctor creates a lab order for a visit."""
-    visit = await session.get(Visit, payload.visit_id)
-    if not visit:
-        raise HTTPException(status_code=404, detail="Visit not found")
-    if current_user.get("role") == "doctor" and visit.doctor_id != await _doctor_id(session, current_user):
-        raise HTTPException(status_code=404, detail="Visit not found")
+    visit = await authorized_clinical_visit(
+        session, visit_id=payload.visit_id, current_user=current_user, facility_id=facility_id,
+    )
 
     patient = await session.get(Patient, visit.patient_id)
 
@@ -96,7 +95,7 @@ async def create_lab_order(
     order = LabOrder(
         id=uuid.uuid4(),
         visit_id=payload.visit_id,
-        facility_id=facility_id,
+        facility_id=visit.facility_id,
         uhid=patient.uhid if patient else None,
         tests=enriched_tests,
         status="ordered",

@@ -15,7 +15,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: hospital_user
-          POSTGRES_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
+          POSTGRES_PASSWORD: release_a_ci_only_password
           POSTGRES_DB: hospital
         ports: ['5433:5432']
         options: >-
@@ -25,10 +25,11 @@ jobs:
         image: redis:7
         ports: ['6379:6379']
     env:
-      DATABASE_URL: postgresql+asyncpg://hospital_user:${{ secrets.CI_POSTGRES_PASSWORD }}@localhost:5433/hospital
+      DATABASE_URL: postgresql+asyncpg://hospital_user:release_a_ci_only_password@localhost:5433/hospital
       SECRET_KEY: ${{ secrets.CI_SECRET_KEY }}
       REDIS_URL: redis://localhost:6379
-      E2E_DATABASE_URL: postgresql+asyncpg://hospital_user:${{ secrets.CI_POSTGRES_PASSWORD }}@localhost:5433/hospital
+      E2E_DATABASE_URL: postgresql+asyncpg://hospital_user:release_a_ci_only_password@localhost:5433/hospital
+      E2E_EXPECTED_DATABASE: hospital
       E2E_BASE_URL: http://localhost:5173
       E2E_MANAGED_BACKEND: 'false'
       E2E_BACKEND_HEALTH_URL: http://localhost:8000/health
@@ -94,7 +95,7 @@ jobs:
 
           asyncio.run(main())
           PY
-            alembic upgrade head
+          alembic upgrade head
       - name: Verify all configured schemas are at the sole head
         working-directory: backend
         run: |
@@ -181,7 +182,7 @@ jobs:
         run: docker compose -f infra/docker-compose.yml down --volumes --remove-orphans
       - name: Validate PostgreSQL backup and restore
         env:
-          PGPASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
+          PGPASSWORD: release_a_ci_only_password
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client
@@ -252,7 +253,7 @@ jobs:
       - name: Scan committed history for secrets
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
-          ./gitleaks git --source . --redact --no-banner --exit-code 1
+          ./gitleaks git --redact --no-banner --exit-code 1 .
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4

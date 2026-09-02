@@ -37,6 +37,7 @@ from app.services.document_service import (
     read_document_bytes,
 )
 from app.services.document_storage import LocalFileDocumentStorage
+from app.services.clinical_visit_access import authorized_clinical_visit
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
 from app.websocket.manager import ws_manager
@@ -210,9 +211,9 @@ async def create_prescription(
     current_user: dict = Depends(require_role("doctor", "hospital_admin")),
     facility_id: uuid.UUID = Depends(get_facility_id),
 ):
-    visit = await session.get(Visit, payload.visit_id)
-    if not visit:
-        raise HTTPException(status_code=404, detail="Visit not found")
+    visit = await authorized_clinical_visit(
+        session, visit_id=payload.visit_id, current_user=current_user, facility_id=facility_id,
+    )
 
     patient = await session.get(Patient, visit.patient_id)
     uhid = patient.uhid if patient else None
@@ -265,18 +266,18 @@ async def create_prescription(
         existing_order = (await session.execute(
             select(LabOrder).where(
                 LabOrder.visit_id == payload.visit_id,
-                LabOrder.facility_id == facility_id,
+                LabOrder.facility_id == visit.facility_id,
             ).limit(1)
         )).scalar_one_or_none()
         if existing_order:
             existing_order.tests = snapshotted_tests
             existing_order.status = "ordered"
-            existing_order.facility_id = facility_id
+            existing_order.facility_id = visit.facility_id
         else:
             lab_order = LabOrder(
                 id=uuid.uuid4(),
                 visit_id=payload.visit_id,
-                facility_id=facility_id,
+                facility_id=visit.facility_id,
                 uhid=uhid,
                 tests=snapshotted_tests,
                 status="ordered",

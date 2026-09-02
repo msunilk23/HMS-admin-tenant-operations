@@ -263,10 +263,12 @@ async def update_roster(
     next_substitute = changes.get("substitute_user_id", row.substitute_user_id)
     next_reason = changes.get("substitution_reason", row.substitution_reason)
     next_user_id = changes.get("user_id", row.user_id)
-    if "substitute_user_id" in changes or "substitution_reason" in changes:
+    reactivating = changes.get("is_active") is True and not row.is_active
+    if reactivating or "substitute_user_id" in changes or "substitution_reason" in changes:
+        await _validate_active_nurse_in_tenant(next_user_id, current_user, session)
         await _validate_substitute(next_substitute, next_reason, next_user_id, current_user, session)
 
-    if {"user_id", "substitute_user_id", "roster_date", "shift"}.intersection(changes):
+    if reactivating or {"user_id", "substitute_user_id", "roster_date", "shift"}.intersection(changes):
         await _check_overlap(
             user_id=changes.get("user_id", row.user_id),
             substitute_user_id=changes.get("substitute_user_id", row.substitute_user_id),

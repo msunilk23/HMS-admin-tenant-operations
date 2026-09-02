@@ -16,6 +16,7 @@ class VisitCreate(BaseModel):
 
 class VisitRead(BaseModel):
     id: uuid.UUID
+    facility_id: uuid.UUID
     patient_id: uuid.UUID
     doctor_id: Optional[uuid.UUID] = None
     appointment_id: Optional[uuid.UUID] = None

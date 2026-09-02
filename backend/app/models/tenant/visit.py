@@ -50,6 +50,7 @@ class Visit(Base, TimestampMixin):
     __tablename__ = "visits"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    facility_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
     uhid: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     doctor_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("doctors.id"), nullable=True)

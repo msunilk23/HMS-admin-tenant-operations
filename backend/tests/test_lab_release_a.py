@@ -131,8 +131,8 @@ async def ctx():
     ])
     await session.flush()
     session.add_all([
-        Visit(id=visit_a_id, patient_id=patient_a_id, uhid="LABRA3-A", doctor_id=doctor_a_id, department_id=department_id, status="CONSULTATION_COMPLETED"),
-        Visit(id=visit_b_id, patient_id=patient_b_id, uhid="LABRA3-B", doctor_id=doctor_b_id, department_id=department_id, status="CONSULTATION_COMPLETED"),
+        Visit(id=visit_a_id, facility_id=facility_id, patient_id=patient_a_id, uhid="LABRA3-A", doctor_id=doctor_a_id, department_id=department_id, status="CONSULTATION_COMPLETED"),
+        Visit(id=visit_b_id, facility_id=facility_id, patient_id=patient_b_id, uhid="LABRA3-B", doctor_id=doctor_b_id, department_id=department_id, status="CONSULTATION_COMPLETED"),
     ])
     await session.commit()
     await session.close()
@@ -164,6 +164,15 @@ def _token(ctx, user_key: str, role: str) -> str:
         "tenant_id": str(ctx["tenant_id"]),
         "tenant_schema": SCHEMA,
         "facility_id": str(ctx["facility_id"]),
+    })
+
+
+def _token_for_facility(ctx, user_key: str, role: str, facility_id: uuid.UUID) -> str:
+    return create_access_token(str(ctx[user_key]), {
+        "role": role,
+        "tenant_id": str(ctx["tenant_id"]),
+        "tenant_schema": SCHEMA,
+        "facility_id": str(facility_id),
     })
 
 
@@ -233,6 +242,26 @@ async def test_free_text_lab_test_is_no_longer_accepted(ctx):
         "lab_tests": [{"test_name": "CBC (free text)"}],
     }, headers=_auth(token))
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_doctor_cannot_create_prescription_lab_order_for_another_doctors_visit(ctx):
+    token = _token(ctx, "doctor_b_user_id", "doctor")
+    response = await ctx["client"].post("/api/v1/prescriptions", json={
+        "visit_id": str(ctx["visit_a_id"]),
+        "lab_tests": [{"test_id": str(ctx["active_test_id"])}],
+    }, headers=_auth(token))
+    assert response.status_code == 404, response.text
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_lab_order_cannot_take_facility_provenance_from_forged_context(ctx):
+    token = _token_for_facility(ctx, "doctor_a_user_id", "doctor", uuid.uuid4())
+    response = await ctx["client"].post("/api/v1/lab", json={
+        "visit_id": str(ctx["visit_a_id"]),
+        "tests": [{"test_id": str(ctx["active_test_id"])}],
+    }, headers=_auth(token))
+    assert response.status_code == 404, response.text
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -422,6 +451,15 @@ async def test_explicit_zero_price_from_master_is_a_valid_zero_charge(ctx):
     session = maker()
     await session.execute(text(f'SET search_path TO "{SCHEMA}", public'))
     order_id = uuid.uuid4()
+    session.add(LabOrder(
+        id=order_id,
+        visit_id=ctx["visit_a_id"],
+        facility_id=ctx["facility_id"],
+        uhid="LABRA3-A",
+        tests=[{"test_code": "ZERO-RA3", "test_name": "Zero Price Test", "price": 0.0}],
+        status="verified",
+    ))
+    await session.flush()
     invoice = await create_lab_invoice_if_needed(
         session,
         lab_order_id=order_id,

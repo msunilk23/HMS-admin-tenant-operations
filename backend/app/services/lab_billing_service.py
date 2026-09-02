@@ -3,9 +3,11 @@
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.models.tenant.invoice import Invoice
 from app.models.tenant.patient import Patient
+from app.models.tenant.visit import Visit
 from app.services.audit_service import record_audit
 
 
@@ -19,7 +21,7 @@ async def create_lab_invoice_if_needed(
     lab_order_id: uuid.UUID,
     visit_id: uuid.UUID,
     tests: list,
-    patient_id: uuid.UUID,
+    patient_id: uuid.UUID | None,
     current_user: dict,
 ) -> Invoice | None:
     """
@@ -51,7 +53,11 @@ async def create_lab_invoice_if_needed(
         return existing
     
     # Get patient for UHID
-    patient = await session.get(Patient, patient_id)
+    patient = await session.get(Patient, patient_id) if patient_id else None
+    visit = await session.get(Visit, visit_id) if patient is None else None
+    uhid = patient.uhid if patient else visit.uhid if visit else None
+    if not uhid:
+        raise ValueError("Lab invoice requires a Visit or Patient with a UHID")
     
     # Extract test prices and create line items. A test dict with no "price"
     # key at all means it was never snapshotted from the Lab Test Master
@@ -83,7 +89,7 @@ async def create_lab_invoice_if_needed(
     invoice = Invoice(
         id=uuid.uuid4(),
         visit_id=visit_id,
-        uhid=patient.uhid if patient else None,
+        uhid=uhid,
         lab_order_id=lab_order_id,
         source="lab",
         line_items=line_items,
@@ -94,25 +100,32 @@ async def create_lab_invoice_if_needed(
         status="pending",
     )
     
-    session.add(invoice)
-    
-    # Record audit trail
-    record_audit(
-        session,
-        current_user=current_user,
-        action="CREATE",
-        resource_type="invoice",
-        resource_id=invoice.id,
-        patient_id=patient_id,
-        visit_id=visit_id,
-        new_value={
-            "lab_order_id": str(lab_order_id),
-            "line_items": line_items,
-            "subtotal": total_amount,
-            "total": total_amount,
-            "status": invoice.status,
-            "source": "lab",
-        },
-    )
-    
-    return invoice
+    try:
+        async with session.begin_nested():
+            session.add(invoice)
+            record_audit(
+                session,
+                current_user=current_user,
+                action="CREATE",
+                resource_type="invoice",
+                resource_id=invoice.id,
+                patient_id=patient_id,
+                visit_id=visit_id,
+                new_value={
+                    "lab_order_id": str(lab_order_id),
+                    "line_items": line_items,
+                    "subtotal": total_amount,
+                    "total": total_amount,
+                    "status": invoice.status,
+                    "source": "lab",
+                },
+            )
+            await session.flush()
+        return invoice
+    except IntegrityError:
+        existing = await session.scalar(
+            select(Invoice).where(Invoice.lab_order_id == lab_order_id)
+        )
+        if existing is None:
+            raise
+        return existing

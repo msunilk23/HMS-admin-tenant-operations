@@ -190,6 +190,7 @@ async def start_pharmacy_dispense(
         visit_id=visit.id,
         patient_id=visit.patient_id,
         pharmacy_queue_id=queue.id,
+        classification="OPD_PRESCRIPTION",
         status="DRAFT",
         started_at=datetime.now(timezone.utc),
         started_by=started_by,

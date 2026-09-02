@@ -19,6 +19,7 @@ type Ra5Fixture = {
   webhook_invoice_id: string
   webhook_order_id: string
   pharmacy_location_id: string
+  retail_product_id: string
   slot_date: string
 }
 
@@ -29,6 +30,7 @@ const labTechnician = { username: 'e2e_lab_task7', password: 'E2eLab@123' }
 const billingOfficer = { username: 'e2e_billing_task7', password: 'E2eBilling@123' }
 const pharmacist = { username: 'e2e_pharmacist_task7', password: 'E2ePharmacist@123' }
 const superAdmin = { username: 'e2e_super_admin_task7', password: 'E2eSuperAdmin@123' }
+const hospitalBDoctor = { username: 'e2e_doctor_task7_b', password: 'E2eDoctorB@123' }
 const task7VisitId = 'a5a85a47-7a23-5587-97de-56daaf8b7822'
 const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET ?? 'e2e-webhook-secret'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -532,5 +534,47 @@ test.describe.serial('Release A deterministic OPD chain', () => {
         gateway: 'razorpay',
       }),
     ])
+  })
+
+  test('Visit facility provenance is persisted on the clinical record', async ({ request }) => {
+    const headers = await authHeaders(request, doctor)
+    const response = await request.get(`/api/v1/visits/${visitId}`, { headers })
+    expect(response.ok(), await response.text()).toBeTruthy()
+    expect(await response.json()).toMatchObject({ id: visitId, facility_id: fixture.facility_id })
+  })
+
+  test('Doctor cannot create an embedded Lab order for another tenant visit', async ({ request }) => {
+    const headers = await authHeaders(request, hospitalBDoctor)
+    const response = await request.post('/api/v1/prescriptions', {
+      headers,
+      data: {
+        visit_id: visitId,
+        lab_tests: [{ test_id: fixture.lab_test_id }],
+      },
+    })
+    expect(response.status()).toBe(404)
+  })
+
+  test('External retail prescriptions reject partial non-controlled fills', async ({ request }) => {
+    const headers = await authHeaders(request, pharmacist)
+    const response = await request.post('/api/v1/pharmacy/retail/sales', {
+      headers: { ...headers, 'Idempotency-Key': `ra5-partial-${Date.now()}` },
+      data: {
+        classification: 'EXTERNAL_PRESCRIPTION',
+        pharmacy_location_id: fixture.pharmacy_location_id,
+        patient_name: 'RA5 External Patient',
+        patient_age: 35,
+        patient_gender: 'female',
+        patient_mobile: '9000000099',
+        prescriber_name: 'RA5 External Doctor',
+        prescriber_registration_number: 'RA5-REG-PARTIAL',
+        prescription_date: new Date().toISOString().slice(0, 10),
+        issuing_facility: 'RA5 External Clinic',
+        prescription_reference: 'RA5-RX-PARTIAL',
+        items: [{ medicine_product_id: fixture.retail_product_id, quantity: '1', prescribed_quantity: '2', duration_days: 2 }],
+      },
+    })
+    expect(response.status()).toBe(409)
+    expect(await response.json()).toMatchObject({ detail: /exactly match/i })
   })
 })

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import get_facility_id
 from app.core.dependencies import require_role
 from app.db.engine import get_session
 from app.models.tenant.department import Department
@@ -70,10 +71,12 @@ async def create_visit(
     payload: VisitCreate,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role(*ALLOWED_ROLES)),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     now = datetime.now(timezone.utc)
     visit = Visit(
         id=uuid.uuid4(),
+        facility_id=facility_id,
         patient_id=payload.patient_id,
         doctor_id=payload.doctor_id,
         appointment_id=payload.appointment_id,

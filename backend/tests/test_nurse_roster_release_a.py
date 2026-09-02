@@ -295,6 +295,24 @@ async def test_deactivation_works_and_is_audited(ctx):
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_reactivation_revalidates_participants_and_overlap(ctx):
+    token = _token(ctx, "admin", "hospital_admin")
+    conflict = await ctx["client"].post("/api/v1/nurse-roster", json={
+        "user_id": str(ctx["nurse2"]), "roster_date": TODAY.isoformat(),
+        "shift": "morning", "department_id": str(ctx["dept_a"]),
+    }, headers=_auth(token))
+    assert conflict.status_code == 201, conflict.text
+
+    reactivated = await ctx["client"].patch(
+        f"/api/v1/nurse-roster/{ctx['created_id']}",
+        json={"is_active": True},
+        headers=_auth(token),
+    )
+    assert reactivated.status_code == 409, reactivated.text
+    assert "overlapping" in reactivated.json()["detail"]
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_deactivation_requires_reason_and_audit_history_is_facility_scoped(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     create = await ctx["client"].post("/api/v1/nurse-roster", json={

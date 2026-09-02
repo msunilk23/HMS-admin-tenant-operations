@@ -17,6 +17,7 @@ class PharmacyDispense(Base, TimestampMixin):
             "status IN ('DRAFT', 'VALIDATED', 'RESERVED', 'READY_FOR_BILLING', 'BILLING_FAILED', 'READY_TO_CONFIRM', 'CONFIRMED', 'PARTIALLY_FULFILLED', 'OUTSIDE_FULFILLED', 'CANCELLED', 'EXPIRED')",
             name="ck_pharmacy_dispenses_status",
         ),
+        CheckConstraint("classification = 'OPD_PRESCRIPTION'", name="ck_pharmacy_dispenses_classification"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -29,6 +30,7 @@ class PharmacyDispense(Base, TimestampMixin):
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
     pharmacy_queue_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("pharmacy_queue.id"), nullable=True, index=True)
     invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("invoices.id"), nullable=True, index=True)
+    classification: Mapped[str] = mapped_column(String(30), nullable=False, default="OPD_PRESCRIPTION")
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="DRAFT", index=True)
     fulfillment_mode: Mapped[str] = mapped_column(String(40), nullable=False, default="FULL_INTERNAL")
     billing_status: Mapped[str] = mapped_column(String(30), nullable=False, default="NOT_REQUIRED")

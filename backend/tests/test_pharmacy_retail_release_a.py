@@ -27,6 +27,7 @@ from app.models.tenant import (
     PharmacyRetailSale,
     PharmacyRetailSaleAllocation,
     PharmacyRetailSaleItem,
+    StockCount,
     StockTransaction,
 )
 from app.schemas.pharmacy_retail import RetailReturnCreate, RetailSaleCreate, RetailSaleDispense
@@ -242,6 +243,69 @@ async def test_controlled_external_requires_maker_checker_and_full_identity(reta
     assert completed.verified_by == retail_context["pharmacist_a"]
     assert completed.dispensed_by == retail_context["pharmacist_b"]
     assert completed.status == "FULLY_DISPENSED"
+    await session.close()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_external_prescription_rejects_partial_fill(retail_context):
+    session = await retail_context["new_session"]()
+    payload = RetailSaleCreate(
+        classification="EXTERNAL_PRESCRIPTION", pharmacy_location_id=retail_context["location_id"],
+        patient_name="Retail Patient", patient_age=35, patient_gender="female", patient_mobile="9000000001",
+        prescriber_name="External Doctor", prescriber_registration_number="REG-PARTIAL",
+        prescription_date=date.today(), issuing_facility="External Clinic", prescription_reference="RX-PARTIAL",
+        items=[{"medicine_product_id": retail_context["rx_id"], "quantity": "1", "prescribed_quantity": "2", "duration_days": 2}],
+    )
+    with pytest.raises(ValueError, match="exactly match"):
+        await create_retail_sale(
+            session, payload=payload, idempotency_key="ra4-partial-denial",
+            tenant_id=retail_context["tenant_id"], facility_id=retail_context["facility_id"],
+            actor_id=retail_context["pharmacist_a"], current_user=_user(retail_context, "pharmacist_a"),
+        )
+    await session.rollback()
+    await session.close()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_count_frozen_stock_is_ineligible_at_final_dispense(retail_context):
+    session = await retail_context["new_session"]()
+    payload = RetailSaleCreate(
+        classification="EXTERNAL_PRESCRIPTION", pharmacy_location_id=retail_context["location_id"],
+        patient_name="Retail Patient", patient_age=35, patient_gender="female", patient_mobile="9000000001",
+        prescriber_name="External Doctor", prescriber_registration_number="REG-FROZEN",
+        prescription_date=date.today(), issuing_facility="External Clinic", prescription_reference="RX-FROZEN",
+        items=[{"medicine_product_id": retail_context["rx_id"], "quantity": "2", "prescribed_quantity": "2", "duration_days": 2}],
+    )
+    sale = await create_retail_sale(
+        session, payload=payload, idempotency_key="ra4-frozen-stock",
+        tenant_id=retail_context["tenant_id"], facility_id=retail_context["facility_id"],
+        actor_id=retail_context["pharmacist_a"], current_user=_user(retail_context, "pharmacist_a"),
+    )
+    await verify_external_sale(
+        session, sale_id=sale.id, tenant_id=retail_context["tenant_id"], facility_id=retail_context["facility_id"],
+        actor_id=retail_context["pharmacist_a"], current_user=_user(retail_context, "pharmacist_a"),
+    )
+    count = StockCount(
+        tenant_id=retail_context["tenant_id"], facility_id=retail_context["facility_id"],
+        pharmacy_location_id=retail_context["location_id"], status="IN_PROGRESS", count_type="PARTIAL",
+        reference_key=f"RA4-FROZEN-{uuid.uuid4().hex[:8]}", selected_batch_ids=[],
+        initiated_by=retail_context["pharmacist_a"],
+    )
+    session.add(count)
+    await session.flush()
+    batch = await session.scalar(select(InventoryBatch).where(InventoryBatch.medicine_id == retail_context["rx_id"]))
+    batch.frozen_by_count_id = count.id
+    await session.commit()
+
+    with pytest.raises(ValueError, match="Insufficient eligible stock"):
+        await dispense_retail_sale(
+            session, sale_id=sale.id, payload=RetailSaleDispense(payment_method="CASH"),
+            tenant_id=retail_context["tenant_id"], facility_id=retail_context["facility_id"],
+            actor_id=retail_context["pharmacist_a"], current_user=_user(retail_context, "pharmacist_a"),
+        )
+    await session.rollback()
+    batch.frozen_by_count_id = None
+    await session.commit()
     await session.close()
 
 
