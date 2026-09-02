@@ -198,7 +198,8 @@ def _request(context, quantities, *, idempotency_key=None):
 
 def _supplier_request(context, quantity, *, idempotency_key=None):
     return SupplierReturnCreate(
-        supplier_id=context["supplier_id"], goods_receipt_id=context["goods_receipt_id"],
+        supplier_id=context["supplier_id"], pharmacy_location_id=context["location_id"],
+        goods_receipt_id=context["goods_receipt_id"],
         return_reason="Supplier batch return", idempotency_key=idempotency_key,
         items=[SupplierReturnItemCreate(inventory_batch_id=context["supplier_batch_id"], returned_quantity=quantity, unit_cost=Decimal("15"))],
     )
