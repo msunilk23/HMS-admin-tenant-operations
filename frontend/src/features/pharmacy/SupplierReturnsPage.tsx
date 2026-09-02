@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { masterDataService } from '@/services/masterDataService'
+import { goodsReceiptService } from '@/services/goodsReceiptService'
 import { supplierReturnService, type SupplierReturnCreateInput } from '@/services/returnsService'
 
 const errorMessage = (error: unknown) => {
@@ -13,6 +14,7 @@ const errorMessage = (error: unknown) => {
 export default function SupplierReturnsPage() {
   const queryClient = useQueryClient()
   const idempotencyKey = useRef<string | null>(null)
+  const [pharmacyLocationId, setPharmacyLocationId] = useState('')
   const [supplierId, setSupplierId] = useState('')
   const [reason, setReason] = useState('')
   const [notes, setNotes] = useState('')
@@ -21,11 +23,12 @@ export default function SupplierReturnsPage() {
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const locations = useQuery({ queryKey: ['return-locations'], queryFn: goodsReceiptService.locations })
   const suppliers = useQuery({ queryKey: ['return-suppliers'], queryFn: () => masterDataService.listSuppliers() })
   const eligibility = useQuery({
-    queryKey: ['supplier-return-eligibility', supplierId],
-    queryFn: () => supplierReturnService.eligibility({ supplier_id: supplierId }),
-    enabled: Boolean(supplierId),
+    queryKey: ['supplier-return-eligibility', supplierId, pharmacyLocationId],
+    queryFn: () => supplierReturnService.eligibility({ supplier_id: supplierId, pharmacy_location_id: pharmacyLocationId }),
+    enabled: Boolean(supplierId && pharmacyLocationId),
   })
   const records = useQuery({
     queryKey: ['supplier-returns', page, status],
@@ -43,7 +46,7 @@ export default function SupplierReturnsPage() {
   const approve = useMutation({ mutationFn: supplierReturnService.approve, onSuccess: (result) => { setMessage(`Supplier return ${result.reference_key} approved.`); refresh() }, onError: (mutationError) => setError(errorMessage(mutationError)) })
   const dispatch = useMutation({ mutationFn: supplierReturnService.dispatch, onSuccess: (result) => { setMessage(`Supplier return ${result.reference_key} dispatched.`); refresh() }, onError: (mutationError) => setError(errorMessage(mutationError)) })
   const submit = () => {
-    if (!supplierId || reason.trim().length < 10) { setError('Select a supplier and provide a return reason of at least 10 characters.'); return }
+    if (!pharmacyLocationId || !supplierId || reason.trim().length < 10) { setError('Select a pharmacy location and supplier, then provide a return reason of at least 10 characters.'); return }
     const items = eligibility.data?.items.map((batch) => ({ inventory_batch_id: batch.inventory_batch_id, returned_quantity: Number(quantities[batch.inventory_batch_id] || 0), unit_cost: Number(batch.unit_cost) })).filter((item) => item.returned_quantity > 0) || []
     if (!items.length) { setError('Enter a positive quantity for at least one eligible batch.'); return }
     for (const item of items) {
@@ -54,6 +57,7 @@ export default function SupplierReturnsPage() {
     setError('')
     create.mutate({
       supplier_id: supplierId,
+      pharmacy_location_id: pharmacyLocationId,
       goods_receipt_id: eligibility.data?.items.find((batch) => batch.goods_receipt_id)?.goods_receipt_id,
       return_reason: reason.trim(), notes: notes.trim() || undefined, idempotency_key: idempotencyKey.current,
       items,
@@ -63,6 +67,8 @@ export default function SupplierReturnsPage() {
     <div><h1 className="text-2xl font-bold text-gray-900">Supplier Returns</h1><p className="mt-1 text-sm text-gray-500">Create and dispatch returns from eligible pharmacy inventory.</p></div>
     <div className="grid gap-6 xl:grid-cols-[minmax(420px,0.9fr)_minmax(0,1.1fr)]">
       <section className="space-y-4 rounded-xl border border-gray-200 bg-white p-5"><h2 className="font-semibold text-gray-900">Create return</h2>
+        <label className="block text-sm text-gray-700">Pharmacy location<select aria-label="Pharmacy location" value={pharmacyLocationId} onChange={(event) => { idempotencyKey.current = null; setPharmacyLocationId(event.target.value); setQuantities({}); setError('') }} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"><option value="">Select pharmacy location</option>{locations.data?.filter((location) => location.active).map((location) => <option key={location.id} value={location.id}>{location.location_code} · {location.location_name}</option>)}</select></label>
+        {locations.isError && <p role="alert" className="text-sm text-rose-700">{errorMessage(locations.error)}</p>}
         <label className="block text-sm text-gray-700">Active supplier<select aria-label="Active supplier" value={supplierId} onChange={(event) => { idempotencyKey.current = null; setSupplierId(event.target.value); setQuantities({}); setError('') }} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2"><option value="">Select supplier</option>{suppliers.data?.filter((supplier) => supplier.is_active).map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.supplier_name}</option>)}</select></label>
         {suppliers.isError && <p role="alert" className="text-sm text-rose-700">{errorMessage(suppliers.error)}</p>}
         {eligibility.isLoading && <p className="text-sm text-gray-500">Loading eligible inventory batches...</p>}
