@@ -485,6 +485,10 @@ async def reset_p28_scenario():
     engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
     async with engine.begin() as conn:
         await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
+        p28_invoice_filter = "SELECT id FROM invoices WHERE visit_id = :visit AND source = 'pharmacy_dispense'"
+        await conn.execute(text(f"DELETE FROM refunds WHERE invoice_id IN ({p28_invoice_filter})"), {"visit": P28_VISIT_ID})
+        await conn.execute(text(f"DELETE FROM payments WHERE invoice_id IN ({p28_invoice_filter})"), {"visit": P28_VISIT_ID})
+        await conn.execute(text("DELETE FROM invoices WHERE visit_id = :visit AND source = 'pharmacy_dispense'"), {"visit": P28_VISIT_ID})
         await conn.execute(text("DELETE FROM pharmacy_stock_reservations WHERE dispense_id IN (SELECT id FROM pharmacy_dispenses WHERE prescription_id = :rx)"), {"rx": P28_PRESCRIPTION_ID})
         await conn.execute(text("DELETE FROM pharmacy_dispense_allocations WHERE dispense_item_id IN (SELECT id FROM pharmacy_dispense_items WHERE dispense_id IN (SELECT id FROM pharmacy_dispenses WHERE prescription_id = :rx))"), {"rx": P28_PRESCRIPTION_ID})
         await conn.execute(text("DELETE FROM pharmacy_dispense_items WHERE dispense_id IN (SELECT id FROM pharmacy_dispenses WHERE prescription_id = :rx)"), {"rx": P28_PRESCRIPTION_ID})
@@ -1291,6 +1295,8 @@ if __name__ == "__main__":
         asyncio.run(seed_p28())
     elif command == "seed_p28_scenario":
         asyncio.run(seed_p28_scenario())
+    elif command == "snapshot_p28":
+        asyncio.run(snapshot(P28_VISIT_ID))
     elif command == "seed_ra4_scenario":
         asyncio.run(seed_ra4_scenario())
     elif command == "seed_ra5_scenario":
