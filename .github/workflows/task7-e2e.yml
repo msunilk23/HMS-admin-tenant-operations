@@ -248,25 +248,53 @@ jobs:
       - name: Verify runtime health and tenant authentication
         run: |
           python - <<'PY'
+          import asyncio
           import json
+          import os
           import urllib.request
 
-          with urllib.request.urlopen("http://localhost:8000/health", timeout=5) as response:
+          from redis.asyncio import Redis
+
+          BASE_URL = "http://localhost:8000"
+
+          async def clear_disposable_revocation_state() -> None:
+              client = Redis.from_url(os.environ["REDIS_URL"])
+              try:
+                  await client.flushdb()
+              finally:
+                  await client.aclose()
+
+          def login(login_id: str, password: str) -> str:
+              request = urllib.request.Request(
+                  f"{BASE_URL}/api/v1/auth/login",
+                  data=json.dumps({"login_id": login_id, "password": password}).encode(),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(request, timeout=5) as response:
+                  assert response.status == 200
+                  return json.load(response)["access_token"]
+
+          def assert_authorized(path: str, token: str) -> None:
+              request = urllib.request.Request(
+                  f"{BASE_URL}{path}",
+                  headers={"Authorization": f"Bearer {token}"},
+              )
+              with urllib.request.urlopen(request, timeout=5) as response:
+                  assert response.status == 200
+
+          with urllib.request.urlopen(f"{BASE_URL}/health", timeout=5) as response:
               assert response.status == 200
-          request = urllib.request.Request(
-              "http://localhost:8000/api/v1/auth/login",
-              data=json.dumps({"login_id": "e2e_doctor_task7", "password": "E2eDoctor@123"}).encode(),
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          with urllib.request.urlopen(request, timeout=5) as response:
-              token = json.load(response)["access_token"]
-          protected = urllib.request.Request(
-              "http://localhost:8000/api/v1/visits",
-              headers={"Authorization": f"Bearer {token}"},
-          )
-          with urllib.request.urlopen(protected, timeout=5) as response:
-              assert response.status == 200
+
+          # Browser security scenarios intentionally write tenant revocation keys.
+          # Clear only the disposable CI Redis database before this independent probe.
+          asyncio.run(clear_disposable_revocation_state())
+
+          tenant_token = login("e2e_doctor_task7", "E2eDoctor@123")
+          assert_authorized("/api/v1/visits", tenant_token)
+
+          super_admin_token = login("e2e_super_admin_task7", "E2eSuperAdmin@123")
+          assert_authorized("/api/v1/super/hospitals", super_admin_token)
           PY
       - name: Scan committed history for secrets
         run: |
