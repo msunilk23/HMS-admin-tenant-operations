@@ -213,6 +213,7 @@ export default function GoodsReceiptPage() {
             <div className="border-t border-gray-100 pt-4 space-y-3">
               <h3 className="font-medium">Add received batch</h3>
               <select
+                aria-label="Purchase order item"
                 value={poItemId}
                 onChange={(event) => setPoItemId(event.target.value)}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
