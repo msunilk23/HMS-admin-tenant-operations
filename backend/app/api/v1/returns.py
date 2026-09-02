@@ -520,7 +520,7 @@ async def list_supplier_returns(
 async def get_supplier_return_eligibility(
     supplier_id: UUID,
     facility_id: UUID = Depends(get_facility_id),
-    pharmacy_location_id: UUID,
+    pharmacy_location_id: UUID = Query(...),
     current_user: dict = Depends(require_permission("SUPPLIER_RETURN_REQUEST")),
     session: AsyncSession = Depends(get_session),
     tenant_id: UUID = Depends(get_tenant_id_from_token),
