@@ -137,6 +137,7 @@ export interface SupplierReturnItemInput {
 
 export interface SupplierReturnCreateInput {
   supplier_id: string
+  pharmacy_location_id: string
   goods_receipt_id?: string
   return_reason: string
   notes?: string
@@ -261,7 +262,7 @@ export const supplierReturnService = {
   list: (params?: Pick<ReturnListParams, 'page' | 'page_size' | 'status' | 'supplier_id' | 'goods_receipt_id'>) =>
     apiClient.get<SupplierReturnListResponse>('/returns/supplier-returns', { params }).then(r => r.data),
   get: (id: string) => apiClient.get<SupplierReturnRead>(`/returns/supplier-returns/${id}`).then(r => r.data),
-  eligibility: (params: { supplier_id: string; pharmacy_location_id?: string }) =>
+  eligibility: (params: { supplier_id: string; pharmacy_location_id: string }) =>
     apiClient.get<SupplierReturnEligibility>('/returns/supplier-returns/eligibility', { params }).then(r => r.data),
   create: (payload: SupplierReturnCreateInput) =>
     apiClient.post<SupplierReturnRead>('/returns/supplier-returns', payload).then(r => r.data),
