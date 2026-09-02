@@ -245,6 +245,11 @@ jobs:
         env:
           E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
         run: npm run e2e -- --reporter=line
+      - name: Seed disposable runtime authentication fixture
+        working-directory: backend
+        env:
+          E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
+        run: python tests/e2e_seed_task7.py seed
       - name: Verify runtime health and tenant authentication
         run: |
           python - <<'PY'
@@ -296,6 +301,12 @@ jobs:
           super_admin_token = login("e2e_super_admin_task7", "E2eSuperAdmin@123")
           assert_authorized("/api/v1/super/hospitals", super_admin_token)
           PY
+      - name: Clean disposable runtime authentication fixture
+        if: always()
+        working-directory: backend
+        env:
+          E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
+        run: python tests/e2e_seed_task7.py cleanup
       - name: Scan committed history for secrets
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
