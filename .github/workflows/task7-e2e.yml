@@ -26,7 +26,6 @@ jobs:
         ports: ['6379:6379']
     env:
       DATABASE_URL: postgresql+asyncpg://hospital_user:release_a_ci_only_password@localhost:5433/hospital
-      SECRET_KEY: ${{ secrets.CI_SECRET_KEY }}
       REDIS_URL: redis://localhost:6379
       E2E_DATABASE_URL: postgresql+asyncpg://hospital_user:release_a_ci_only_password@localhost:5433/hospital
       E2E_EXPECTED_DATABASE: hospital
@@ -35,12 +34,23 @@ jobs:
       E2E_BACKEND_HEALTH_URL: http://localhost:8000/health
       E2E_BACKEND_OPENAPI_URL: http://localhost:8000/api/openapi.json
       E2E_ENVIRONMENT: E2E
-      RAZORPAY_WEBHOOK_SECRET: ${{ secrets.CI_SECRET_KEY }}
       PYTHONPATH: ${{ github.workspace }}/backend
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Generate ephemeral CI secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          ci_secret_key="$(openssl rand -hex 32)"
+          ci_webhook_secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$ci_secret_key"
+          echo "::add-mask::$ci_webhook_secret"
+          {
+            echo "SECRET_KEY=$ci_secret_key"
+            echo "RAZORPAY_WEBHOOK_SECRET=$ci_webhook_secret"
+          } >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -162,20 +172,18 @@ jobs:
           set -euo pipefail
           umask 077
           compose_db_password="$(openssl rand -hex 32)"
-          compose_secret_key="$(openssl rand -hex 32)"
           compose_pgadmin_password="$(openssl rand -hex 32)"
-          compose_webhook_secret="$(openssl rand -hex 32)"
           printf '%s\n' \
             "ENVIRONMENT=test" \
             "DEBUG=false" \
-            "SECRET_KEY=$compose_secret_key" \
+            "SECRET_KEY=$SECRET_KEY" \
             "POSTGRES_USER=$POSTGRES_USER" \
             "POSTGRES_DB=$POSTGRES_DB" \
             "POSTGRES_DB_URL_PASSWORD=$compose_db_password" \
             "PGADMIN_DEFAULT_EMAIL=$PGADMIN_DEFAULT_EMAIL" \
             "PGADMIN_DEFAULT_PASSWORD=$compose_pgadmin_password" \
             "REDIS_URL=redis://redis:6379" \
-            "RAZORPAY_WEBHOOK_SECRET=$compose_webhook_secret" > .env
+            "RAZORPAY_WEBHOOK_SECRET=$RAZORPAY_WEBHOOK_SECRET" > .env
           docker compose --env-file .env -f infra/docker-compose.yml config --quiet
           docker compose --env-file .env -f infra/docker-compose.yml build backend frontend
           docker compose --env-file .env -f infra/docker-compose.yml up -d --wait postgres redis backend frontend
