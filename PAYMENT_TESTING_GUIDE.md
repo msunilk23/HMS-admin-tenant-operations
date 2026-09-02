@@ -2,9 +2,9 @@
 
 ## Environment Setup ✓
 Your `.env` file has:
-- `RAZORPAY_KEY_ID=rzp_test_SaFBSHMxcyEQ2P` ✓ **SET**
-- `RAZORPAY_KEY_SECRET=JMzWCFHEFP2E05MMxeQf7uB4` ✓ **SET**
-- `RAZORPAY_WEBHOOK_SECRET=hellodude@123` ✓ **SET**
+- `RAZORPAY_KEY_ID=<configured-in-environment>` ✓ **SET**
+- `RAZORPAY_KEY_SECRET=<configured-in-environment>` ✓ **SET**
+- `RAZORPAY_WEBHOOK_SECRET=<configured-in-environment>` ✓ **SET**
 
 ## Testing Checklist
 
@@ -21,7 +21,7 @@ docker logs hospital_backend 2>&1 | grep -E "(RAZORPAY|Starting|HOSPITAL API)"
 =========================================================================
 Environment: development
 Debug: true
-RAZORPAY_KEY_ID: rzp_test_SaFBSHMxcyEQ2...
+RAZORPAY_KEY_ID: <configured-in-environment>
 RAZORPAY_WEBHOOK_SECRET: ✓ SET
 =========================================================================
 ```
@@ -41,7 +41,7 @@ curl http://localhost:8000/api/v1/billing/config
 **Expected response:**
 ```json
 {
-  "razorpay_key_id": "rzp_test_SaFBSHMxcyEQ2P",
+  "razorpay_key_id": "<configured-in-environment>",
   "razorpay_configured": true
 }
 ```
