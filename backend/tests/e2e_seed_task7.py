@@ -486,6 +486,7 @@ async def reset_p28_scenario():
     async with engine.begin() as conn:
         await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
         p28_invoice_filter = "SELECT id FROM invoices WHERE visit_id = :visit AND source = 'pharmacy_dispense'"
+        await conn.execute(text("UPDATE pharmacy_dispenses SET invoice_id = NULL WHERE prescription_id = :rx"), {"rx": P28_PRESCRIPTION_ID})
         await conn.execute(text(f"DELETE FROM refunds WHERE invoice_id IN ({p28_invoice_filter})"), {"visit": P28_VISIT_ID})
         await conn.execute(text(f"DELETE FROM payments WHERE invoice_id IN ({p28_invoice_filter})"), {"visit": P28_VISIT_ID})
         await conn.execute(text("DELETE FROM invoices WHERE visit_id = :visit AND source = 'pharmacy_dispense'"), {"visit": P28_VISIT_ID})
