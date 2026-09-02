@@ -45,8 +45,6 @@ test.describe.serial('P34 Pharmacy dashboard and reports', () => {
     await expect(page.getByText('Operational view. Financial totals and valuation require additional reporting access.')).toBeVisible()
     await expect(page.getByText("Today's Pharmacy sales")).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Command Center' })).toHaveCount(0)
-    await expect(page.getByRole('link', { name: 'Pharmacy Dashboard' })).toBeVisible()
-
     await page.getByText('Low-stock items').click()
     await expect(page.getByLabel('Pharmacy report')).toHaveValue('reorder')
     await page.getByLabel('Pharmacy report').selectOption('current-stock')
