@@ -25,6 +25,14 @@ export type QueuePriority = 'emergency' | 'urgent' | 'pregnant' | 'disabled' | '
 export type QueueStatus = 'waiting' | 'called' | 'in_progress' | 'completed' | 'skipped' | 'checked_in' | 'cancelled'
 
 export type VisitStatus =
+  | 'REGISTERED'
+  | 'WAITING_FOR_NURSE'
+  | 'IN_PRE_VITAL'
+  | 'WAITING_FOR_DOCTOR'
+  | 'IN_CONSULTATION'
+  | 'CONSULTATION_COMPLETED'
+  | 'CLOSED'
+  | 'CANCELLED'
   | 'registered'
   | 'vitals_recorded'
   | 'vitals_done'
@@ -282,6 +290,7 @@ export interface Invoice {
   balance: number
   payment_method?: PaymentMethod
   status: InvoiceStatus
+  source?: string
   paid_at?: string
   razorpay_order_id?: string
   razorpay_payment_id?: string

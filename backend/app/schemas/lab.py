@@ -21,6 +21,7 @@ class LabOrderCreate(BaseModel):
 class LabOrderRead(BaseModel):
     id: uuid.UUID
     visit_id: uuid.UUID
+    facility_id: Optional[uuid.UUID] = None
     tests: Optional[list] = None
     status: str
     ordered_at: datetime
@@ -30,6 +31,32 @@ class LabOrderRead(BaseModel):
     result: Optional["LabResultRead"] = None
 
     model_config = {"from_attributes": True}
+
+
+class NurseLabOrderRead(BaseModel):
+    id: uuid.UUID
+    patient_id: uuid.UUID
+    patient_name: str
+    visit_id: uuid.UUID
+    appointment_id: Optional[uuid.UUID] = None
+    doctor_name: Optional[str] = None
+    tests: list[dict[str, Any]]
+    ordered_at: datetime
+    collection_status: str
+    sample_collected_at: Optional[datetime] = None
+    status: str
+    critical_result: bool
+
+
+class ReceptionLabOrderRead(BaseModel):
+    id: uuid.UUID
+    patient_id: uuid.UUID
+    patient_name: str
+    visit_id: uuid.UUID
+    appointment_id: Optional[uuid.UUID] = None
+    test_names: list[str]
+    collection_completed: bool
+    status: str
 
 
 class LabResultCreate(BaseModel):

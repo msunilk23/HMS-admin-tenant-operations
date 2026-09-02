@@ -101,7 +101,7 @@ export default function LabPage() {
     },
   })
 
-  const active = orders.filter(o => !['resulted', 'rejected'].includes(o.status))
+  const active = orders.filter(o => !['result_ready', 'verified', 'completed', 'rejected'].includes(o.status))
   const resulted = orders.filter(o => ['result_ready', 'verified', 'completed'].includes(o.status))
   const rejected = orders.filter(o => o.status === 'rejected')
 

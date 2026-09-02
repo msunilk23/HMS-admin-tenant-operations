@@ -197,13 +197,17 @@ export default function NurseVitalsPage() {
   })
 
   // Active dispatch queue: prescription ready or pharmacy dispatched (lab not yet done)
-  const dispatchVisits = [...prescriptionDoneVisits, ...dispatchedPharmacyVisits]
+  const dispatchVisits = [...new Map(
+    [...prescriptionDoneVisits, ...dispatchedPharmacyVisits].map(visit => [visit.id, visit]),
+  ).values()]
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
 
   const todayStr = new Date().toLocaleDateString('en-CA') // YYYY-MM-DD in local time
 
   // Completed: lab dispatched, both dispatched, closed, or sent to billing — today only
-  const completedVisits = [...dispatchedLabVisits, ...dispatchedBothVisits, ...billingPendingVisits, ...closedVisits]
+  const completedVisits = [...new Map(
+    [...dispatchedLabVisits, ...dispatchedBothVisits, ...billingPendingVisits, ...closedVisits].map(visit => [visit.id, visit]),
+  ).values()]
     .filter(v => new Date(v.created_at).toLocaleDateString('en-CA') === todayStr)
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
@@ -632,8 +636,9 @@ export default function NurseVitalsPage() {
               No patients awaiting dispatch
             </div>
           ) : dispatchVisits.map(v => {
-            const canPharmacy = v.status === 'prescription_done' || v.status === 'dispatched_lab'
-            const canLab = (v.status === 'prescription_done' || v.status === 'dispatched_pharmacy') && v.has_lab_order === true
+            const consultationCompleted = v.status === 'CONSULTATION_COMPLETED' || v.status === 'prescription_done'
+            const canPharmacy = consultationCompleted || v.status === 'dispatched_lab'
+            const canLab = (consultationCompleted || v.status === 'dispatched_pharmacy') && v.has_lab_order === true
             const badge = statusBadge(v.status)
             return (
               <div key={v.id} className="bg-white rounded-xl border border-gray-200 p-5">

@@ -12,16 +12,18 @@ from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import get_facility_id
 from app.core.dependencies import require_feature, require_role
 from app.db.engine import get_session
 from app.models.public.user import User
 from app.models.tenant.department import Department
 from app.models.tenant.doctor import Doctor
+from app.models.tenant.audit_log import AuditLog
 from app.models.tenant.nurse_roster import NurseRoster
-from app.schemas.nurse_roster import NurseRosterCreate, NurseRosterRead, NurseRosterUpdate
+from app.schemas.nurse_roster import NurseRosterAuditRead, NurseRosterCreate, NurseRosterRead, NurseRosterUpdate
 from app.services.audit_service import record_audit
 
 router = APIRouter(dependencies=[Depends(require_feature("nurse_roster"))])
@@ -34,6 +36,7 @@ _ADMIN_ROLES = ("hospital_admin",)
 
 def _values(row: NurseRoster) -> dict:
     return {
+        "facility_id": str(row.facility_id),
         "user_id": str(row.user_id),
         "roster_date": row.roster_date.isoformat(),
         "shift": row.shift,
@@ -87,20 +90,39 @@ async def _validate_substitute(
     await _validate_active_nurse_in_tenant(substitute_user_id, current_user, session)
 
 
-async def _check_duplicate(
-    user_id: uuid.UUID, roster_date: date, shift: str, session: AsyncSession, exclude_id: Optional[uuid.UUID] = None,
+async def _check_overlap(
+    *,
+    user_id: uuid.UUID,
+    substitute_user_id: Optional[uuid.UUID],
+    roster_date: date,
+    shift: str,
+    facility_id: uuid.UUID,
+    session: AsyncSession,
+    exclude_id: Optional[uuid.UUID] = None,
 ) -> None:
+    participant_ids = sorted({user_id, *([substitute_user_id] if substitute_user_id else [])}, key=str)
+    if session.bind and session.bind.dialect.name == "postgresql":
+        for participant_id in participant_ids:
+            lock_key = f"nurse-roster:{facility_id}:{participant_id}:{roster_date}:{shift}"
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+                {"lock_key": lock_key},
+            )
     filters = [
-        NurseRoster.user_id == user_id,
+        NurseRoster.facility_id == facility_id,
         NurseRoster.roster_date == roster_date,
         NurseRoster.shift == shift,
         NurseRoster.is_active == True,  # noqa: E712
+        or_(
+            NurseRoster.user_id.in_(participant_ids),
+            NurseRoster.substitute_user_id.in_(participant_ids),
+        ),
     ]
     if exclude_id is not None:
         filters.append(NurseRoster.id != exclude_id)
-    duplicate = (await session.execute(select(NurseRoster).where(*filters))).scalar_one_or_none()
-    if duplicate:
-        raise HTTPException(status_code=409, detail="Nurse already has an active roster entry for this date and shift")
+    overlap = (await session.execute(select(NurseRoster).where(*filters).limit(1))).scalar_one_or_none()
+    if overlap:
+        raise HTTPException(status_code=409, detail="A nurse already has an overlapping active assignment for this date and shift")
 
 
 async def _enrich(row: NurseRoster, session: AsyncSession) -> NurseRosterRead:
@@ -127,8 +149,9 @@ async def list_roster(
     include_inactive: bool = Query(False),
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("nurse", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
-    filters = []
+    filters = [NurseRoster.facility_id == facility_id]
     if roster_date:
         filters.append(NurseRoster.roster_date == roster_date)
     if date_from and date_to:
@@ -152,20 +175,48 @@ async def list_roster(
     return [await _enrich(row, session) for row in rows]
 
 
+@router.get("/audit/history", response_model=List[NurseRosterAuditRead])
+async def roster_audit_history(
+    roster_id: Optional[uuid.UUID] = None,
+    limit: int = Query(100, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
+    _: dict = Depends(require_role(*_ADMIN_ROLES)),
+    facility_id: uuid.UUID = Depends(get_facility_id),
+):
+    stmt = select(AuditLog).where(
+        AuditLog.resource_type == "nurse_roster",
+        or_(
+            AuditLog.old_value["facility_id"].astext == str(facility_id),
+            AuditLog.new_value["facility_id"].astext == str(facility_id),
+        ),
+    )
+    if roster_id:
+        stmt = stmt.where(AuditLog.resource_id == str(roster_id))
+    return (await session.execute(stmt.order_by(AuditLog.timestamp.desc()).limit(limit))).scalars().all()
+
+
 @router.post("", response_model=NurseRosterRead, status_code=status.HTTP_201_CREATED)
 async def create_roster(
     payload: NurseRosterCreate,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role(*_ADMIN_ROLES)),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     await _validate_active_nurse_in_tenant(payload.user_id, current_user, session)
     await _validate_department(payload.department_id, session)
     if payload.assigned_doctor_id:
         await _validate_doctor(payload.assigned_doctor_id, session)
     await _validate_substitute(payload.substitute_user_id, payload.substitution_reason, payload.user_id, current_user, session)
-    await _check_duplicate(payload.user_id, payload.roster_date, payload.shift, session)
+    await _check_overlap(
+        user_id=payload.user_id,
+        substitute_user_id=payload.substitute_user_id,
+        roster_date=payload.roster_date,
+        shift=payload.shift,
+        facility_id=facility_id,
+        session=session,
+    )
 
-    row = NurseRoster(id=uuid.uuid4(), **payload.model_dump())
+    row = NurseRoster(id=uuid.uuid4(), facility_id=facility_id, **payload.model_dump())
     session.add(row)
     await session.flush()
     record_audit(
@@ -187,14 +238,20 @@ async def update_roster(
     payload: NurseRosterUpdate,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role(*_ADMIN_ROLES)),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
-    row = await session.get(NurseRoster, roster_id)
+    row = await session.scalar(select(NurseRoster).where(
+        NurseRoster.id == roster_id,
+        NurseRoster.facility_id == facility_id,
+    ))
     if not row:
         raise HTTPException(status_code=404, detail="Roster entry not found")
 
     old_value = _values(row)
     changes = payload.model_dump(exclude_unset=True)
     reason = changes.pop("reason", None)
+    if changes.get("is_active") is False and (not reason or not reason.strip()):
+        raise HTTPException(status_code=422, detail="Deactivation reason is required")
 
     if "user_id" in changes:
         await _validate_active_nurse_in_tenant(changes["user_id"], current_user, session)
@@ -209,12 +266,14 @@ async def update_roster(
     if "substitute_user_id" in changes or "substitution_reason" in changes:
         await _validate_substitute(next_substitute, next_reason, next_user_id, current_user, session)
 
-    if "user_id" in changes or "roster_date" in changes or "shift" in changes:
-        await _check_duplicate(
-            changes.get("user_id", row.user_id),
-            changes.get("roster_date", row.roster_date),
-            changes.get("shift", row.shift),
-            session,
+    if {"user_id", "substitute_user_id", "roster_date", "shift"}.intersection(changes):
+        await _check_overlap(
+            user_id=changes.get("user_id", row.user_id),
+            substitute_user_id=changes.get("substitute_user_id", row.substitute_user_id),
+            roster_date=changes.get("roster_date", row.roster_date),
+            shift=changes.get("shift", row.shift),
+            facility_id=facility_id,
+            session=session,
             exclude_id=row.id,
         )
 

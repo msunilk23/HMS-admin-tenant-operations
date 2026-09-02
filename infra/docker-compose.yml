@@ -10,7 +10,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5433:5432"
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
@@ -25,7 +25,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -40,7 +40,7 @@ services:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?Set PGADMIN_DEFAULT_EMAIL in .env}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?Set PGADMIN_DEFAULT_PASSWORD in .env}
     ports:
-      - "5050:80"
+      - "${PGADMIN_HOST_PORT:-5050}:80"
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,12 +59,17 @@ services:
     volumes:
       - ../backend:/app
     ports:
-      - "8000:8000"
+      - "${BACKEND_HOST_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     command: sh /app/entrypoint.sh
 
   frontend:
@@ -74,18 +79,23 @@ services:
     container_name: hospital_frontend
     restart: unless-stopped
     ports:
-      - "5173:80"
+      - "${FRONTEND_HOST_PORT:-5173}:80"
     depends_on:
       - backend
     environment:
       VITE_API_URL: http://localhost:8000
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   nginx:
     image: nginx:alpine
     container_name: hospital_nginx
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${NGINX_HOST_PORT:-80}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:

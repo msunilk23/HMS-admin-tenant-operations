@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -22,10 +23,11 @@ from app.core.razorpay_service import create_razorpay_order, fetch_order_payment
 from app.db.engine import AsyncSessionLocal, get_session, tenant_schema_var
 from app.models.tenant.document import DOCUMENT_TYPE_INVOICE
 from app.models.tenant.invoice import Invoice, Payment, Refund, invoice_status_for_payment
+from app.models.public.user import Tenant
 from app.models.tenant.patient import Patient
 from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.pharmacy_dispense import PharmacyDispense
-from app.models.tenant.visit import Visit, VisitStatus
+from app.models.tenant.visit import Visit
 from app.schemas.document import DocumentVersionRead
 from app.schemas.invoice import InvoiceCreate, InvoicePayment, InvoiceRead, PaymentRead, RefundCreate
 from app.services.document_service import (
@@ -37,7 +39,6 @@ from app.services.document_service import (
     read_document_bytes,
 )
 from app.services.document_storage import LocalFileDocumentStorage
-from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
 from app.services.pharmacy_dispensing import confirm_dispense_stock_consumption, release_dispense_reservations
 from app.websocket.manager import ws_manager
@@ -308,7 +309,10 @@ async def get_invoice_by_visit(
     _: dict = Depends(require_role("receptionist", "billing_officer", "nurse", "doctor", "hospital_admin")),
 ):
     invoice = (await session.execute(
-        select(Invoice).where(Invoice.visit_id == visit_id)
+        select(Invoice)
+        .where(Invoice.visit_id == visit_id)
+        .order_by(Invoice.created_at.desc())
+        .limit(1)
     )).scalar_one_or_none()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found for this visit")
@@ -334,22 +338,6 @@ async def pay_invoice(
         confirmed_by=uuid.UUID(str(current_user["sub"])),
         current_user=current_user,
     )
-
-    # Transition visit based on billing type:
-    # pre_billing (upfront at reception) → registered (now visible to nurse)
-    # billing_pending (end of OPD after doctor) → closed
-    visit = await session.get(Visit, invoice.visit_id)
-    if visit and visit.status == VisitStatus.CONSULTATION_COMPLETED.value:
-        try:
-            await VisitWorkflowService.transition(
-                session,
-                visit,
-                VisitStatus.CLOSED,
-                current_user.get("sub"),
-                VisitTransitionSource.SYSTEM,
-            )
-        except ValueError:
-            pass
 
     await session.commit()
     await session.refresh(invoice)
@@ -631,19 +619,6 @@ async def sync_razorpay_payment(
 
     await _authorize_linked_pharmacy_dispense(invoice, session, current_user=current_user)
 
-    visit = await session.get(Visit, invoice.visit_id)
-    if visit and visit.status == VisitStatus.CONSULTATION_COMPLETED.value:
-        try:
-            await VisitWorkflowService.transition(
-                session,
-                visit,
-                VisitStatus.CLOSED,
-                current_user.get("sub"),
-                VisitTransitionSource.SYSTEM,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=f"Cannot close visit after sync payment: {str(exc)}") from exc
-
     await session.commit()
     await session.refresh(invoice)
 
@@ -744,19 +719,6 @@ async def admit_patient_manually(
         confirmed_by=uuid.UUID(str(current_user["sub"])),
     )
 
-    visit = await session.get(Visit, invoice.visit_id)
-    if visit and visit.status == VisitStatus.CONSULTATION_COMPLETED.value:
-        try:
-            await VisitWorkflowService.transition(
-                session,
-                visit,
-                VisitStatus.CLOSED,
-                current_user.get("sub"),
-                VisitTransitionSource.SYSTEM,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=f"Cannot close visit after sync payment: {str(exc)}") from exc
-
     await session.commit()
     await session.refresh(invoice)
 
@@ -809,34 +771,35 @@ async def razorpay_webhook(request: Request):
     payment_notes = razorpay_context["payment_notes"]
 
     if razorpay_context.get("tenant_conflict"):
-        logger.warning(
-            "Razorpay webhook: tenant mismatch between order notes and payment notes; using order tenant. "
-            "order=%s payment=%s order_id=%s",
-            order_notes.get("tenant_schema"),
-            payment_notes.get("tenant_schema"),
-            order_id,
-        )
+        logger.warning("Razorpay webhook: conflicting tenant notes for order_id=%s", order_id)
+        raise HTTPException(status_code=400, detail="Conflicting webhook tenant context")
 
     logger.info(
         "Webhook: Extracted data: order_id=%s, payment_id=%s, tenant=%s, method=%s, order_notes=%s, payment_notes=%s",
         order_id, payment_id, tenant_schema, payment_method, order_notes, payment_notes,
     )
 
-    if not order_id:
-        logger.warning("Razorpay webhook: missing order_id. Refusing to process payment.")
-        return {"status": "ok"}
+    if not order_id or not payment_id:
+        logger.warning("Razorpay webhook: missing order or payment identity")
+        raise HTTPException(status_code=400, detail="Webhook payment identity is missing")
 
     if not tenant_schema or not tenant_schema.replace("_", "").isalnum():
         logger.warning(
             "Razorpay webhook: missing or invalid tenant_schema. order_id=%s tenant=%s order_notes=%s payment_notes=%s",
             order_id, tenant_schema, order_notes, payment_notes,
         )
-        return {"status": "ok"}  # acknowledge so Razorpay stops retrying
+        raise HTTPException(status_code=400, detail="Webhook tenant context is invalid")
 
     # Manually acquire a session scoped to the correct tenant schema
     ctx_token = tenant_schema_var.set(tenant_schema)
     try:
         async with AsyncSessionLocal() as session:
+            tenant = await session.scalar(select(Tenant).where(
+                Tenant.schema_name == tenant_schema,
+                Tenant.is_active.is_(True),
+            ))
+            if tenant is None:
+                raise HTTPException(status_code=400, detail="Webhook tenant context is invalid")
             await session.execute(text(f'SET search_path TO "{tenant_schema}", public'))
 
             logger.info(
@@ -845,7 +808,7 @@ async def razorpay_webhook(request: Request):
             )
 
             invoice = (await session.execute(
-                select(Invoice).where(Invoice.razorpay_order_id == order_id)
+                select(Invoice).where(Invoice.razorpay_order_id == order_id).with_for_update()
             )).scalar_one_or_none()
 
             if not invoice:
@@ -853,9 +816,26 @@ async def razorpay_webhook(request: Request):
                     "Webhook: Invoice not found for order_id=%s tenant=%s. Cannot process payment.",
                     order_id, tenant_schema,
                 )
-                return {"status": "ok"}
+                raise HTTPException(status_code=400, detail="Webhook order is not linked to an invoice")
+
+            noted_invoice_id = order_notes.get("invoice_id") or payment_notes.get("invoice_id")
+            if noted_invoice_id and str(noted_invoice_id) != str(invoice.id):
+                raise HTTPException(status_code=400, detail="Webhook invoice identity does not match")
+
+            payment_entity = event_data.get("payload", {}).get("payment", {}).get("entity", {})
+            event_amount = payment_entity.get("amount")
+            event_currency = payment_entity.get("currency")
+            event_status = payment_entity.get("status")
+            expected_amount = int(Decimal(str(invoice.total)) * 100)
+            if event_amount != expected_amount or event_currency != "INR":
+                raise HTTPException(status_code=400, detail="Webhook payment amount or currency does not match")
+            expected_status = "captured" if event_data.get("event") == "payment.captured" else "authorized"
+            if event_status != expected_status:
+                raise HTTPException(status_code=400, detail="Webhook payment status does not match the event")
             
             if invoice.status == "paid":
+                if invoice.razorpay_payment_id != payment_id:
+                    raise HTTPException(status_code=409, detail="Invoice was already paid by a different payment")
                 logger.info(
                     "Webhook: Invoice %s already paid. Skipping duplicate.",
                     invoice.id,
@@ -896,22 +876,6 @@ async def razorpay_webhook(request: Request):
                 "Webhook: Set invoice fields — razorpay_payment_id=%s, payment_method=%s, status=paid, paid_at=%s",
                 payment_id, payment_method, invoice.paid_at,
             )
-
-            visit = await session.get(Visit, invoice.visit_id)
-            if visit and visit.status == VisitStatus.CONSULTATION_COMPLETED.value:
-                try:
-                    await VisitWorkflowService.transition(
-                        session,
-                        visit,
-                        VisitStatus.CLOSED,
-                        None,
-                        VisitTransitionSource.SYSTEM,
-                    )
-                except ValueError as exc:
-                    logger.error(
-                        "Webhook: Failed to close visit after razorpay payment: %s",
-                        str(exc),
-                    )
 
             # If this was a pharmacy dispense invoice, advance the queue
             if invoice.source == "pharmacy" and invoice.pharmacy_queue_id:
@@ -982,6 +946,8 @@ async def razorpay_webhook(request: Request):
             "Webhook: Razorpay payment captured: order=%s payment=%s tenant=%s source=%s",
             order_id, payment_id, tenant_schema, invoice.source,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(
             "Webhook: Unexpected error processing order_id=%s tenant=%s: %s",

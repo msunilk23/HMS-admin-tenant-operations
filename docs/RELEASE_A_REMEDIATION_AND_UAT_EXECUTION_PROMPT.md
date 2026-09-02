@@ -24,6 +24,124 @@ Release A may be declared **READY FOR CONTROLLED HOSPITAL UAT** only after every
 - The expected sole migration head before new work is `0089`; verify rather than assume.
 - Existing OPD, Pharmacy P30–P34 and general HMS dashboard behavior must not regress.
 
+## Approved contract decisions (2026-09-01)
+
+These decisions close the business-rule ambiguities previously identified for
+RA-3 and RA-4. They are mandatory Release A behavior and take precedence over
+older broad role descriptions or incomplete Pharmacy assumptions.
+
+### CD-RA-01 — External-prescription quantity and validity
+
+For prescription-only, non-controlled medicines:
+
+- The external prescription is valid for 30 calendar days from its prescription date, which cannot be in the future.
+- Dispensed quantity must not exceed the explicitly prescribed quantity. If no quantity is stated, calculate it only when dose × frequency × duration is unambiguous; otherwise reject and require clarification.
+- Supply is capped at the explicitly prescribed duration and 30 days. Release A permits no partial fills, refills, repeats or reuse.
+- A successful dispense changes the prescription to `FULLY_DISPENSED`. Insufficient stock rejects the complete attempt without a partial transaction.
+- Medicines with `requires_prescription = true` can never use the OTC path.
+
+For controlled medicines:
+
+- The external prescription is valid for 7 calendar days from its prescription date, which cannot be in the future.
+- Dispensed quantity must exactly match the approved prescribed quantity. Supply is capped at the explicitly prescribed duration and 7 days.
+- Release A permits no partial fills, refills, repeats or reuse. Controlled medicines can never use the OTC path and may be dispensed only once.
+- Incomplete prescription information or insufficient stock rejects the transaction without stock deduction or a completed invoice.
+- All limits are server-enforced and included in the audit trail.
+
+Tenant-level configuration must expose non-controlled validity/maximum supply
+with Release A defaults of 30 days and controlled validity/maximum supply with
+defaults of 7 days. It must not expose switches for repeats, partial fills or
+controlled OTC dispensing. These defaults do not replace applicable legal or
+regulatory requirements; Hospital compliance administrators are responsible
+for configuring stricter limits where required.
+
+### CD-RA-02 — Patient and prescription identity
+
+For a simple OTC sale, where both `requires_prescription = false` and
+`is_controlled_drug = false`, registered patient, customer name and mobile
+number are optional. A system-generated walk-in/customer reference is
+mandatory. Government identification must not be collected.
+
+For a non-controlled external prescription, require a registered HMS patient
+or Pharmacy-created minimal patient/customer record plus patient full name,
+date of birth or age, sex/gender where required by the HMS patient contract,
+mobile number, prescriber name, prescriber registration number, prescription
+date, issuing facility/clinic and prescription reference number. An attachment
+or document reference is optional.
+
+For a controlled external prescription, additionally require a registered HMS
+patient ID, patient address, government ID type, only the last four characters
+of the government ID, confirmation that the original prescription was
+inspected, a prescription-copy attachment/document reference, verification
+timestamp and verifier identity. Anonymous walk-ins are prohibited. Never
+store an unencrypted full government ID merely for Release A.
+
+### CD-RA-03 — Nurse and Receptionist Lab projections
+
+A Nurse may see only patient name and HMS patient ID; visit/appointment
+reference; ordering Doctor; test code/name and sample type; order date/time;
+collection status/time; processing/result status; collection instructions; and
+a verified critical-result boolean that never reveals the result. A Nurse must
+not receive result values, reference ranges, interpretation, Doctor comments,
+clinical report/download, pricing, invoices or financial data through Lab
+endpoints.
+
+A Receptionist may see only coordination identity, visit/appointment reference,
+test names, collection pending/completed state and overall status. A
+Receptionist must not receive result values, reference ranges, interpretation,
+critical-result information, clinical notes or detailed/downloadable reports.
+`RBAC_MATRIX.md` must use these projections instead of a broad Lab “Read”.
+
+### CD-RA-04 — Pharmacist verification and maker-checker
+
+For non-controlled external prescriptions, the dispensing Pharmacist may
+inspect, verify and dispense in the same transaction after explicit
+confirmation. Persist `verified_by`, `verified_at`, `dispensed_by` and
+`dispensed_at`, including when the actors are the same user.
+
+For controlled external prescriptions, maker-checker separation is mandatory.
+The verifier and dispenser must be different active Pharmacists in the same
+authorized tenant, facility and Pharmacy location. Enforce
+`verified_by != dispensed_by` in backend validation and, where practical, a
+database constraint. Verification fixes the medicine, quantity, patient and
+prescription details; a material change invalidates verification and requires
+another Pharmacist to re-verify. Prevent self-verification through direct API,
+retry and concurrent calls. Hospital Admin is audit/view-only unless the same
+account has an explicit permitted Pharmacy role. Super Admin has no operational
+access.
+
+### Approved lifecycle and transaction rules
+
+- Sale classification is immutable and exactly one of `OPD_PRESCRIPTION`, `OTC` or `EXTERNAL_PRESCRIPTION`.
+- External-prescription status is exactly one of `DRAFT`, `PENDING_VERIFICATION`, `VERIFIED`, `FULLY_DISPENSED`, `REJECTED`, `CANCELLED` or `EXPIRED`. Release A has no `PARTIALLY_DISPENSED` state.
+- Expired, rejected, cancelled and fully dispensed external prescriptions cannot be reused.
+- Repeat all eligibility checks inside the final locked transaction.
+- Keep stock, ledger, dispense, invoice and payment linkage atomic and idempotent.
+- Record rejection/cancellation reasons and complete audit before/after values.
+
+## Updated pre-implementation gap table
+
+| RA task | Requirement | Current status | Supporting evidence | Missing work | Dependencies | Severity | Implementation order |
+| --- | --- | --- | --- | --- | --- | --- | ---: |
+| RA-1 | Fresh environment and infrastructure | Baseline partially verified | Sole repository head `0089`; configured `public` and `shankar_hospitals` at `0089` | Final clean migration, Docker, auth, backup/restore and secret gates | Final implementation HEAD | P1 | 1 / final rerun |
+| RA-2 | Complete Nurse Roster | Partial | `nurse_roster.py`, `test_nurse_roster_release_a.py` | Facility scope, overlap protection, required deactivation reason, audit history and UI/tests | Migration `0090` for schema constraints | P1 | 2 |
+| RA-3 | Secure Lab lifecycle and explicit projections | Partial and security-noncompliant | `lab.py`, `test_lab_release_a.py` | Direct-ID/Doctor/facility authorization, Nurse/Reception projections, strict mutation roles, locking, audit correction, billing rollback/concurrency and UI/tests | CD-RA-03 approved | P0 | 3 |
+| RA-4 | OTC and external-prescription dispensing | Not implemented | Medicine eligibility flags and accepted P28-P34 transaction services exist | Complete model, configuration, API/service/UI, maker-checker, atomic/idempotent dispensing, returns classification and tests | CD-RA-01/02/04 approved; migration `0090` available | P0 | 4 |
+| RA-5 | Deterministic complete Chromium chain | Missing | Existing independent OPD and Pharmacy specs | Unified chain plus OTC/external and negative scenarios | RA-2 through RA-4 | P1 | 5 |
+| RA-6 | Complete CI/regression gate | Partial | `.github/workflows/task7-e2e.yml` | All-schema/restored-tenant checks, runtime health/auth, secret scan and RA-5 | RA-5 and repository-owner secrets | P1 | 6 |
+| RA-7 | Named Hospital UAT | Pending external action | UAT checklist exists | Named execution, evidence and sign-off | RA-1 through RA-6 green | P1 | 7 |
+
+Migration `0090` was reconfirmed available on 2026-09-01: `0089` remains the
+sole repository head and no `0090` revision exists. Expected implementation
+surfaces are the RA-2 roster API/schema/model/tests/admin UI and service; RA-3
+Lab API/schema/tests and Doctor/Lab UI; `RBAC_MATRIX.md`; new `0090`; new
+external-sale model/schema/service/API/tests plus model/router registration;
+the OTC frontend service/page/route/navigation and tests; returns
+classification exposure; E2E seed/spec; and the existing CI workflow.
+
+No remaining contract ambiguity was found. Implementation may proceed in RA
+order without requesting these decisions again.
+
 ## Release A task register
 
 ### RA-1 — Fresh-environment and infrastructure validation

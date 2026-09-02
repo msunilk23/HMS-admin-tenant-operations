@@ -229,14 +229,17 @@ async def test_lab_technician_sees_orders_regardless_of_canonical_visit_status(s
     # completed — see app/api/v1/lab.py::list_lab_orders).
     patient = _make_patient()
     visit = _make_visit(patient, status=VisitStatus.CONSULTATION_COMPLETED.value)
-    ordered = LabOrder(id=uuid.uuid4(), visit_id=visit.id, uhid=patient.uhid, tests=[{"test": "CBC"}], status="ordered")
-    result_ready = LabOrder(id=uuid.uuid4(), visit_id=visit.id, uhid=patient.uhid, tests=[{"test": "LFT"}], status="result_ready")
-    completed = LabOrder(id=uuid.uuid4(), visit_id=visit.id, uhid=patient.uhid, tests=[{"test": "TSH"}], status="completed")
+    facility_id = uuid.uuid4()
+    ordered = LabOrder(id=uuid.uuid4(), visit_id=visit.id, facility_id=facility_id, uhid=patient.uhid, tests=[{"test": "CBC"}], status="ordered")
+    result_ready = LabOrder(id=uuid.uuid4(), visit_id=visit.id, facility_id=facility_id, uhid=patient.uhid, tests=[{"test": "LFT"}], status="result_ready")
+    completed = LabOrder(id=uuid.uuid4(), visit_id=visit.id, facility_id=facility_id, uhid=patient.uhid, tests=[{"test": "TSH"}], status="completed")
     session.add_all([patient, visit, ordered, result_ready, completed])
     await session.commit()
 
     lab_tech_user = {"role": "lab_technician", "sub": str(uuid.uuid4()), "tenant_schema": "test_tenant"}
-    results = await list_lab_orders(status_filter=None, visit_id=None, session=session, current_user=lab_tech_user)
+    results = await list_lab_orders(
+        status_filter=None, visit_id=None, session=session, current_user=lab_tech_user, facility_id=facility_id
+    )
     ids = {r.id for r in results}
 
     assert ordered.id in ids

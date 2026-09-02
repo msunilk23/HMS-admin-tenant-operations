@@ -5,7 +5,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Calendar, CalendarDays, ChevronLeft, ChevronRight, Pencil, Plus, Search, XCircle } from 'lucide-react'
+import { Calendar, CalendarDays, ChevronLeft, ChevronRight, History, Pencil, Plus, Search, XCircle } from 'lucide-react'
 import { nurseRosterService, type NurseRoster, type NurseRosterCreateInput } from '@/services/nurseRosterService'
 import { departmentService, doctorService, userService } from '@/services/clinicalService'
 
@@ -79,6 +79,7 @@ export default function NurseRosterAdminPage() {
   const nurses = useQuery({ queryKey: ['users', 'nurse'], queryFn: () => userService.list({ role: 'nurse' }) })
   const departments = useQuery({ queryKey: ['departments'], queryFn: () => departmentService.list() })
   const doctors = useQuery({ queryKey: ['doctors'], queryFn: () => doctorService.list() })
+  const audit = useQuery({ queryKey: ['nurse-roster', 'audit'], queryFn: () => nurseRosterService.auditHistory() })
 
   const showToast = (message: string, type: ToastType = 'success') => {
     setToast({ message, type })
@@ -161,7 +162,11 @@ export default function NurseRosterAdminPage() {
 
   const confirmDeactivateSubmit = () => {
     if (!confirmDeactivate) return
-    updateMutation.mutate({ id: confirmDeactivate.id, data: { is_active: false, reason: deactivateReason || undefined } })
+    if (!deactivateReason.trim()) {
+      showToast('Deactivation reason is required', 'error')
+      return
+    }
+    updateMutation.mutate({ id: confirmDeactivate.id, data: { is_active: false, reason: deactivateReason.trim() } })
   }
 
   const isSaving = createMutation.isPending || updateMutation.isPending
@@ -181,6 +186,17 @@ export default function NurseRosterAdminPage() {
           <Plus className="h-4 w-4" aria-hidden="true" /> New Roster Entry
         </button>
       </div>
+
+      <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <div className="flex items-center gap-2 border-b border-gray-200 px-5 py-3">
+          <History className="h-4 w-4 text-gray-500" aria-hidden="true" />
+          <h2 className="font-semibold text-gray-900">Roster audit history</h2>
+        </div>
+        {audit.isLoading ? <p className="p-5 text-sm text-gray-500">Loading audit history...</p>
+          : audit.isError ? <p role="alert" className="p-5 text-sm text-red-600">Could not load roster audit history.</p>
+          : audit.data?.length ? <div className="divide-y divide-gray-100">{audit.data.map(entry => <article key={entry.id} className="grid gap-1 px-5 py-3 text-sm sm:grid-cols-[140px_1fr_auto]"><b>{entry.action}</b><span className="text-gray-600">{entry.reason || 'No reason recorded'}</span><time className="text-xs text-gray-500">{new Date(entry.timestamp).toLocaleString()}</time></article>)}</div>
+          : <p className="p-5 text-sm text-gray-500">No roster audit entries.</p>}
+      </section>
 
       <div className="flex flex-wrap items-center gap-3 bg-white border border-gray-200 rounded-xl p-4">
         <div className="inline-flex rounded-lg border border-gray-300 overflow-hidden">
@@ -350,12 +366,12 @@ export default function NurseRosterAdminPage() {
             <p className="text-sm text-gray-600">
               This removes {confirmDeactivate.nurse_name || 'this nurse'}'s assignment for {formatShortDate(confirmDeactivate.roster_date)} ({SHIFT_LABELS[confirmDeactivate.shift]}).
             </p>
-            <label className="text-sm font-medium text-gray-700 block">Reason (optional)
+            <label className="text-sm font-medium text-gray-700 block">Reason (required)
               <input type="text" value={deactivateReason} onChange={e => setDeactivateReason(e.target.value)} className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2" />
             </label>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => { setConfirmDeactivate(null); setDeactivateReason('') }} className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">Cancel</button>
-              <button type="button" onClick={confirmDeactivateSubmit} disabled={isSaving} className="px-4 py-2 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">
+              <button type="button" onClick={confirmDeactivateSubmit} disabled={isSaving || !deactivateReason.trim()} className="px-4 py-2 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">
                 {isSaving ? 'Deactivating…' : 'Deactivate'}
               </button>
             </div>

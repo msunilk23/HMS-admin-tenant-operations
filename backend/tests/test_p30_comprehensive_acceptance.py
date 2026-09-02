@@ -56,6 +56,9 @@ pytestmark = pytest.mark.skipif(not _postgres_reachable(), reason="PostgreSQL is
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def p30_pg_context():
+    from app.db.engine import engine as app_engine
+
+    await app_engine.dispose(close=False)
     engine = create_async_engine(PG_URL, pool_pre_ping=True)
     schema_a = f"p30_a_{uuid.uuid4().hex[:8]}"
     schema_b = f"p30_b_{uuid.uuid4().hex[:8]}"
@@ -169,6 +172,7 @@ async def p30_pg_context():
         await connection.execute(text("DELETE FROM public.users WHERE id = ANY(:ids)"), {"ids": [pharmacist_id, pharmacist_b_id, nurse_id]})
         await connection.execute(text("DELETE FROM public.tenants WHERE id = ANY(:ids)"), {"ids": [tenant_a, tenant_b]})
     await engine.dispose()
+    await app_engine.dispose()
 
 
 async def _session(context):

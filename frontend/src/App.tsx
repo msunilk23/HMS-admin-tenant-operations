@@ -23,6 +23,7 @@ import AppointmentsPage from '@/features/appointments/AppointmentsPage'
 import RegisterVisitPage from '@/features/reception/RegisterVisitPage'
 import ChangePasswordPage from '@/features/auth/ChangePasswordPage'
 import PharmacyPage from '@/features/pharmacy/PharmacyPage'
+import RetailSalePage from '@/features/pharmacy/RetailSalePage'
 import PurchaseOrderPage from '@/features/pharmacy/PurchaseOrderPage'
 import GoodsReceiptPage from '@/features/pharmacy/GoodsReceiptPage'
 import PatientReturnsPage from '@/features/pharmacy/PatientReturnsPage'
@@ -128,6 +129,7 @@ export default function App() {
             <Route path="/doctor/lab-results" element={<RoleGuard allowed={DOCTOR}><LabResultsPage /></RoleGuard>} />
             <Route path="/lab" element={<FeatureGuard feature="lab"><RoleGuard allowed={LAB}><LabPage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><PharmacyPage /></RoleGuard></FeatureGuard>} />
+            <Route path="/pharmacy/otc" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><RetailSalePage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy/dashboard" element={<FeatureGuard feature="pharmacy"><PermissionGuard permission={P34_PERMISSIONS.dashboard}><PharmacyDashboardPage /></PermissionGuard></FeatureGuard>} />
             <Route path="/pharmacy/patient-returns" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><PatientReturnsPage /></RoleGuard></FeatureGuard>} />
             <Route path="/pharmacy/supplier-returns" element={<FeatureGuard feature="pharmacy"><RoleGuard allowed={PHARMACY}><SupplierReturnsPage /></RoleGuard></FeatureGuard>} />

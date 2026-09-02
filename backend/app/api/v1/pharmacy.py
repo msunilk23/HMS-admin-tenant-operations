@@ -1692,7 +1692,7 @@ async def bill_pharmacy_dispense(
         rz_order = create_razorpay_order(
             amount_rupees=float(total),
             receipt=str(invoice.id)[:40],
-            notes={"tenant_schema": tenant, "source": "pharmacy"},
+            notes={"tenant_schema": tenant, "source": "pharmacy", "invoice_id": str(invoice.id)},
         )
         logger.info("Pharmacy bill: Razorpay order created: %s", rz_order)
         

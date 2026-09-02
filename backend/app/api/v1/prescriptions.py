@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.api.dependencies import get_facility_id
 from app.core.dependencies import require_role
 from app.core.prescription_pdf_service import build_prescription_pdf, canonical_prescription_snapshot
 from app.db.engine import get_session
@@ -207,6 +208,7 @@ async def create_prescription(
     payload: PrescriptionCreate,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("doctor", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     visit = await session.get(Visit, payload.visit_id)
     if not visit:
@@ -261,15 +263,20 @@ async def create_prescription(
             for item in payload.lab_tests
         ]
         existing_order = (await session.execute(
-            select(LabOrder).where(LabOrder.visit_id == payload.visit_id).limit(1)
+            select(LabOrder).where(
+                LabOrder.visit_id == payload.visit_id,
+                LabOrder.facility_id == facility_id,
+            ).limit(1)
         )).scalar_one_or_none()
         if existing_order:
             existing_order.tests = snapshotted_tests
             existing_order.status = "ordered"
+            existing_order.facility_id = facility_id
         else:
             lab_order = LabOrder(
                 id=uuid.uuid4(),
                 visit_id=payload.visit_id,
+                facility_id=facility_id,
                 uhid=uhid,
                 tests=snapshotted_tests,
                 status="ordered",

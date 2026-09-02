@@ -35,6 +35,7 @@ import {
   Settings,
   Settings2,
   ShoppingCart,
+  ShoppingBasket,
   PackagePlus,
   CreditCard,
   ClipboardList,
@@ -184,6 +185,7 @@ export const NAV_TREE: NavEntry[] = [
         label: 'Operations',
         items: [
           { kind: 'link', id: 'dispensing', label: 'Dispensing', to: '/pharmacy', icon: PackageCheck, roles: PHARMACY, feature: 'pharmacy' },
+          { kind: 'link', id: 'retail-dispensing', label: 'Retail Counter', to: '/pharmacy/otc', icon: ShoppingBasket, roles: PHARMACY, feature: 'pharmacy' },
           { kind: 'link', id: 'patient-returns', label: 'Patient Returns', to: '/pharmacy/patient-returns', icon: Undo2, roles: PHARMACY, feature: 'pharmacy' },
           { kind: 'link', id: 'supplier-returns', label: 'Supplier Returns', to: '/pharmacy/supplier-returns', icon: PackageX, roles: PHARMACY, feature: 'pharmacy' },
         ],

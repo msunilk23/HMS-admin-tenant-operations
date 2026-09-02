@@ -29,6 +29,7 @@ interface LineItemRow {
 export default function BillingPage() {
   const [params] = useSearchParams()
   const visitId = params.get('visitId') ?? ''
+  const invoiceSource = params.get('source') ?? ''
   const returnTo = params.get('returnTo') ?? ''
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -48,6 +49,20 @@ export default function BillingPage() {
     queryFn: () => visitService.get(visitId),
     enabled: !!visitId,
   })
+
+  const { data: visitInvoices } = useQuery({
+    queryKey: ['billing', visitId],
+    queryFn: () => billingService.listByVisit(visitId),
+    enabled: !!visitId && !!invoiceSource,
+  })
+
+  useEffect(() => {
+    if (!invoiceSource || invoice) return
+    const existingInvoice = visitInvoices?.find(item => item.source === invoiceSource)
+    if (!existingInvoice) return
+    setInvoice(existingInvoice)
+    setStep(existingInvoice.status === 'paid' ? 'paid' : 'confirm')
+  }, [invoice, invoiceSource, visitInvoices])
 
   // Auto-fill consultation fee from doctor's settings on first load
   useEffect(() => {
@@ -131,6 +146,12 @@ export default function BillingPage() {
           </button>
         )}
       </div>
+
+      {invoiceSource && visitInvoices && !invoice && (
+        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          No {invoiceSource.replaceAll('_', ' ')} invoice is available for this visit.
+        </div>
+      )}
 
       {/* Success state */}
       {step === 'paid' && invoice && (

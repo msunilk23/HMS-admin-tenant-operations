@@ -9,7 +9,7 @@ Backend dependencies are authoritative. Frontend route and navigation guards are
 | Nurse queue / pre-vitals | No | Yes | No | No | No | No | Yes | No tenant access |
 | Doctor queue / consultation | No | No | Yes | No | No | No | Yes | No tenant access |
 | Prescription | No | No | Yes | Read for dispensing | No | No | Yes | No tenant access |
-| Lab order/result workflow | Read | Read | Create/read | No | Operate | No | Yes | No tenant access |
+| Lab order/result workflow | Coordination projection only | Operational projection only | Create/read owned visits and download owned reports | No | Operate | No | Operate/audit | No tenant access |
 | Pharmacy dispensing | Read | Read | No | Operate | No | No | Yes | No tenant access |
 | Billing/payment | Read | Limited payment admission | No | Pharmacy billing context | No | Operate | Yes | Platform configuration only |
 | Feedback read/submit | Submit/read | Submit/read | Submit/read | No | No | No | Manage | No tenant access |
@@ -24,6 +24,8 @@ Backend dependencies are authoritative. Frontend route and navigation guards are
 - `super_admin` uses `/api/v1/super/*` and is blocked from tenant-scoped routes.
 - Doctors are filtered to their assigned doctor and department.
 - Nurses are filtered to assigned departments and roster scope.
+- Lab Nurse projection is limited to patient/visit coordination, ordering Doctor, test identity/sample type, collection instructions/status/timestamps, overall processing status and a verified critical-result boolean. It excludes result values, ranges, interpretation, comments, reports and financial data.
+- Lab Receptionist projection is limited to patient/visit coordination, test names, collection pending/completed and overall status. It excludes all result, critical, note and report fields.
 - Feature dependencies are evaluated from tenant entitlements; missing or invalid tenant context is rejected.
 - The client cannot submit role, tenant, workflow status, payment state, or audit identity as an authorization override.
 

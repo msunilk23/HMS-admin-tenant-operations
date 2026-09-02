@@ -9,15 +9,17 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import get_facility_id
 from app.core.dependencies import require_role, require_feature
 from app.db.engine import get_session
 from app.models.tenant.doctor import Doctor
 from app.models.tenant.lab_order import LabOrder, LabResult, LAB_STATUS_TRANSITIONS, can_transition_lab_order
 from app.models.tenant.patient import Patient
 from app.models.tenant.visit import Visit
-from app.schemas.lab import LabOrderCreate, LabOrderRead, LabResultCreate, LabResultRead
+from app.schemas.lab import LabOrderCreate, LabOrderRead, LabResultCreate, LabResultRead, NurseLabOrderRead, ReceptionLabOrderRead
 from app.services.audit_service import record_audit
 from app.services.lab_order_service import reject_duplicate_test_ids, snapshot_lab_test
+from app.websocket.manager import ws_manager
 
 router = APIRouter(dependencies=[Depends(require_feature("lab"))])
 
@@ -32,15 +34,52 @@ def validate_lab_transition(current_status: str, new_status: str) -> None:
         )
 
 
+async def _doctor_id(session: AsyncSession, current_user: dict) -> uuid.UUID:
+    doctor_id = await session.scalar(select(Doctor.id).where(
+        Doctor.user_id == uuid.UUID(current_user["sub"]),
+        Doctor.is_active.is_(True),
+    ))
+    if doctor_id is None:
+        raise HTTPException(status_code=403, detail="Doctor account is not linked to an active Doctor record")
+    return doctor_id
+
+
+async def _scoped_order(
+    session: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    facility_id: uuid.UUID,
+    current_user: dict,
+    for_update: bool = False,
+) -> LabOrder:
+    stmt = select(LabOrder).where(
+        LabOrder.id == order_id,
+        LabOrder.facility_id == facility_id,
+    )
+    if current_user.get("role") == "doctor":
+        stmt = stmt.join(Visit, Visit.id == LabOrder.visit_id).where(
+            Visit.doctor_id == await _doctor_id(session, current_user),
+        )
+    if for_update:
+        stmt = stmt.with_for_update()
+    order = await session.scalar(stmt)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Lab order not found")
+    return order
+
+
 @router.post("", response_model=LabOrderRead, status_code=status.HTTP_201_CREATED)
 async def create_lab_order(
     payload: LabOrderCreate,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("doctor", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     """Doctor creates a lab order for a visit."""
     visit = await session.get(Visit, payload.visit_id)
     if not visit:
+        raise HTTPException(status_code=404, detail="Visit not found")
+    if current_user.get("role") == "doctor" and visit.doctor_id != await _doctor_id(session, current_user):
         raise HTTPException(status_code=404, detail="Visit not found")
 
     patient = await session.get(Patient, visit.patient_id)
@@ -57,6 +96,7 @@ async def create_lab_order(
     order = LabOrder(
         id=uuid.uuid4(),
         visit_id=payload.visit_id,
+        facility_id=facility_id,
         uhid=patient.uhid if patient else None,
         tests=enriched_tests,
         status="ordered",
@@ -85,14 +125,15 @@ async def create_lab_order(
     return await _enrich_order(order, session)
 
 
-@router.get("", response_model=List[LabOrderRead])
+@router.get("")
 async def list_lab_orders(
     status_filter: Optional[str] = Query(None, alias="status"),
     visit_id: Optional[uuid.UUID] = Query(None),
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("nurse", "doctor", "lab_technician", "receptionist", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
-    stmt = select(LabOrder).order_by(LabOrder.ordered_at.asc())
+    stmt = select(LabOrder).where(LabOrder.facility_id == facility_id).order_by(LabOrder.ordered_at.asc())
     if status_filter:
         stmt = stmt.where(LabOrder.status == status_filter)
     if visit_id:
@@ -101,12 +142,9 @@ async def list_lab_orders(
     # Doctors may only ever see lab orders for visits assigned to them —
     # never every tenant lab order regardless of the visit_id filter above.
     if current_user.get("role") == "doctor":
-        doctor_row = (await session.execute(
-            select(Doctor).where(Doctor.user_id == uuid.UUID(current_user["sub"]))
-        )).scalar_one_or_none()
-        if not doctor_row:
-            return []
-        stmt = stmt.join(Visit, Visit.id == LabOrder.visit_id).where(Visit.doctor_id == doctor_row.id)
+        stmt = stmt.join(Visit, Visit.id == LabOrder.visit_id).where(
+            Visit.doctor_id == await _doctor_id(session, current_user),
+        )
 
     # Lab technicians act on everything except fully completed/rejected orders
     # — result_ready and verified must remain visible so they can verify and
@@ -116,6 +154,10 @@ async def list_lab_orders(
         stmt = stmt.where(LabOrder.status.notin_(["completed"]))
 
     rows = (await session.execute(stmt)).scalars().all()
+    if current_user.get("role") == "nurse":
+        return [await _nurse_projection(order, session) for order in rows]
+    if current_user.get("role") == "receptionist":
+        return [await _reception_projection(order, session) for order in rows]
     return [await _enrich_order(o, session) for o in rows]
 
 
@@ -124,16 +166,13 @@ async def update_lab_order_status(
     order_id: uuid.UUID,
     new_status: str,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("nurse", "doctor", "lab_technician", "hospital_admin")),
+    current_user: dict = Depends(require_role("lab_technician", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     """Advance a lab order through its independent lifecycle."""
-    order = await session.get(LabOrder, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Lab order not found")
-    if new_status in ("verified", "completed") and current_user.get("role") not in (
-        "lab_technician", "hospital_admin", "super_admin"
-    ):
-        raise HTTPException(status_code=403, detail="Only lab staff can finalize lab results")
+    order = await _scoped_order(session, order_id=order_id, facility_id=facility_id, current_user=current_user, for_update=True)
+    if new_status in ("result_ready", "verified"):
+        raise HTTPException(status_code=400, detail="Use the result-entry or verification endpoint for this transition")
     validate_lab_transition(order.status, new_status)
     old_status = order.status
     now = datetime.now(timezone.utc)
@@ -172,13 +211,13 @@ async def reject_lab_order(
     order_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("lab_technician", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     """Reject a sample (contaminated/insufficient) — resets order to 'ordered' for recollection."""
-    order = await session.get(LabOrder, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Lab order not found")
+    order = await _scoped_order(session, order_id=order_id, facility_id=facility_id, current_user=current_user, for_update=True)
     if order.status not in ("sample_pending", "sample_collected", "processing"):
         raise HTTPException(status_code=400, detail="Can only reject after sample collection")
+    old_status = order.status
     order.status = "rejected"
     record_audit(
         session,
@@ -187,7 +226,7 @@ async def reject_lab_order(
         resource_type="lab_order",
         resource_id=order.id,
         visit_id=order.visit_id,
-        old_value={"status": order.status},
+        old_value={"status": old_status},
         new_value={"status": "rejected"},
         reason="Sample rejected",
     )
@@ -208,12 +247,11 @@ async def enter_lab_results(
     order_id: uuid.UUID,
     payload: LabResultCreate,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("nurse", "doctor", "lab_technician", "hospital_admin")),
+    current_user: dict = Depends(require_role("lab_technician", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     """Enter results for a processing lab order and mark it result-ready."""
-    order = await session.get(LabOrder, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Lab order not found")
+    order = await _scoped_order(session, order_id=order_id, facility_id=facility_id, current_user=current_user, for_update=True)
     if order.status != "processing":
         raise HTTPException(status_code=400, detail="Results can only be entered while processing")
 
@@ -261,12 +299,11 @@ async def verify_lab_results(
     order_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("lab_technician", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     from app.services.lab_billing_service import create_lab_invoice_if_needed
     
-    order = await session.get(LabOrder, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Lab order not found")
+    order = await _scoped_order(session, order_id=order_id, facility_id=facility_id, current_user=current_user, for_update=True)
     validate_lab_transition(order.status, "verified")
     result = (await session.execute(
         select(LabResult).where(LabResult.lab_order_id == order_id)
@@ -310,6 +347,7 @@ async def verify_lab_results(
         logging.getLogger(__name__).error(
             f"Failed to create lab invoice for order {order_id}: {exc}", exc_info=True
         )
+        await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Lab verification requires a billing invoice, which could not be created. No changes were saved — please retry.",
@@ -326,11 +364,13 @@ async def upload_lab_report(
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("lab_technician", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     """Upload a PDF/image report file and attach it to the existing LabResult."""
     if file.content_type not in ALLOWED_MIME:
         raise HTTPException(status_code=400, detail="Only PDF, JPEG, and PNG files are allowed")
 
+    order = await _scoped_order(session, order_id=order_id, facility_id=facility_id, current_user=current_user, for_update=True)
     result = (await session.execute(
         select(LabResult).where(LabResult.lab_order_id == order_id)
     )).scalar_one_or_none()
@@ -338,7 +378,6 @@ async def upload_lab_report(
         raise HTTPException(status_code=404, detail="No result record yet — enter results first")
 
     # Build meaningful public_id: lab-reports/{UHID}_{PatientName}_{Tests}_{Date}
-    order = await session.get(LabOrder, order_id)
     visit = await session.get(Visit, order.visit_id) if order else None
     patient = await session.get(Patient, visit.patient_id) if visit else None
 
@@ -429,12 +468,14 @@ async def upload_lab_report(
 async def download_lab_report(
     order_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_role("nurse", "doctor", "lab_technician", "receptionist", "hospital_admin", "super_admin")),
+    current_user: dict = Depends(require_role("doctor", "lab_technician", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     """Return a short-lived signed Cloudinary URL for the lab report."""
     import cloudinary.utils
     from app.core.config import settings
 
+    await _scoped_order(session, order_id=order_id, facility_id=facility_id, current_user=current_user)
     result = (await session.execute(
         select(LabResult).where(LabResult.lab_order_id == order_id)
     )).scalar_one_or_none()
@@ -474,14 +515,59 @@ async def download_lab_report(
 async def get_lab_results(
     order_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_role("nurse", "doctor", "lab_technician", "receptionist", "hospital_admin")),
+    current_user: dict = Depends(require_role("doctor", "lab_technician", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
+    await _scoped_order(session, order_id=order_id, facility_id=facility_id, current_user=current_user)
     result = (await session.execute(
         select(LabResult).where(LabResult.lab_order_id == order_id)
     )).scalar_one_or_none()
     if not result:
         raise HTTPException(status_code=404, detail="No results yet for this lab order")
     return result
+
+
+async def _projection_context(order: LabOrder, session: AsyncSession) -> tuple[Visit, Patient, Optional[Doctor], Optional[LabResult]]:
+    visit = await session.get(Visit, order.visit_id)
+    if visit is None:
+        raise HTTPException(status_code=404, detail="Lab visit not found")
+    patient = await session.get(Patient, visit.patient_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Lab patient not found")
+    doctor = await session.get(Doctor, visit.doctor_id) if visit.doctor_id else None
+    result = await session.scalar(select(LabResult).where(LabResult.lab_order_id == order.id))
+    return visit, patient, doctor, result
+
+
+async def _nurse_projection(order: LabOrder, session: AsyncSession) -> NurseLabOrderRead:
+    visit, patient, doctor, result = await _projection_context(order, session)
+    tests = [{
+        "test_code": test.get("test_code"),
+        "test_name": test.get("test_name") or test.get("test"),
+        "sample_type": test.get("sample_type"),
+        "collection_instructions": test.get("notes"),
+    } for test in (order.tests or [])]
+    critical = bool(
+        order.status in {"verified", "completed"}
+        and result
+        and any(bool(value) for value in (result.critical_flags or {}).values())
+    )
+    return NurseLabOrderRead(
+        id=order.id, patient_id=patient.id, patient_name=f"{patient.first_name} {patient.last_name}".strip(),
+        visit_id=visit.id, appointment_id=visit.appointment_id, doctor_name=doctor.full_name if doctor else None,
+        tests=tests, ordered_at=order.ordered_at, collection_status="completed" if order.sample_collected_at else "pending",
+        sample_collected_at=order.sample_collected_at, status=order.status, critical_result=critical,
+    )
+
+
+async def _reception_projection(order: LabOrder, session: AsyncSession) -> ReceptionLabOrderRead:
+    visit, patient, _, _ = await _projection_context(order, session)
+    return ReceptionLabOrderRead(
+        id=order.id, patient_id=patient.id, patient_name=f"{patient.first_name} {patient.last_name}".strip(),
+        visit_id=visit.id, appointment_id=visit.appointment_id,
+        test_names=[test.get("test_name") or test.get("test") or "Lab test" for test in (order.tests or [])],
+        collection_completed=order.sample_collected_at is not None, status=order.status,
+    )
 
 
 async def _enrich_order(order: LabOrder, session) -> LabOrderRead:

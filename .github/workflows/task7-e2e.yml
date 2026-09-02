@@ -30,18 +30,28 @@ jobs:
       REDIS_URL: redis://localhost:6379
       E2E_DATABASE_URL: postgresql+asyncpg://hospital_user:${{ secrets.CI_POSTGRES_PASSWORD }}@localhost:5433/hospital
       E2E_BASE_URL: http://localhost:5173
+      E2E_MANAGED_BACKEND: 'false'
+      E2E_BACKEND_HEALTH_URL: http://localhost:8000/health
+      E2E_BACKEND_OPENAPI_URL: http://localhost:8000/api/openapi.json
+      E2E_ENVIRONMENT: E2E
+      RAZORPAY_WEBHOOK_SECRET: ${{ secrets.CI_SECRET_KEY }}
       PYTHONPATH: ${{ github.workspace }}/backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install backend dependencies
         working-directory: backend
         run: pip install -r requirements.txt
-      - name: Upgrade database
+      - name: Upgrade database to reversible boundary
         working-directory: backend
-        run: alembic upgrade head
+        run: alembic upgrade 0088
+      - name: Verify sole migration graph head
+        working-directory: backend
+        run: test "$(alembic heads | grep -c '(head)')" -eq 1
       - name: Verify reversible migration boundary and forward-only 0089 policy
         working-directory: backend
         shell: bash
@@ -84,6 +94,35 @@ jobs:
 
           asyncio.run(main())
           PY
+            alembic upgrade head
+      - name: Verify all configured schemas are at the sole head
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+          import re
+
+          from sqlalchemy import text
+          from sqlalchemy.ext.asyncio import create_async_engine
+
+          async def main() -> None:
+              engine = create_async_engine(os.environ["DATABASE_URL"])
+              async with engine.connect() as conn:
+                  head = (await conn.execute(text("SELECT version_num FROM public.alembic_version"))).scalar_one()
+                  schemas = (await conn.execute(text(
+                      "SELECT schema_name FROM public.tenants WHERE is_active = true ORDER BY schema_name"
+                  ))).scalars().all()
+                  for schema in schemas:
+                      assert re.fullmatch(r"[a-z][a-z0-9_]{1,62}", schema), f"invalid tenant schema: {schema}"
+                      version = (await conn.execute(text(
+                          f'SELECT version_num FROM "{schema}".alembic_version'
+                      ))).scalar_one()
+                      assert version == head, f"{schema} is at {version}, expected {head}"
+              await engine.dispose()
+
+          asyncio.run(main())
+          PY
       - name: Run backend regression suite
         working-directory: backend
         run: pytest tests/ -q
@@ -109,11 +148,37 @@ jobs:
       - name: Frontend production build
         working-directory: frontend
         run: npm run build
-      - name: Validate Compose and build application images
+      - name: Validate Compose, build images and wait for application health
+        env:
+          POSTGRES_USER: hospital_user
+          POSTGRES_DB: hospital
+          POSTGRES_DB_URL_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
+          PGADMIN_DEFAULT_EMAIL: ci-admin@example.invalid
+          PGADMIN_DEFAULT_PASSWORD: ${{ secrets.CI_SECRET_KEY }}
+          POSTGRES_HOST_PORT: '55433'
+          REDIS_HOST_PORT: '56379'
+          BACKEND_HOST_PORT: '58000'
+          FRONTEND_HOST_PORT: '55173'
         run: |
-          cp .env.example .env
+          printf '%s\n' \
+            "ENVIRONMENT=test" \
+            "DEBUG=false" \
+            "SECRET_KEY=$SECRET_KEY" \
+            "POSTGRES_USER=$POSTGRES_USER" \
+            "POSTGRES_DB=$POSTGRES_DB" \
+            "POSTGRES_DB_URL_PASSWORD=$POSTGRES_DB_URL_PASSWORD" \
+            "PGADMIN_DEFAULT_EMAIL=$PGADMIN_DEFAULT_EMAIL" \
+            "PGADMIN_DEFAULT_PASSWORD=$PGADMIN_DEFAULT_PASSWORD" \
+            "REDIS_URL=redis://redis:6379" \
+            "RAZORPAY_WEBHOOK_SECRET=$RAZORPAY_WEBHOOK_SECRET" > .env
           docker compose -f infra/docker-compose.yml config --quiet
           docker compose -f infra/docker-compose.yml build backend frontend
+          docker compose -f infra/docker-compose.yml up -d --wait postgres redis backend frontend
+          curl --fail --silent --show-error http://localhost:58000/health
+          curl --fail --silent --show-error http://localhost:55173/ > /dev/null
+      - name: Stop Compose health stack
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down --volumes --remove-orphans
       - name: Validate PostgreSQL backup and restore
         env:
           PGPASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
@@ -124,7 +189,9 @@ jobs:
           createdb -h localhost -p 5433 -U hospital_user release_a_restore
           pg_restore -h localhost -p 5433 -U hospital_user -d release_a_restore --exit-on-error release-a.dump
           test "$(psql -h localhost -p 5433 -U hospital_user -d release_a_restore -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'alembic_version'")" = "1"
-          test "$(psql -h localhost -p 5433 -U hospital_user -d release_a_restore -Atc "SELECT count(*) FROM public.alembic_version WHERE version_num = '0089'")" = "1"
+          source_head="$(psql -h localhost -p 5433 -U hospital_user -d hospital -Atc "SELECT version_num FROM public.alembic_version")"
+          restored_head="$(psql -h localhost -p 5433 -U hospital_user -d release_a_restore -Atc "SELECT version_num FROM public.alembic_version")"
+          test "$restored_head" = "$source_head"
           dropdb -h localhost -p 5433 -U hospital_user release_a_restore
       - name: Install Playwright Chromium
         working-directory: frontend
@@ -149,9 +216,43 @@ jobs:
               else:
                   raise SystemExit(f'Service did not start: {url}')
           PY
+      - name: Clean deterministic browser fixture schemas
+        working-directory: backend
+        env:
+          E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
+        run: python tests/e2e_seed_task7.py cleanup
       - name: Run Phase 1 browser suite
         working-directory: frontend
+        env:
+          E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
         run: npm run e2e -- --reporter=line
+      - name: Verify runtime health and tenant authentication
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+
+          with urllib.request.urlopen("http://localhost:8000/health", timeout=5) as response:
+              assert response.status == 200
+          request = urllib.request.Request(
+              "http://localhost:8000/api/v1/auth/login",
+              data=json.dumps({"login_id": "e2e_doctor_task7", "password": "E2eDoctor@123"}).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=5) as response:
+              token = json.load(response)["access_token"]
+          protected = urllib.request.Request(
+              "http://localhost:8000/api/v1/visits",
+              headers={"Authorization": f"Bearer {token}"},
+          )
+          with urllib.request.urlopen(protected, timeout=5) as response:
+              assert response.status == 200
+          PY
+      - name: Scan committed history for secrets
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks git --source . --redact --no-banner --exit-code 1
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4

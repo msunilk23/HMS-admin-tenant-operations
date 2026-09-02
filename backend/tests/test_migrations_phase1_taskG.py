@@ -168,7 +168,7 @@ def test_downgrade_and_reupgrade_of_document_migrations_is_safe(registered_tenan
     # 0089 (Super Admin/tenant decoupling) is an intentionally forward-only
     # policy migration: its downgrade() deliberately raises once any user is
     # tenant-independent — a condition its own upgrade() unconditionally
-    # creates for every super_admin. Since the repository head is now 0089,
+    # creates for every super_admin. Since repository head 0090 depends on 0089,
     # ANY downgrade from head must pass through that guard; there is no
     # database state reachable via `alembic downgrade` from head that avoids
     # it. This test therefore asserts the forward-only contract is enforced
@@ -183,7 +183,7 @@ def test_downgrade_and_reupgrade_of_document_migrations_is_safe(registered_tenan
     # runs migrations transactionally, so a raised exception rolls back).
     heads = _run_alembic("heads")
     assert heads.returncode == 0, heads.stderr
-    assert "0089" in heads.stdout
+    assert "0090" in heads.stdout
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")

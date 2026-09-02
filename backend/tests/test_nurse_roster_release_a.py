@@ -38,6 +38,8 @@ PG_URL = os.environ["DATABASE_URL"]
 SCHEMA_A = f"test_roster_a_{uuid.uuid4().hex[:10]}"
 SCHEMA_B = f"test_roster_b_{uuid.uuid4().hex[:10]}"
 TODAY = date.today()
+FACILITY_A = uuid.uuid4()
+FACILITY_B = uuid.uuid4()
 
 
 def _postgres_reachable() -> bool:
@@ -138,7 +140,7 @@ async def ctx():
 
 
 def _token(ctx, user_key: str, role: str, tenant_key: str = "tenant_a", schema: str = SCHEMA_A) -> str:
-    claims = {"role": role}
+    claims = {"role": role, "facility_id": str(FACILITY_A)}
     if tenant_key:
         claims.update({"tenant_id": str(ctx[tenant_key]), "tenant_schema": schema})
     return create_access_token(str(ctx[user_key]), claims)
@@ -148,7 +150,7 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_hospital_admin_creates_a_roster(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].post("/api/v1/nurse-roster", json={
@@ -161,7 +163,7 @@ async def test_hospital_admin_creates_a_roster(ctx):
     ctx["created_id"] = body["id"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_hospital_admin_edits_a_roster(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].patch(f"/api/v1/nurse-roster/{ctx['created_id']}", json={"room": "Ward 3B"}, headers=_auth(token))
@@ -169,7 +171,7 @@ async def test_hospital_admin_edits_a_roster(ctx):
     assert resp.json()["room"] == "Ward 3B"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_hospital_admin_records_attendance(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].patch(f"/api/v1/nurse-roster/{ctx['created_id']}", json={"is_present": True}, headers=_auth(token))
@@ -177,7 +179,7 @@ async def test_hospital_admin_records_attendance(ctx):
     assert resp.json()["is_present"] is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_hospital_admin_assigns_valid_substitute_with_reason(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].patch(f"/api/v1/nurse-roster/{ctx['created_id']}", json={
@@ -187,7 +189,7 @@ async def test_hospital_admin_assigns_valid_substitute_with_reason(ctx):
     assert resp.json()["substitute_name"] == "Nurse Two"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_missing_substitution_reason_is_rejected(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].post("/api/v1/nurse-roster", json={
@@ -197,7 +199,7 @@ async def test_missing_substitution_reason_is_rejected(ctx):
     assert resp.status_code == 422
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_original_nurse_cannot_be_selected_as_substitute(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].post("/api/v1/nurse-roster", json={
@@ -207,7 +209,7 @@ async def test_original_nurse_cannot_be_selected_as_substitute(ctx):
     assert resp.status_code == 422
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_duplicate_nurse_date_shift_is_rejected(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].post("/api/v1/nurse-roster", json={
@@ -216,7 +218,17 @@ async def test_duplicate_nurse_date_shift_is_rejected(ctx):
     assert resp.status_code == 409
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
+async def test_substitute_overlap_is_rejected(ctx):
+    token = _token(ctx, "admin", "hospital_admin")
+    resp = await ctx["client"].post("/api/v1/nurse-roster", json={
+        "user_id": str(ctx["nurse2"]), "roster_date": TODAY.isoformat(), "shift": "morning", "department_id": str(ctx["dept_a"]),
+    }, headers=_auth(token))
+    assert resp.status_code == 409
+    assert "overlapping" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_inactive_nurse_is_rejected(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].post("/api/v1/nurse-roster", json={
@@ -225,7 +237,7 @@ async def test_inactive_nurse_is_rejected(ctx):
     assert resp.status_code == 422
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_cross_tenant_nurse_is_rejected(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].post("/api/v1/nurse-roster", json={
@@ -234,7 +246,7 @@ async def test_cross_tenant_nurse_is_rejected(ctx):
     assert resp.status_code == 404
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_cross_tenant_department_is_rejected(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     resp = await ctx["client"].post("/api/v1/nurse-roster", json={
@@ -243,7 +255,7 @@ async def test_cross_tenant_department_is_rejected(ctx):
     assert resp.status_code == 404
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_nurse_sees_only_their_own_roster(ctx):
     token = _token(ctx, "nurse2", "nurse")
     resp = await ctx["client"].get("/api/v1/nurse-roster", params={"roster_date": TODAY.isoformat()}, headers=_auth(token))
@@ -254,7 +266,7 @@ async def test_nurse_sees_only_their_own_roster(ctx):
     assert any(row["substitute_user_id"] == str(ctx["nurse2"]) for row in rows)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_deactivation_works_and_is_audited(ctx):
     token = _token(ctx, "admin", "hospital_admin")
     # A transient Redis/tenant-status-cache read failure around this point in
@@ -282,7 +294,41 @@ async def test_deactivation_works_and_is_audited(ctx):
     await audit_engine.dispose()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
+async def test_deactivation_requires_reason_and_audit_history_is_facility_scoped(ctx):
+    token = _token(ctx, "admin", "hospital_admin")
+    create = await ctx["client"].post("/api/v1/nurse-roster", json={
+        "user_id": str(ctx["nurse2"]), "roster_date": (TODAY + timedelta(days=2)).isoformat(),
+        "shift": "night", "department_id": str(ctx["dept_a"]),
+    }, headers=_auth(token))
+    assert create.status_code == 201, create.text
+    roster_id = create.json()["id"]
+
+    denied = await ctx["client"].patch(
+        f"/api/v1/nurse-roster/{roster_id}", json={"is_active": False}, headers=_auth(token),
+    )
+    assert denied.status_code == 422
+
+    deactivated = await ctx["client"].patch(
+        f"/api/v1/nurse-roster/{roster_id}",
+        json={"is_active": False, "reason": "Ward coverage changed"},
+        headers=_auth(token),
+    )
+    assert deactivated.status_code == 200, deactivated.text
+
+    history = await ctx["client"].get(
+        "/api/v1/nurse-roster/audit/history", params={"roster_id": roster_id}, headers=_auth(token),
+    )
+    assert history.status_code == 200, history.text
+    entries = history.json()
+    assert [entry["action"] for entry in entries] == ["DEACTIVATE", "CREATE"]
+    assert entries[0]["reason"] == "Ward coverage changed"
+    assert entries[0]["old_value"]["is_active"] is True
+    assert entries[0]["new_value"]["is_active"] is False
+    assert all(entry["new_value"]["facility_id"] == str(FACILITY_A) for entry in entries)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_nurse_cannot_mutate_roster_and_super_admin_cannot_access_it(ctx):
     # Combined into one test function, placed last in the file: a 403-denied
     # request followed immediately by another request in a *separate*

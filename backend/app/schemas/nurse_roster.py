@@ -49,6 +49,7 @@ class NurseRosterUpdate(BaseModel):
 
 class NurseRosterRead(BaseModel):
     id: uuid.UUID
+    facility_id: uuid.UUID
     user_id: uuid.UUID
     roster_date: date
     shift: str
@@ -65,5 +66,18 @@ class NurseRosterRead(BaseModel):
     substitute_name: Optional[str] = None
     department_name: Optional[str] = None
     doctor_name: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class NurseRosterAuditRead(BaseModel):
+    id: uuid.UUID
+    user_id: Optional[uuid.UUID] = None
+    action: str
+    resource_id: Optional[str] = None
+    old_value: Optional[dict] = None
+    new_value: Optional[dict] = None
+    reason: Optional[str] = None
+    timestamp: datetime
 
     model_config = {"from_attributes": True}

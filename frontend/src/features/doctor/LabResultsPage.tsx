@@ -136,8 +136,9 @@ export default function DoctorLabResultsPage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Visit Filter */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Select Patient/Visit</label>
+              <label htmlFor="lab-visit" className="block text-sm font-medium text-gray-700 mb-2">Select Patient/Visit</label>
               <select
+                id="lab-visit"
                 value={selectedVisitId || ''}
                 onChange={(e) => setSelectedVisitId(e.target.value || null)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
@@ -153,8 +154,9 @@ export default function DoctorLabResultsPage() {
 
             {/* Date From */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">From Date</label>
+              <label htmlFor="lab-date-from" className="block text-sm font-medium text-gray-700 mb-2">From Date</label>
               <input
+                id="lab-date-from"
                 type="date"
                 value={dateRange.from || ''}
                 onChange={(e) => setDateRange({ ...dateRange, from: e.target.value || undefined })}
@@ -164,8 +166,9 @@ export default function DoctorLabResultsPage() {
 
             {/* Date To */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">To Date</label>
+              <label htmlFor="lab-date-to" className="block text-sm font-medium text-gray-700 mb-2">To Date</label>
               <input
+                id="lab-date-to"
                 type="date"
                 value={dateRange.to || ''}
                 onChange={(e) => setDateRange({ ...dateRange, to: e.target.value || undefined })}

@@ -28,13 +28,14 @@ os.environ.setdefault(
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
 from app.models.tenant import Department, Doctor, Patient, Visit
-from app.models.tenant.lab_order import LabOrder
+from app.models.tenant.audit_log import AuditLog
+from app.models.tenant.lab_order import LabOrder, LabResult
 from app.models.tenant.lab_test_master import LabTestMaster
 from app.services.lab_billing_service import LabPricingError, create_lab_invoice_if_needed
 
@@ -68,10 +69,13 @@ async def ctx():
 
     engine = create_async_engine(PG_URL, pool_pre_ping=True)
     tenant_id = uuid.uuid4()
+    facility_id = uuid.uuid4()
     admin_id = uuid.uuid4()
     doctor_a_user_id = uuid.uuid4()
     doctor_b_user_id = uuid.uuid4()
     lab_tech_id = uuid.uuid4()
+    nurse_id = uuid.uuid4()
+    receptionist_id = uuid.uuid4()
 
     async with engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA}" CASCADE'))
@@ -88,6 +92,8 @@ async def ctx():
             {"id": doctor_a_user_id, "tenant_id": tenant_id, "tenant_name": SCHEMA, "email": f"doca-{SCHEMA}@test.invalid", "username": f"doca{SCHEMA[-6:]}", "password": hash_password("Passw0rd!"), "name": "Doctor A", "role": "doctor"},
             {"id": doctor_b_user_id, "tenant_id": tenant_id, "tenant_name": SCHEMA, "email": f"docb-{SCHEMA}@test.invalid", "username": f"docb{SCHEMA[-6:]}", "password": hash_password("Passw0rd!"), "name": "Doctor B", "role": "doctor"},
             {"id": lab_tech_id, "tenant_id": tenant_id, "tenant_name": SCHEMA, "email": f"lab-{SCHEMA}@test.invalid", "username": f"lab{SCHEMA[-6:]}", "password": hash_password("Passw0rd!"), "name": "Lab Tech", "role": "lab_technician"},
+            {"id": nurse_id, "tenant_id": tenant_id, "tenant_name": SCHEMA, "email": f"nurse-{SCHEMA}@test.invalid", "username": f"nurse{SCHEMA[-6:]}", "password": hash_password("Passw0rd!"), "name": "Nurse", "role": "nurse"},
+            {"id": receptionist_id, "tenant_id": tenant_id, "tenant_name": SCHEMA, "email": f"reception-{SCHEMA}@test.invalid", "username": f"reception{SCHEMA[-6:]}", "password": hash_password("Passw0rd!"), "name": "Reception", "role": "receptionist"},
         ])
         await conn.execute(text("""
             INSERT INTO public.tenant_features (id, tenant_id, feature, enabled, created_at, updated_at)
@@ -134,8 +140,9 @@ async def ctx():
     transport = ASGITransport(app=_get_app())
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield {
-            "client": client, "tenant_id": tenant_id, "admin_id": admin_id,
+            "client": client, "tenant_id": tenant_id, "facility_id": facility_id, "admin_id": admin_id,
             "doctor_a_user_id": doctor_a_user_id, "doctor_b_user_id": doctor_b_user_id, "lab_tech_id": lab_tech_id,
+            "nurse_id": nurse_id, "receptionist_id": receptionist_id,
             "visit_a_id": visit_a_id, "visit_b_id": visit_b_id,
             "active_test_id": active_test_id, "inactive_test_id": inactive_test_id, "no_price_test_id": no_price_test_id,
             "maker": maker,
@@ -145,14 +152,19 @@ async def ctx():
     async with cleanup_engine.begin() as conn:
         await conn.execute(text(f'DROP SCHEMA IF EXISTS "{SCHEMA}" CASCADE'))
         await conn.execute(text("DELETE FROM public.tenant_features WHERE tenant_id = :id"), {"id": tenant_id})
-        await conn.execute(text("DELETE FROM public.users WHERE id = ANY(:ids)"), {"ids": [admin_id, doctor_a_user_id, doctor_b_user_id, lab_tech_id]})
+        await conn.execute(text("DELETE FROM public.users WHERE id = ANY(:ids)"), {"ids": [admin_id, doctor_a_user_id, doctor_b_user_id, lab_tech_id, nurse_id, receptionist_id]})
         await conn.execute(text("DELETE FROM public.tenants WHERE id = :id"), {"id": tenant_id})
     await cleanup_engine.dispose()
     await engine.dispose()
 
 
 def _token(ctx, user_key: str, role: str) -> str:
-    return create_access_token(str(ctx[user_key]), {"role": role, "tenant_id": str(ctx["tenant_id"]), "tenant_schema": SCHEMA})
+    return create_access_token(str(ctx[user_key]), {
+        "role": role,
+        "tenant_id": str(ctx["tenant_id"]),
+        "tenant_schema": SCHEMA,
+        "facility_id": str(ctx["facility_id"]),
+    })
 
 
 def _auth(token: str) -> dict:
@@ -245,8 +257,8 @@ async def test_lab_technician_sees_result_ready_orders_in_default_worklist(ctx):
     maker = ctx["maker"]
     session = maker()
     await session.execute(text(f'SET search_path TO "{SCHEMA}", public'))
-    order = LabOrder(id=uuid.uuid4(), visit_id=ctx["visit_a_id"], uhid="LABRA3-A", tests=[{"test_code": "CBC-RA3", "price": 250.0}], status="result_ready", result_ready_at=datetime.now(timezone.utc))
-    completed_order = LabOrder(id=uuid.uuid4(), visit_id=ctx["visit_a_id"], uhid="LABRA3-A", tests=[{"test_code": "CBC-RA3", "price": 250.0}], status="completed", completed_at=datetime.now(timezone.utc))
+    order = LabOrder(id=uuid.uuid4(), visit_id=ctx["visit_a_id"], facility_id=ctx["facility_id"], uhid="LABRA3-A", tests=[{"test_code": "CBC-RA3", "price": 250.0}], status="result_ready", result_ready_at=datetime.now(timezone.utc))
+    completed_order = LabOrder(id=uuid.uuid4(), visit_id=ctx["visit_a_id"], facility_id=ctx["facility_id"], uhid="LABRA3-A", tests=[{"test_code": "CBC-RA3", "price": 250.0}], status="completed", completed_at=datetime.now(timezone.utc))
     session.add_all([order, completed_order])
     await session.commit()
     order_id, completed_id = order.id, completed_order.id
@@ -258,6 +270,133 @@ async def test_lab_technician_sees_result_ready_orders_in_default_worklist(ctx):
     ids = {row["id"] for row in resp.json()}
     assert str(order_id) in ids, "result_ready order must remain visible to the verifier"
     assert str(completed_id) not in ids, "completed orders are excluded from the default worklist"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_nurse_and_receptionist_receive_only_approved_lab_projections(ctx):
+    session = ctx["maker"]()
+    await session.execute(text(f'SET search_path TO "{SCHEMA}", public'))
+    order = LabOrder(
+        id=uuid.uuid4(), visit_id=ctx["visit_a_id"], facility_id=ctx["facility_id"], uhid="LABRA3-A",
+        tests=[{"test_code": "CBC-RA3", "test_name": "Complete Blood Count", "sample_type": "Blood", "notes": "Use EDTA", "reference_range": "4.5-11.0", "price": 250.0}],
+        status="verified", sample_collected_at=datetime.now(timezone.utc), verified_at=datetime.now(timezone.utc),
+    )
+    session.add(order)
+    await session.flush()
+    session.add(LabResult(
+        id=uuid.uuid4(), lab_order_id=order.id, uhid="LABRA3-A", results={"CBC-RA3": "15.2"},
+        notes="Doctor-only interpretation", critical_flags={"CBC-RA3": True}, report_url="https://example.invalid/report.pdf",
+        reported_by_user_id=ctx["lab_tech_id"], verified_by_user_id=ctx["lab_tech_id"], verified_at=datetime.now(timezone.utc),
+    ))
+    await session.commit()
+    await session.close()
+
+    nurse_response = await ctx["client"].get("/api/v1/lab", headers=_auth(_token(ctx, "nurse_id", "nurse")))
+    assert nurse_response.status_code == 200, nurse_response.text
+    nurse_row = next(row for row in nurse_response.json() if row["id"] == str(order.id))
+    assert set(nurse_row) == {
+        "id", "patient_id", "patient_name", "visit_id", "appointment_id", "doctor_name", "tests",
+        "ordered_at", "collection_status", "sample_collected_at", "status", "critical_result",
+    }
+    assert nurse_row["critical_result"] is True
+    assert set(nurse_row["tests"][0]) == {"test_code", "test_name", "sample_type", "collection_instructions"}
+
+    reception_response = await ctx["client"].get("/api/v1/lab", headers=_auth(_token(ctx, "receptionist_id", "receptionist")))
+    assert reception_response.status_code == 200, reception_response.text
+    reception_row = next(row for row in reception_response.json() if row["id"] == str(order.id))
+    assert set(reception_row) == {
+        "id", "patient_id", "patient_name", "visit_id", "appointment_id", "test_names", "collection_completed", "status",
+    }
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_doctor_and_nurse_cannot_mutate_lab_lifecycle(ctx):
+    session = ctx["maker"]()
+    await session.execute(text(f'SET search_path TO "{SCHEMA}", public'))
+    order = LabOrder(id=uuid.uuid4(), visit_id=ctx["visit_a_id"], facility_id=ctx["facility_id"], uhid="LABRA3-A", tests=[], status="processing")
+    session.add(order)
+    await session.commit()
+    await session.close()
+
+    for user_key, role in (("doctor_a_user_id", "doctor"), ("nurse_id", "nurse")):
+        headers = _auth(_token(ctx, user_key, role))
+        status_response = await ctx["client"].patch(f"/api/v1/lab/{order.id}/status", params={"new_status": "result_ready"}, headers=headers)
+        result_response = await ctx["client"].post(f"/api/v1/lab/{order.id}/results", json={"results": {"CBC": "normal"}}, headers=headers)
+        assert status_response.status_code == 403
+        assert result_response.status_code == 403
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_direct_id_result_access_is_facility_scoped(ctx):
+    other_facility_id = uuid.uuid4()
+    session = ctx["maker"]()
+    await session.execute(text(f'SET search_path TO "{SCHEMA}", public'))
+    order = LabOrder(id=uuid.uuid4(), visit_id=ctx["visit_a_id"], facility_id=other_facility_id, uhid="LABRA3-A", tests=[], status="result_ready")
+    session.add(order)
+    await session.flush()
+    session.add(LabResult(id=uuid.uuid4(), lab_order_id=order.id, uhid="LABRA3-A", results={"CBC": "secret"}, reported_by_user_id=ctx["lab_tech_id"]))
+    await session.commit()
+    await session.close()
+
+    response = await ctx["client"].get(f"/api/v1/lab/{order.id}/results", headers=_auth(_token(ctx, "lab_tech_id", "lab_technician")))
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_rejection_audit_captures_status_before_mutation(ctx):
+    session = ctx["maker"]()
+    await session.execute(text(f'SET search_path TO "{SCHEMA}", public'))
+    order = LabOrder(id=uuid.uuid4(), visit_id=ctx["visit_a_id"], facility_id=ctx["facility_id"], uhid="LABRA3-A", tests=[], status="sample_collected")
+    session.add(order)
+    await session.commit()
+    await session.close()
+
+    response = await ctx["client"].post(f"/api/v1/lab/{order.id}/reject", headers=_auth(_token(ctx, "lab_tech_id", "lab_technician")))
+    assert response.status_code == 200, response.text
+    verify = ctx["maker"]()
+    await verify.execute(text(f'SET search_path TO "{SCHEMA}", public'))
+    audit = await verify.scalar(select(AuditLog).where(AuditLog.resource_id == str(order.id)).order_by(AuditLog.timestamp.desc()))
+    assert audit.old_value == {"status": "sample_collected"}
+    assert audit.new_value == {"status": "rejected"}
+    await verify.close()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_verification_rolls_back_on_billing_failure_and_can_retry(ctx, monkeypatch):
+    import app.services.lab_billing_service as billing_service
+
+    session = ctx["maker"]()
+    await session.execute(text(f'SET search_path TO "{SCHEMA}", public'))
+    order = LabOrder(id=uuid.uuid4(), visit_id=ctx["visit_a_id"], facility_id=ctx["facility_id"], uhid="LABRA3-A", tests=[{"test_code": "CBC-RA3", "test_name": "CBC", "price": 250.0}], status="result_ready")
+    session.add(order)
+    await session.flush()
+    result = LabResult(id=uuid.uuid4(), lab_order_id=order.id, uhid="LABRA3-A", results={"CBC-RA3": "normal"}, reported_by_user_id=ctx["lab_tech_id"])
+    session.add(result)
+    await session.commit()
+    await session.close()
+
+    original_create_invoice = billing_service.create_lab_invoice_if_needed
+
+    async def fail_billing(*args, **kwargs):
+        raise RuntimeError("billing unavailable")
+
+    monkeypatch.setattr(billing_service, "create_lab_invoice_if_needed", fail_billing)
+    headers = _auth(_token(ctx, "lab_tech_id", "lab_technician"))
+    failed = await ctx["client"].post(f"/api/v1/lab/{order.id}/verify", headers=headers)
+    assert failed.status_code == 502, failed.text
+
+    verify = ctx["maker"]()
+    await verify.execute(text(f'SET search_path TO "{SCHEMA}", public'))
+    persisted_order = await verify.get(LabOrder, order.id)
+    persisted_result = await verify.get(LabResult, result.id)
+    assert persisted_order.status == "result_ready"
+    assert persisted_order.verified_at is None
+    assert persisted_result.verified_at is None
+    await verify.close()
+
+    monkeypatch.setattr(billing_service, "create_lab_invoice_if_needed", original_create_invoice)
+    retried = await ctx["client"].post(f"/api/v1/lab/{order.id}/verify", headers=headers)
+    assert retried.status_code == 200, retried.text
 
 
 @pytest.mark.asyncio(loop_scope="module")

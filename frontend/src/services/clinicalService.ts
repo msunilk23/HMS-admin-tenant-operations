@@ -49,6 +49,9 @@ export const billingService = {
   createInvoice: (data: InvoiceCreate) =>
     apiClient.post<Invoice>('/billing', data).then(r => r.data),
 
+  listByVisit: (visitId: string) =>
+    apiClient.get<Invoice[]>('/billing', { params: { visit_id: visitId } }).then(r => r.data),
+
   getByVisit: (visitId: string) =>
     apiClient.get<Invoice>(`/billing/visit/${visitId}`).then(r => r.data),
 
