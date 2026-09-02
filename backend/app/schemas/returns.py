@@ -212,6 +212,7 @@ class SupplierReturnItemCreate(BaseModel):
 class SupplierReturnCreate(BaseModel):
     """Create supplier return request."""
     supplier_id: UUID = Field(..., description="Supplier ID")
+    pharmacy_location_id: UUID = Field(..., description="Pharmacy location holding the returned stock")
     goods_receipt_id: Optional[UUID] = Field(None, description="Reference GRN")
     return_reason: str = Field(..., min_length=10, description="Reason for return")
     items: list[SupplierReturnItemCreate] = Field(..., min_length=1, description="Items being returned")
