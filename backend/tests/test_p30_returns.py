@@ -290,6 +290,7 @@ class TestSupplierReturnService:
         # Create return request
         request_data = SupplierReturnCreate(
             supplier_id=supplier_id,
+            pharmacy_location_id=pharmacy_location_id,
             return_reason="Batch arrived damaged",
             items=[
                 SupplierReturnItemCreate(
