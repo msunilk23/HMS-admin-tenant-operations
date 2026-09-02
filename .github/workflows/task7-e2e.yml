@@ -179,6 +179,12 @@ jobs:
           curl --fail --silent --show-error http://localhost:55173/ > /dev/null
       - name: Stop Compose health stack
         if: always()
+        env:
+          POSTGRES_USER: hospital_user
+          POSTGRES_DB: hospital
+          POSTGRES_DB_URL_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD }}
+          PGADMIN_DEFAULT_EMAIL: ci-admin@example.invalid
+          PGADMIN_DEFAULT_PASSWORD: ${{ secrets.CI_SECRET_KEY }}
         run: docker compose -f infra/docker-compose.yml down --volumes --remove-orphans
       - name: Validate PostgreSQL backup and restore
         env:
