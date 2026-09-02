@@ -61,7 +61,7 @@ test.describe.serial('P28 pharmacy dispensing workflow', () => {
     await page.reload()
     await expect(page.getByText(/dispensed orders today/i)).toBeVisible()
 
-    const snapshot = JSON.parse(execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'snapshot'], {
+    const snapshot = JSON.parse(execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'snapshot_p28'], {
       cwd: path.join(repoRoot, 'backend'),
       encoding: 'utf8',
       env: {
