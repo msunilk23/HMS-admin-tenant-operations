@@ -235,21 +235,18 @@ jobs:
               else:
                   raise SystemExit(f'Service did not start: {url}')
           PY
-      - name: Clean deterministic browser fixture schemas
+      - name: Clean deterministic authentication fixture schemas
         working-directory: backend
         env:
           E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
         run: python tests/e2e_seed_task7.py cleanup
-      - name: Run Phase 1 browser suite
-        working-directory: frontend
-        env:
-          E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
-        run: npm run e2e -- --reporter=line
       - name: Seed disposable runtime authentication fixture
         working-directory: backend
         env:
           E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
-        run: python tests/e2e_seed_task7.py seed
+        run: |
+          python tests/e2e_seed_task7.py seed
+          python tests/e2e_seed_task7.py seed_ra5_scenario
       - name: Verify runtime health and tenant authentication
         run: |
           python - <<'PY'
@@ -307,10 +304,16 @@ jobs:
         env:
           E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
         run: python tests/e2e_seed_task7.py cleanup
-      - name: Scan committed history for secrets
+      - name: Run Phase 1 browser suite
+        working-directory: frontend
+        env:
+          E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
+        run: npm run e2e -- --reporter=line
+      - name: Scan committed history and worktree for secrets
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
           ./gitleaks git --redact --no-banner --exit-code 1 .
+          ./gitleaks dir --redact --no-banner --exit-code 1 .
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
