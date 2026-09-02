@@ -1,0 +1,8 @@
+title = "Repository gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore legacy payment guide history that previously embedded Razorpay example values"
+paths = ['''(^|/)PAYMENT_TESTING_GUIDE\.md$''']
