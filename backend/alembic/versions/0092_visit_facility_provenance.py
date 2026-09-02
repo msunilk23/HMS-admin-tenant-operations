@@ -20,20 +20,28 @@ def upgrade() -> None:
     if schema == "public":
         return
 
+    inspector = sa.inspect(bind)
+    if not inspector.has_table("visits"):
+        return
     tenant_id = bind.execute(
         text("SELECT id FROM public.tenants WHERE schema_name = :schema"),
         {"schema": schema},
     ).scalar_one()
-    op.add_column("visits", sa.Column("facility_id", sa.UUID(), nullable=True))
+    visit_columns = {column["name"] for column in inspector.get_columns("visits")}
+    if "facility_id" not in visit_columns:
+        op.add_column("visits", sa.Column("facility_id", sa.UUID(), nullable=True))
     bind.execute(text("UPDATE visits SET facility_id = :facility_id"), {"facility_id": tenant_id})
     op.alter_column("visits", "facility_id", nullable=False)
-    op.create_index("ix_visits_facility_id", "visits", ["facility_id"])
-    bind.execute(text("""
-        UPDATE lab_orders
-        SET facility_id = visits.facility_id
-        FROM visits
-        WHERE lab_orders.visit_id = visits.id
-    """))
+    visit_indexes = {index["name"] for index in sa.inspect(bind).get_indexes("visits")}
+    if "ix_visits_facility_id" not in visit_indexes:
+        op.create_index("ix_visits_facility_id", "visits", ["facility_id"])
+    if inspector.has_table("lab_orders"):
+        bind.execute(text("""
+            UPDATE lab_orders
+            SET facility_id = visits.facility_id
+            FROM visits
+            WHERE lab_orders.visit_id = visits.id
+        """))
 
 
 def downgrade() -> None:

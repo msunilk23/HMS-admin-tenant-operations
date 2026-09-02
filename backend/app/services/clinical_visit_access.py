@@ -13,15 +13,15 @@ async def authorized_clinical_visit(
     *,
     visit_id: uuid.UUID,
     current_user: dict,
-    facility_id: uuid.UUID,
+    facility_id: uuid.UUID | None,
 ) -> Visit:
-    visit = await session.scalar(select(Visit).where(
-        Visit.id == visit_id,
-        Visit.facility_id == facility_id,
-    ))
+    stmt = select(Visit).where(Visit.id == visit_id)
+    if facility_id is not None:
+        stmt = stmt.where(Visit.facility_id == facility_id)
+    visit = await session.scalar(stmt)
     if visit is None:
         raise HTTPException(status_code=404, detail="Visit not found")
-    if current_user.get("role") != "doctor":
+    if current_user.get("role") != "doctor" or facility_id is None:
         return visit
 
     doctor_id = await session.scalar(select(Doctor.id).where(

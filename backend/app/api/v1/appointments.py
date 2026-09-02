@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import get_facility_id
 from app.core.dependencies import require_role, require_feature
 from app.db.engine import get_session
 from app.models.tenant.appointment import Appointment
@@ -414,6 +415,7 @@ async def checkin_appointment(
     current_user: dict = Depends(require_role(
         "receptionist", "hospital_admin",
     )),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     appt = await session.get(Appointment, appt_id)
     if not appt:
@@ -468,6 +470,7 @@ async def checkin_appointment(
     # Create Visit in the canonical OPD lifecycle; billing remains a separate downstream concern.
     visit = Visit(
         id=uuid.uuid4(),
+        facility_id=facility_id,
         patient_id=appt.patient_id,
         uhid=patient.uhid if patient else None,
         doctor_id=appt.doctor_id,

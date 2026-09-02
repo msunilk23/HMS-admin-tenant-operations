@@ -20,15 +20,22 @@ def upgrade() -> None:
     if schema == "public":
         return
 
-    op.add_column(
-        "pharmacy_dispenses",
-        sa.Column("classification", sa.String(length=30), nullable=False, server_default="OPD_PRESCRIPTION"),
-    )
-    op.create_check_constraint(
-        "ck_pharmacy_dispenses_classification",
-        "pharmacy_dispenses",
-        "classification = 'OPD_PRESCRIPTION'",
-    )
+    inspector = sa.inspect(bind)
+    if not inspector.has_table("pharmacy_dispenses"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("pharmacy_dispenses")}
+    if "classification" not in columns:
+        op.add_column(
+            "pharmacy_dispenses",
+            sa.Column("classification", sa.String(length=30), nullable=False, server_default="OPD_PRESCRIPTION"),
+        )
+    checks = {constraint["name"] for constraint in sa.inspect(bind).get_check_constraints("pharmacy_dispenses")}
+    if "ck_pharmacy_dispenses_classification" not in checks:
+        op.create_check_constraint(
+            "ck_pharmacy_dispenses_classification",
+            "pharmacy_dispenses",
+            "classification = 'OPD_PRESCRIPTION'",
+        )
 
 
 def downgrade() -> None:

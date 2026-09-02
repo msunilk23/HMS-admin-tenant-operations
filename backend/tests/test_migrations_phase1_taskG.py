@@ -80,14 +80,6 @@ def _load_migration_module(filename: str):
     return module
 
 
-@pytest.fixture(scope="module")
-def monkeypatch_module():
-    from _pytest.monkeypatch import MonkeyPatch
-    mp = MonkeyPatch()
-    yield mp
-    mp.undo()
-
-
 TEST_TENANT_SCHEMA = f"test_mig_taskg_{uuid.uuid4().hex[:8]}"
 
 
@@ -164,26 +156,39 @@ def test_exactly_one_alembic_head(registered_tenant):
     assert len(head_lines) == 1, f"Expected exactly one Alembic head, got: {result.stdout}"
 
 
-def test_downgrade_and_reupgrade_of_document_migrations_is_safe(registered_tenant):
-    # 0089 (Super Admin/tenant decoupling) is an intentionally forward-only
-    # policy migration: its downgrade() deliberately raises once any user is
-    # tenant-independent — a condition its own upgrade() unconditionally
-    # creates for every super_admin. Since repository head 0090 depends on 0089,
-    # ANY downgrade from head must pass through that guard; there is no
-    # database state reachable via `alembic downgrade` from head that avoids
-    # it. This test therefore asserts the forward-only contract is enforced
-    # (a controlled, documented failure) rather than attempting a downgrade
-    # that is designed to fail. 0088 remains the last automatically
-    # reversible migration — see docs/RELEASE_A_FINAL_READINESS_AND_OPD_UAT.md.
-    down = _run_alembic("downgrade", "0088")
-    assert down.returncode != 0, "0089 downgrade must fail — it is intentionally forward-only"
-    assert "Cannot downgrade while tenant-independent users exist" in down.stderr
+def test_downgrade_and_reupgrade_of_release_a_migrations_is_safe(registered_tenant):
+    upgrade = _run_alembic("upgrade", "head")
+    assert upgrade.returncode == 0, upgrade.stderr
 
-    # Confirm the failed downgrade attempt left the database at head (Alembic
-    # runs migrations transactionally, so a raised exception rolls back).
-    heads = _run_alembic("heads")
-    assert heads.returncode == 0, heads.stderr
-    assert "0090" in heads.stdout
+    down = _run_alembic("downgrade", "0090")
+    assert down.returncode == 0, down.stderr
+
+    reupgrade = _run_alembic("upgrade", "head")
+    assert reupgrade.returncode == 0, reupgrade.stderr
+    current = _run_alembic("current")
+    assert current.returncode == 0, current.stderr
+    assert "0092" in current.stdout
+
+
+def test_0089_downgrade_rejects_tenant_independent_users(monkeypatch):
+    migration = _load_migration_module("0089_decouple_super_admin_from_tenants.py")
+
+    class Context:
+        version_table_schema = "public"
+
+    class Result:
+        def scalar_one(self):
+            return 1
+
+    class Bind:
+        def execute(self, statement):
+            return Result()
+
+    monkeypatch.setattr(migration.op, "get_context", lambda: Context())
+    monkeypatch.setattr(migration.op, "get_bind", lambda: Bind())
+
+    with pytest.raises(RuntimeError, match="Cannot downgrade while tenant-independent users exist"):
+        migration.downgrade()
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")

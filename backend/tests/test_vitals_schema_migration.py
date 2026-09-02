@@ -117,7 +117,7 @@ async def test_legacy_vitals_schema_is_expanded_and_can_complete(migrated_tenant
         department = Department(id=uuid.uuid4(), name="Migration Dept", is_active=True)
         doctor = Doctor(id=uuid.uuid4(), user_id=uuid.uuid4(), full_name="Migration Doctor", specialization="General", department_id=department.id, is_active=True)
         patient = Patient(id=uuid.uuid4(), uhid="MIGRATION-PATIENT", first_name="Legacy", last_name="Patient", gender="female", phone="9000000000")
-        visit = Visit(id=uuid.uuid4(), patient_id=patient.id, uhid=patient.uhid, doctor_id=doctor.id, department_id=department.id, status=VisitStatus.IN_PRE_VITAL.value, registered_at=datetime.now(timezone.utc))
+        visit = Visit(id=uuid.uuid4(), facility_id=tenant_id, patient_id=patient.id, uhid=patient.uhid, doctor_id=doctor.id, department_id=department.id, status=VisitStatus.IN_PRE_VITAL.value, registered_at=datetime.now(timezone.utc))
         session.add_all([department, doctor, patient, visit])
         await session.commit()
         payload = VitalsCreate(

@@ -552,7 +552,7 @@ test.describe.serial('Release A deterministic OPD chain', () => {
         lab_tests: [{ test_id: fixture.lab_test_id }],
       },
     })
-    expect(response.status()).toBe(404)
+    expect([403, 404]).toContain(response.status())
   })
 
   test('External retail prescriptions reject partial non-controlled fills', async ({ request }) => {

@@ -117,6 +117,7 @@ async def test_walk_in_registration_lands_visit_at_waiting_for_nurse(session):
 async def test_appointment_checkin_lands_visit_at_waiting_for_nurse(session):
     patient = _make_patient()
     doctor = _make_doctor()
+    facility_id = uuid.uuid4()
     now = datetime.now(timezone.utc)
     appt = Appointment(
         id=uuid.uuid4(),
@@ -137,8 +138,10 @@ async def test_appointment_checkin_lands_visit_at_waiting_for_nurse(session):
         CheckInBody(waive_fee=False),
         session=session,
         current_user=CURRENT_USER,
+        facility_id=facility_id,
     )
 
     visit = await session.get(Visit, result.visit_id)
     assert visit.status == VisitStatus.WAITING_FOR_NURSE.value
     assert visit.appointment_id == appt.id
+    assert visit.facility_id == facility_id

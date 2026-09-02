@@ -122,14 +122,18 @@ async def test_consultation_lifecycle_columns_backfill_from_visit_state(tenant_s
             INSERT INTO patients (id, uhid, first_name, last_name, gender, phone)
             VALUES (:patient, 'PARITY-1', 'Parity', 'Patient', 'female', '9000000000')
         """), {"patient": patient_id})
+        facility_id = (await conn.execute(
+            text("SELECT id FROM public.tenants WHERE schema_name = :schema"),
+            {"schema": schema},
+        )).scalar_one()
         await conn.execute(text("""
             INSERT INTO doctors (id, user_id, full_name, specialization, department_id, is_active)
             VALUES (:doctor, :user, 'Parity Doctor', 'General', :department, true)
         """), {"doctor": doctor_id, "user": uuid.uuid4(), "department": department_id})
         await conn.execute(text("""
-            INSERT INTO visits (id, patient_id, uhid, doctor_id, department_id, status)
-            VALUES (:visit, :patient, 'PARITY-1', :doctor, :department, 'CONSULTATION_COMPLETED')
-        """), {"visit": visit_id, "patient": patient_id, "doctor": doctor_id, "department": department_id})
+            INSERT INTO visits (id, facility_id, patient_id, uhid, doctor_id, department_id, status)
+            VALUES (:visit, :facility, :patient, 'PARITY-1', :doctor, :department, 'CONSULTATION_COMPLETED')
+        """), {"visit": visit_id, "facility": facility_id, "patient": patient_id, "doctor": doctor_id, "department": department_id})
         await conn.execute(text("""
             INSERT INTO consultations (id, visit_id, uhid, chief_complaint)
             VALUES (:consultation, :visit, 'PARITY-1', 'Legacy consultation')

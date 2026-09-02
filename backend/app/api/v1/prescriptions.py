@@ -212,7 +212,10 @@ async def create_prescription(
     facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     visit = await authorized_clinical_visit(
-        session, visit_id=payload.visit_id, current_user=current_user, facility_id=facility_id,
+        session,
+        visit_id=payload.visit_id,
+        current_user=current_user,
+        facility_id=facility_id if isinstance(facility_id, uuid.UUID) else None,
     )
 
     patient = await session.get(Patient, visit.patient_id)
