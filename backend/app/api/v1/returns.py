@@ -372,6 +372,7 @@ async def request_supplier_return(
     location = await session.scalar(
         select(PharmacyLocation).where(
             and_(
+                PharmacyLocation.id == request.pharmacy_location_id,
                 PharmacyLocation.facility_id == facility_id,
                 PharmacyLocation.tenant_id == tenant_id,
                 PharmacyLocation.location_type == "PHARMACY",
@@ -380,14 +381,14 @@ async def request_supplier_return(
         )
     )
     if not location:
-        raise HTTPException(status_code=404, detail="Pharmacy location not found")
+        raise HTTPException(status_code=404, detail="Pharmacy location not found in the authenticated facility")
 
     try:
         result = await SupplierReturnService.request_return(
             session=session,
             tenant_id=tenant_id,
             facility_id=facility_id,
-            pharmacy_location_id=location.id,
+            pharmacy_location_id=request.pharmacy_location_id,
             request_data=request,
             requesting_user_id=UUID(str(current_user["sub"])),
         )
@@ -519,7 +520,7 @@ async def list_supplier_returns(
 async def get_supplier_return_eligibility(
     supplier_id: UUID,
     facility_id: UUID = Depends(get_facility_id),
-    pharmacy_location_id: UUID | None = None,
+    pharmacy_location_id: UUID,
     current_user: dict = Depends(require_permission("SUPPLIER_RETURN_REQUEST")),
     session: AsyncSession = Depends(get_session),
     tenant_id: UUID = Depends(get_tenant_id_from_token),
@@ -530,20 +531,19 @@ async def get_supplier_return_eligibility(
     if not supplier or not supplier.is_active:
         raise HTTPException(status_code=404, detail="Supplier not found")
 
-    if pharmacy_location_id is None:
-        location = await session.scalar(
-            select(PharmacyLocation).where(
-                and_(
-                    PharmacyLocation.tenant_id == tenant_id,
-                    PharmacyLocation.facility_id == facility_id,
-                    PharmacyLocation.location_type == "PHARMACY",
-                    PharmacyLocation.active == True,
-                )
+    location = await session.scalar(
+        select(PharmacyLocation).where(
+            and_(
+                PharmacyLocation.id == pharmacy_location_id,
+                PharmacyLocation.tenant_id == tenant_id,
+                PharmacyLocation.facility_id == facility_id,
+                PharmacyLocation.location_type == "PHARMACY",
+                PharmacyLocation.active == True,
             )
         )
-        if not location:
-            raise HTTPException(status_code=404, detail="Pharmacy location not found")
-        pharmacy_location_id = location.id
+    )
+    if not location:
+        raise HTTPException(status_code=404, detail="Pharmacy location not found in the authenticated facility")
 
     batches = (
         await session.execute(
