@@ -36,6 +36,7 @@ infra/redis_data/
 # Logs
 logs
 *.log
+gitleaks
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
