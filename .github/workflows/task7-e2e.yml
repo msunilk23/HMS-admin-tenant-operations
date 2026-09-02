@@ -176,9 +176,9 @@ jobs:
             "PGADMIN_DEFAULT_PASSWORD=$compose_pgadmin_password" \
             "REDIS_URL=redis://redis:6379" \
             "RAZORPAY_WEBHOOK_SECRET=$compose_webhook_secret" > .env
-          docker compose -f infra/docker-compose.yml config --quiet
-          docker compose -f infra/docker-compose.yml build backend frontend
-          docker compose -f infra/docker-compose.yml up -d --wait postgres redis backend frontend
+          docker compose --env-file .env -f infra/docker-compose.yml config --quiet
+          docker compose --env-file .env -f infra/docker-compose.yml build backend frontend
+          docker compose --env-file .env -f infra/docker-compose.yml up -d --wait postgres redis backend frontend
           curl --fail --silent --show-error http://localhost:58000/health
           curl --fail --silent --show-error http://localhost:55173/ > /dev/null
       - name: Stop Compose health stack
@@ -186,7 +186,7 @@ jobs:
         run: |
           if test -f .env; then
             cleanup_status=0
-            docker compose -f infra/docker-compose.yml down --volumes --remove-orphans || cleanup_status=$?
+            docker compose --env-file .env -f infra/docker-compose.yml down --volumes --remove-orphans || cleanup_status=$?
             rm -f .env
             exit "$cleanup_status"
           fi
