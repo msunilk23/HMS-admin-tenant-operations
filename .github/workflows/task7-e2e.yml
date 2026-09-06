@@ -311,9 +311,25 @@ jobs:
         run: npm run e2e -- --reporter=line
       - name: Scan committed history and worktree for secrets
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
-          ./gitleaks git --redact --no-banner --exit-code 1 .
-          ./gitleaks dir --redact --no-banner --exit-code 1 .
+          set +e
+          scanner="$RUNNER_TEMP/gitleaks"
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz -C "$RUNNER_TEMP" gitleaks
+
+          "$scanner" git --redact --no-banner --exit-code 1 . > "$RUNNER_TEMP/gitleaks-history.log" 2>&1
+          history_status=$?
+
+          # Remove generated runtime data before scanning the checkout itself.
+          rm -rf .env backend-e2e.log frontend-e2e.log \
+            frontend/dist frontend/playwright-report frontend/test-results frontend/blob-report
+
+          "$scanner" dir --redact --no-banner --exit-code 1 . > "$RUNNER_TEMP/gitleaks-worktree.log" 2>&1
+          worktree_status=$?
+
+          cat "$RUNNER_TEMP/gitleaks-history.log"
+          cat "$RUNNER_TEMP/gitleaks-worktree.log"
+          echo "Gitleaks history scan exit: $history_status"
+          echo "Gitleaks worktree scan exit: $worktree_status"
+          test "$history_status" -eq 0 && test "$worktree_status" -eq 0
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4

@@ -277,7 +277,7 @@ async def test_count_frozen_stock_is_ineligible_at_final_dispense(retail_context
         items=[{"medicine_product_id": retail_context["rx_id"], "quantity": "2", "prescribed_quantity": "2", "duration_days": 2}],
     )
     sale = await create_retail_sale(
-        session, payload=payload, idempotency_key="ra4-frozen-stock",
+        session, payload=payload, idempotency_key="synthetic-test-idempotency-ra4-frozen-001",
         tenant_id=retail_context["tenant_id"], facility_id=retail_context["facility_id"],
         actor_id=retail_context["pharmacist_a"], current_user=_user(retail_context, "pharmacist_a"),
     )
