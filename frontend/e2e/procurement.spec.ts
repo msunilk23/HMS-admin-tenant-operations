@@ -9,6 +9,7 @@ const admin = {
 }
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const basePharmacyLocationId = '9cb201ea-b1b8-5857-8f7a-764967d21f17'
 
 function resetFixture() {
   execFileSync(process.env.PYTHON ?? 'python', [
@@ -33,6 +34,13 @@ async function login(page: Page) {
   await expect(page).toHaveURL(/dashboard/)
 }
 
+async function selectBasePharmacyLocation(page: Page) {
+  const locationSelect = page.getByLabel('Pharmacy location')
+  await expect(locationSelect.locator(`option[value="${basePharmacyLocationId}"]`)).toHaveCount(1)
+  await locationSelect.selectOption(basePharmacyLocationId)
+  await expect(locationSelect).toHaveValue(basePharmacyLocationId)
+}
+
 test.describe('P26.14 procurement workflows', () => {
   test.beforeEach(() => resetFixture())
 
@@ -46,6 +54,8 @@ test.describe('P26.14 procurement workflows', () => {
     await page.goto('/admin/pharmacy/goods-receipts')
     await expect(page.getByRole('heading', { name: 'Goods Receipts' })).toBeVisible()
     await page.getByLabel(/sent purchase order/i).selectOption({ label: 'E2E-PO-0001 · SENT' })
+    await selectBasePharmacyLocation(page)
+    await expect(page.getByRole('button', { name: /create draft grn/i })).toBeEnabled()
     await page.getByRole('button', { name: /create draft grn/i }).click()
     await expect(page.getByRole('heading', { name: 'Add received batch' })).toBeVisible()
 
@@ -70,6 +80,8 @@ test.describe('P26.14 procurement workflows', () => {
     await login(page)
     await page.goto('/admin/pharmacy/goods-receipts')
     await page.getByLabel(/sent purchase order/i).selectOption({ label: 'E2E-PO-0001 · SENT' })
+    await selectBasePharmacyLocation(page)
+    await expect(page.getByRole('button', { name: /create draft grn/i })).toBeEnabled()
     await page.getByRole('button', { name: /create draft grn/i }).click()
     await page.getByLabel('Purchase order item').selectOption({ label: 'E2E-DOLO-500 · E2E Dolo 500 · ordered 10.000' })
     await page.getByPlaceholder(/received qty/i).fill('1')

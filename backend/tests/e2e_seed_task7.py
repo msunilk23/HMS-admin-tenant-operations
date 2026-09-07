@@ -232,8 +232,12 @@ async def seed():
         await conn.execute(text(f'CREATE SCHEMA "{SCHEMA_B}"'))
         await conn.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_tables(), checkfirst=False))
+        await conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        await conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0093')"))
         await conn.execute(text(f'SET search_path TO "{SCHEMA_B}", public'))
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_tables(), checkfirst=False))
+        await conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        await conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0093')"))
         await conn.execute(text('DELETE FROM public.users WHERE id IN (:doctor_id, :receptionist_id, :admin_id, :pharmacist_id, :checker_id, :nurse_id, :doctor_b_id) OR username IN (:doctor_username, :receptionist_username, :admin_username, :pharmacist_username, :checker_username, :nurse_username, :doctor_b_username)'), {
             "doctor_id": DOCTOR_USER_ID,
             "receptionist_id": RECEPTIONIST_USER_ID,
