@@ -14,6 +14,11 @@ import { labService } from '@/services/labService'
 import { visitService } from '@/services/visitService'
 import type { LabOrder, Visit } from '@/types/common'
 
+interface ResultEncounter {
+  visit: Visit
+  latestVerifiedAt?: string
+}
+
 interface LabTestDisplay {
   test?: string
   test_id?: string
@@ -67,11 +72,32 @@ export default function DoctorLabResultsPage() {
   const [selectedVisitId, setSelectedVisitId] = useState<string | null>(null)
   const [dateRange, setDateRange] = useState<{ from?: string; to?: string }>({})
 
-  // The backend already scopes visits to this doctor's own patients for
-  // role=doctor — no client-side filtering needed or trusted.
-  const { data: visits = [] } = useQuery({
-    queryKey: ['my-visits', 'lab-results'],
-    queryFn: () => visitService.list({ status: 'CONSULTATION_COMPLETED' }),
+  // The Lab API applies doctor, tenant, and facility scope before returning
+  // verified orders. Fetch Visit display metadata only for those authorized IDs.
+  const { data: verifiedOrders = [], isLoading: encountersLoading, isError: encountersError } = useQuery({
+    queryKey: ['verified-lab-result-orders'],
+    queryFn: () => labService.listOrders({ status: 'verified' }),
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const verifiedVisitIds = [...new Set(verifiedOrders.map(order => order.visit_id))]
+  const { data: encounters = [] } = useQuery({
+    queryKey: ['lab-result-encounters', verifiedVisitIds],
+    queryFn: async (): Promise<ResultEncounter[]> => {
+      const visits = await Promise.all(verifiedVisitIds.map(visitService.get))
+      return visits.map(visit => ({
+        visit,
+        latestVerifiedAt: verifiedOrders
+          .filter(order => order.visit_id === visit.id)
+          .map(order => order.result?.verified_at)
+          .filter((value): value is string => Boolean(value))
+          .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0],
+      })).sort((left, right) =>
+        new Date(right.latestVerifiedAt ?? right.visit.created_at).getTime()
+        - new Date(left.latestVerifiedAt ?? left.visit.created_at).getTime(),
+      )
+    },
+    enabled: verifiedVisitIds.length > 0,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -84,6 +110,8 @@ export default function DoctorLabResultsPage() {
 
   // WebSocket: real-time result updates
   useWebSocket('lab:update', useCallback(() => {
+    qc.invalidateQueries({ queryKey: ['verified-lab-result-orders'] })
+    qc.invalidateQueries({ queryKey: ['lab-result-encounters'] })
     if (selectedVisitId) {
       qc.invalidateQueries({ queryKey: ['lab-results', selectedVisitId] })
     }
@@ -144,9 +172,9 @@ export default function DoctorLabResultsPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
               >
                 <option value="">— Select a visit —</option>
-                {visits.map((visit: Visit) => (
+                {encounters.map(({ visit, latestVerifiedAt }) => (
                   <option key={visit.id} value={visit.id}>
-                    {visit.patient?.first_name || 'Unknown'} ({visit.patient?.uhid || 'Unknown'}) • {formatDate(visit.created_at)}
+                    {visit.patient_name || visit.patient?.first_name || 'Unknown'} ({visit.patient?.uhid || 'Unknown'}) • {formatDate(visit.created_at)}{latestVerifiedAt ? ` • Verified ${formatDate(latestVerifiedAt)}` : ''}
                   </option>
                 ))}
               </select>
@@ -179,7 +207,19 @@ export default function DoctorLabResultsPage() {
         </div>
 
         {/* Results Table */}
-        {selectedVisitId ? (
+        {encountersLoading ? (
+          <div className="bg-white rounded-lg shadow p-12 text-center" role="status">
+            <p className="text-gray-500 text-base">Loading verified Lab results…</p>
+          </div>
+        ) : encountersError ? (
+          <div className="bg-white rounded-lg shadow p-12 text-center" role="alert">
+            <p className="text-red-600 text-base">Could not load verified Lab results. Please try again.</p>
+          </div>
+        ) : encounters.length === 0 ? (
+          <div className="bg-white rounded-lg shadow p-12 text-center">
+            <p className="text-gray-500 text-base">No verified Lab results available</p>
+          </div>
+        ) : selectedVisitId ? (
           <div className="bg-white rounded-lg shadow overflow-hidden">
             {isLoading ? (
               <div className="text-center py-12" role="status">

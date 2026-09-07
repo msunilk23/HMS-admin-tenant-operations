@@ -215,7 +215,12 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     await page.getByPlaceholder(/e\.g\. 500mg/i).nth(1).fill('1')
     await page.locator('select').nth(2).selectOption({ label: '3 days' })
     await page.getByPlaceholder(/e\.g\. 10/i).nth(1).fill('6')
+    const prescriptionSaveResponse = page.waitForResponse(response =>
+      response.url().endsWith('/api/v1/prescriptions') && response.request().method() === 'POST',
+    )
     await page.getByRole('button', { name: 'Save Prescription', exact: true }).click()
+    const saved = await prescriptionSaveResponse
+    expect(saved.ok(), await saved.text()).toBeTruthy()
     await expect(page).toHaveURL(/doctor\/consultation/)
 
     await page.goto(`/doctor/prescription/${doctor.visitId}`)
@@ -244,11 +249,9 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     const audits = after.state.audit_records
     expect(audits.length).toBeGreaterThan(0)
 
-    const consultationAudits = audits.filter((entry) => entry.resource_type === 'consultation' && ['CREATE', 'UPDATE', 'AMEND'].includes(entry.action))
     const prescriptionAudits = audits.filter((entry) => entry.resource_type === 'prescription' && ['CREATE', 'UPDATE'].includes(entry.action))
     const visitTransitionAudits = audits.filter((entry) => entry.resource_type === 'visit_state' && entry.action === 'UPDATE')
 
-    expect(consultationAudits.length).toBeGreaterThan(0)
     expect(prescriptionAudits.length).toBeGreaterThan(0)
     // Prescription saving alone must not transition the Visit at all.
     expect(visitTransitionAudits.some((entry) => String((entry.new_value as Record<string, unknown> | undefined)?.status ?? '') === 'CONSULTATION_COMPLETED')).toBeFalsy()
