@@ -58,3 +58,11 @@ Future permissions should distinguish:
 Future operational roles may include `PHARMACIST`, `PHARMACY_MANAGER`, and `STORE_MANAGER`, but roles/permissions must reuse the repository's existing RBAC model and require task-level approval before schema changes.
 
 Platform Super Admin does not automatically receive tenant clinical/pharmacy mutation rights.
+
+## PF-1 Routing Permissions
+
+Doctor may complete an authorized consultation and read its routing summary.
+Receptionist, Nurse, and Hospital Admin may confirm presentation and record
+authorized outcomes. Pharmacist, Lab Technician, and Billing Officer may
+transition only their own destination steps at the authorized facility.
+Super Admin has no tenant clinical-routing access.

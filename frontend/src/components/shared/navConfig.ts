@@ -44,6 +44,7 @@ import {
   IdCard,
   Building,
   Palette,
+  Workflow,
 } from 'lucide-react'
 import { P34_PERMISSIONS } from '@/services/pharmacyDashboardService'
 
@@ -111,6 +112,7 @@ export const NAV_TREE: NavEntry[] = [
       { kind: 'link', id: 'register-visit', label: 'Register Visit', to: '/register-visit', icon: UserPlus, roles: RECEPTION },
       { kind: 'link', id: 'appointments', label: 'Appointments', to: '/appointments', icon: CalendarClock, roles: [...RECEPTION, 'nurse', 'doctor'], feature: 'appointments' },
       { kind: 'link', id: 'opd-queue', label: 'OPD Queue', to: '/queue', icon: ListOrdered, roles: [...RECEPTION, 'nurse'], feature: 'opd_queue' },
+      { kind: 'link', id: 'patient-routing', label: 'Patient Routing', to: '/routing', icon: Workflow, roles: ALL_STAFF },
     ],
   },
   {

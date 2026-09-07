@@ -20,6 +20,7 @@ from app.models.tenant.visit import Visit, VisitStatus
 from app.models.tenant.icd10_code import ICD10Code
 from app.schemas.consultation import ConsultationCreate, ConsultationRead, ConsultationUpdate
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
+from app.services.consultation_completion import complete_consultation
 from app.services.audit_service import get_audit_request_context, record_audit
 from app.websocket.manager import ws_manager
 
@@ -156,17 +157,7 @@ async def create_consultation(
             raise HTTPException(status_code=409, detail=f"Cannot start consultation: {str(exc)}") from exc
 
     if consult.status == "completed":
-        try:
-            await VisitWorkflowService.transition(
-                session,
-                visit,
-                VisitStatus.CONSULTATION_COMPLETED,
-                current_user.get("sub"),
-                VisitTransitionSource.DOCTOR,
-            )
-        except ValueError as exc:
-            await session.rollback()
-            raise HTTPException(status_code=409, detail=f"Cannot complete consultation: {str(exc)}") from exc
+        await complete_consultation(session, visit.id, current_user)
 
     record_audit(
         session,
@@ -243,18 +234,6 @@ async def update_consultation(
         new_status = data["status"]
         if new_status == "completed":
             consult.completed_at = datetime.now(timezone.utc)
-            try:
-                await VisitWorkflowService.transition(
-                    session,
-                    visit,
-                    VisitStatus.CONSULTATION_COMPLETED,
-                    current_user.get("sub"),
-                    VisitTransitionSource.DOCTOR,
-                )
-            except ValueError:
-                if visit.status != VisitStatus.CONSULTATION_COMPLETED.value:
-                    await session.rollback()
-                    raise HTTPException(status_code=409, detail="Consultation cannot be completed from the current visit state")
         elif new_status == "amended":
             consult.amended_at = datetime.now(timezone.utc)
         elif new_status in {"draft", "in_progress"}:
@@ -271,6 +250,9 @@ async def update_consultation(
         consult.completed_at = datetime.now(timezone.utc)
     if consult.status == "draft" and not consult.started_at:
         consult.started_at = datetime.now(timezone.utc)
+
+    if consult.status == "completed":
+        await complete_consultation(session, visit.id, current_user)
 
     record_audit(
         session,

@@ -12,6 +12,8 @@ from app.models.tenant.lab_test_master import LabTestMaster
 from app.models.tenant.pharmacy_queue import PharmacyQueue
 from app.models.tenant.invoice import Invoice, Payment, Refund
 from app.models.tenant.document import DocumentVersion, DocumentVersionCounter
+from app.models.tenant.document_request import PrescriptionDocumentRequest
+from app.models.tenant.patient_route import PatientRoute, PatientRouteConfiguration, PatientRouteEvent, PatientRouteStep
 from app.models.tenant.feedback import Feedback
 from app.models.tenant.nurse_roster import NurseRoster
 from app.models.tenant.nurse_department import NurseDepartment
@@ -63,6 +65,11 @@ __all__ = [
     "Invoice",
     "DocumentVersion",
     "DocumentVersionCounter",
+    "PrescriptionDocumentRequest",
+    "PatientRoute",
+    "PatientRouteConfiguration",
+    "PatientRouteEvent",
+    "PatientRouteStep",
     "Payment",
     "Refund",
     "Feedback",

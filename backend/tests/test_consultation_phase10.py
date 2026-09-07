@@ -8,6 +8,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost:
 import pytest
 import pytest_asyncio
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
@@ -20,8 +21,15 @@ from app.api.v1.consultations import create_consultation, update_consultation
 from app.db.base import Base
 from app.models.tenant.audit_log import AuditLog
 from app.models.tenant.consultation import Consultation
+from app.models.tenant.document import DocumentVersion, DocumentVersionCounter
+from app.models.tenant.document_request import PrescriptionDocumentRequest
 from app.models.tenant.doctor import Doctor
+from app.models.tenant.invoice import Invoice
+from app.models.tenant.lab_order import LabOrder
 from app.models.tenant.patient import Patient
+from app.models.tenant.patient_route import PatientRoute, PatientRouteConfiguration, PatientRouteEvent, PatientRouteStep
+from app.models.tenant.prescription import Prescription, PrescriptionItem
+from app.models.tenant.queue_token import QueueToken
 from app.models.tenant.visit import Visit, VisitStatus
 from app.models.tenant.icd10_code import ICD10Code
 from app.schemas.consultation import ConsultationCreate, ConsultationUpdate
@@ -35,6 +43,18 @@ _TABLES = [
     Consultation.__table__,
     AuditLog.__table__,
     ICD10Code.__table__,
+    Prescription.__table__,
+    PrescriptionItem.__table__,
+    LabOrder.__table__,
+    Invoice.__table__,
+    QueueToken.__table__,
+    PatientRouteConfiguration.__table__,
+    PatientRoute.__table__,
+    PatientRouteStep.__table__,
+    PatientRouteEvent.__table__,
+    PrescriptionDocumentRequest.__table__,
+    DocumentVersion.__table__,
+    DocumentVersionCounter.__table__,
 ]
 
 
@@ -122,7 +142,7 @@ async def test_consultation_can_be_saved_as_draft_in_doctor_queue(session):
 
 
 @pytest.mark.asyncio
-async def test_consultation_completion_moves_visit_to_consultation_completed(session):
+async def test_consultation_completion_closes_visit_and_creates_exit_route(session):
     doctor_user_id = uuid.uuid4()
     doctor = _make_doctor(user_id=doctor_user_id)
     patient = _make_patient()
@@ -153,7 +173,10 @@ async def test_consultation_completion_moves_visit_to_consultation_completed(ses
 
     await session.refresh(visit)
     assert response.status == "completed"
-    assert visit.status == VisitStatus.CONSULTATION_COMPLETED.value
+    assert visit.status == VisitStatus.CLOSED.value
+    route = (await session.execute(select(PatientRoute).where(PatientRoute.visit_id == visit.id))).scalar_one()
+    steps = (await session.execute(select(PatientRouteStep).where(PatientRouteStep.route_id == route.id))).scalars().all()
+    assert [step.destination for step in steps] == ["EXIT"]
 
 
 @pytest.mark.asyncio

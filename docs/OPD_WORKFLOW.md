@@ -410,3 +410,17 @@ Therefore:
 - outside purchase is a fulfillment outcome, not a prescription failure.
 
 For supported unit medicines, prescription quantity should be automatically calculated from frequency and duration, with controlled/audited override.
+
+## PF-1 Post-Consultation Routing
+
+Completing a finalized consultation closes the OPD Visit and completes its
+QueueToken in one transaction. It creates one routing journey for the Visit;
+Pharmacy, Lab, and Billing steps are independent and begin as
+`AWAITING_PATIENT`. They do not enter active department queues until an
+authorized staff member confirms presentation.
+
+The persisted presentation window defaults to 30 minutes and becomes
+`NOT_PRESENTED` after expiry. That outcome does not mean refusal or external
+fulfilment. Late presentation is explicit and becomes `PRESENTED_LATE` after
+the source prescription or Lab order is revalidated. The legacy dispatch route
+is deprecated and only adapts verified clients to these PF-1 operations.

@@ -674,3 +674,13 @@ Prescription creation creates no stock transaction.
 Only confirmed dispensing may create `DISPENSE` stock movement. Future stock transaction types include purchase, return, transfer, adjustment, expiry, damage and cycle-count adjustment.
 
 Detailed entity requirements are maintained in `docs/pharmacy/`.
+
+## PF-1 Patient Routing
+
+`patient_routes` is unique per completed `visit_id`. `patient_route_steps`
+stores one constrained step per destination, source record, deadline,
+presentation/service timestamps, late flag, and outcome reason.
+`patient_route_events` is append-only transition provenance. A unique
+`prescription_document_requests` row stores the immutable prescription
+snapshot requested during completion; rendering/storage is a later retryable
+operation.

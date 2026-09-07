@@ -236,6 +236,15 @@ Authentication
 
 All layers are required where applicable.
 
+## PF-1 Routing Boundary
+
+`ConsultationCompletionService` is the sole authority for completing a
+consultation and closing its Visit. It locks the encounter records, transitions
+through `VisitWorkflowService`, completes the OPD token, creates the
+tenant-scoped PatientRoute and persists the prescription document request in
+one database transaction. PDF rendering and delivery happen after commit and
+are retryable; notification providers are not part of PF-1.
+
 ---
 
 # 12. Authentication

@@ -37,6 +37,7 @@ import AdminDashboard from '@/features/admin/AdminDashboard'
 import TenantsPage from '@/features/super_admin/TenantsPage'
 import RequisitionsPage from '@/features/requisitions/RequisitionsPage'
 import PharmacyAdminPage from '@/features/admin/PharmacyAdminPage'
+import PatientRoutingPage from '@/features/routing/PatientRoutingPage'
 
 import { useAuthStore } from '@/features/auth/authStore'
 import TenantBranding from '@/components/shared/TenantBranding'
@@ -121,6 +122,7 @@ export default function App() {
             <Route path="/register-visit" element={<RoleGuard allowed={RECEPTION}><RegisterVisitPage /></RoleGuard>} />
             <Route path="/appointments" element={<FeatureGuard feature="appointments"><RoleGuard allowed={[...RECEPTION, 'nurse', 'doctor']}><AppointmentsPage /></RoleGuard></FeatureGuard>} />
             <Route path="/queue" element={<FeatureGuard feature="opd_queue"><RoleGuard allowed={[...RECEPTION, 'nurse']}><QueuePage /></RoleGuard></FeatureGuard>} />
+            <Route path="/routing" element={<RoleGuard allowed={ALL_STAFF}><PatientRoutingPage /></RoleGuard>} />
             <Route path="/nurse/vitals" element={<FeatureGuard feature="vitals"><RoleGuard allowed={NURSE}><NurseVitalsPage /></RoleGuard></FeatureGuard>} />
             <Route path="/nurse/roster" element={<FeatureGuard feature="nurse_roster"><RoleGuard allowed={NURSE}><RosterPage /></RoleGuard></FeatureGuard>} />
             <Route path="/doctor/consultation" element={<RoleGuard allowed={DOCTOR}><ConsultationPage /></RoleGuard>} />

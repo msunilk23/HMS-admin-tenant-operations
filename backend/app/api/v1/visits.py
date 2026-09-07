@@ -17,6 +17,7 @@ from app.models.tenant.doctor import Doctor
 from app.models.tenant.lab_order import LabOrder
 from app.models.tenant.patient import Patient
 from app.models.tenant.pharmacy_queue import PharmacyQueue
+from app.models.tenant.patient_route import PatientRoute, PatientRouteStep
 from app.models.tenant.prescription import Prescription
 from app.models.tenant.nurse_department import NurseDepartment
 from app.models.tenant.queue_token import QueueToken
@@ -25,6 +26,8 @@ from app.schemas.visit import VisitCreate, VisitDispatch, VisitRead, VisitStatus
 from app.schemas.tat import VisitTATRead
 from app.services.tat import build_visit_tat
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
+from app.services.consultation_completion import complete_consultation
+from app.services.patient_routing import present_step
 from app.websocket.manager import ws_manager
 
 router = APIRouter()
@@ -319,12 +322,12 @@ async def transition_visit_status(
     return result
 
 
-@router.post("/{visit_id}/dispatch", response_model=VisitRead)
+@router.post("/{visit_id}/dispatch", response_model=VisitRead, deprecated=True)
 async def dispatch_visit(
     visit_id: uuid.UUID,
     payload: VisitDispatch,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("nurse", "hospital_admin", "super_admin")),
+    current_user: dict = Depends(require_role("nurse", "receptionist", "hospital_admin")),
 ):
     """
     Nurse dispatch after prescription_done:
@@ -338,56 +341,20 @@ async def dispatch_visit(
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
 
-    _DISPATCH_ALLOWED = {VisitStatus.CONSULTATION_COMPLETED.value}
-    if visit.status not in _DISPATCH_ALLOWED:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Dispatch only allowed after consultation completion (current: {visit.status})",
-        )
-
     if payload.action == "close":
-        try:
-            await VisitWorkflowService.transition(
-                session,
-                visit,
-                VisitStatus.CLOSED,
-                current_user.get("sub"),
-                VisitTransitionSource.DOCTOR,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await _complete_queue_token(visit, session)
-
-    elif payload.action == "billing":
-        pass
-
-    elif payload.action == "pharmacy":
-        rx = (await session.execute(
-            select(Prescription).where(Prescription.visit_id == visit_id)
-            .order_by(Prescription.created_at.desc()).limit(1)
+        if visit.status != VisitStatus.CLOSED.value:
+            await complete_consultation(session, visit.id, current_user)
+    else:
+        route = (await session.execute(select(PatientRoute).where(PatientRoute.visit_id == visit.id))).scalar_one_or_none()
+        if not route:
+            raise HTTPException(status_code=409, detail="No PF-1 routing journey exists for this visit")
+        destination = {"pharmacy": "PHARMACY", "lab": "LAB", "billing": "BILLING"}[payload.action]
+        step = (await session.execute(
+            select(PatientRouteStep).where(PatientRouteStep.route_id == route.id, PatientRouteStep.destination == destination)
         )).scalar_one_or_none()
-        if not rx:
-            raise HTTPException(status_code=400, detail="No prescription found for this visit")
-        # Idempotent: only create if no PharmacyQueue exists yet
-        existing_pq = (await session.execute(
-            select(PharmacyQueue).where(PharmacyQueue.prescription_id == rx.id)
-        )).scalar_one_or_none()
-        if not existing_pq:
-            patient = await session.get(Patient, visit.patient_id)
-            session.add(PharmacyQueue(id=uuid.uuid4(), prescription_id=rx.id, uhid=patient.uhid if patient else None, status="pending"))
-        # Pharmacy dispatch is tracked on its own queue; OPD visit remains in the consultation lifecycle.
-        await _complete_queue_token(visit, session)
-
-    elif payload.action == "lab":
-        lab_order = (await session.execute(
-            select(LabOrder).where(LabOrder.visit_id == visit_id)
-        )).scalar_one_or_none()
-        if not lab_order:
-            raise HTTPException(status_code=400, detail="No lab order found for this visit — doctor must add lab tests first")
-        # Reset to ordered so the lab technician starts fresh
-        lab_order.status = "ordered"
-        # Lab dispatch is tracked on its own lab order; OPD visit remains in the consultation lifecycle.
-        await _complete_queue_token(visit, session)
+        if not step:
+            raise HTTPException(status_code=409, detail=f"No {destination.lower()} route exists for this visit")
+        await present_step(session, step.id, current_user, channel="LEGACY_DISPATCH")
 
     await session.commit()
     await session.refresh(visit)

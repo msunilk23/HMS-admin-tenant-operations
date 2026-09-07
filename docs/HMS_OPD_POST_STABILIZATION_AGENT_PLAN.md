@@ -261,3 +261,12 @@ For every Pharmacy task:
 7. Wait for `APPROVED - PROCEED <NEXT_TASK_ID>`.
 
 Do not implement BLE/UWB/RFID/camera pharmacy fraud analytics as part of P25-P34 unless separately approved. Preserve audit/event extension points for future Smart Hospital analytics.
+
+## PF-1 Status
+
+PF-1 Post-Consultation Patient Routing is implemented on migration `0093`.
+Consultation completion closes the OPD Visit and QueueToken atomically with
+route generation and prescription document-request persistence. Pharmacy, Lab,
+and Billing remain independent and activate only after presentation. The
+notification framework, kiosk UI, and electronic delivery providers remain
+future phases.

@@ -28,6 +28,7 @@ from app.api.v1.super_admin import router as super_admin_router
 from app.api.v1.tenants import router as tenants_router
 from app.api.v1.users import router as users_router
 from app.api.v1.visits import router as visits_router
+from app.api.v1.routing import router as routing_router
 from app.api.v1.vitals import router as vitals_router
 from app.api.v1.master_data import router as master_data_router
 from app.core.dependencies import require_tenant_user
@@ -51,6 +52,7 @@ api_router.include_router(doctor_schedules_router, prefix="/doctor-schedules", t
 api_router.include_router(appointments_router, prefix="/appointments", tags=["appointments"], **_tenant_guard)
 api_router.include_router(queue_router, prefix="/queue", tags=["queue"], **_tenant_guard)
 api_router.include_router(visits_router, prefix="/visits", tags=["visits"], **_tenant_guard)
+api_router.include_router(routing_router, tags=["patient-routing"], **_tenant_guard)
 api_router.include_router(vitals_router, prefix="/vitals", tags=["vitals"], **_tenant_guard)
 api_router.include_router(master_data_router, prefix="/master-data", tags=["master-data"], **_tenant_guard)
 api_router.include_router(consultations_router, prefix="/consultations", tags=["consultations"], **_tenant_guard)

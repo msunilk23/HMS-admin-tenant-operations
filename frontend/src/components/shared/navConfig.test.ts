@@ -58,7 +58,7 @@ describe('navConfig RBAC filtering', () => {
   it('receptionist sees Front Desk but not Pharmacy or Administration', () => {
     const tree = filterNavTree(NAV_TREE, ctx({ role: 'receptionist' }))
     expect(domainLabels(tree)).toEqual(['Front Desk', 'Requests'])
-    expect(leafLabels(tree)).toEqual(['Dashboard', 'Patients', 'Register Visit', 'Appointments', 'OPD Queue', 'Indents'])
+    expect(leafLabels(tree)).toEqual(['Dashboard', 'Patients', 'Register Visit', 'Appointments', 'OPD Queue', 'Patient Routing', 'Indents'])
   })
 
   it('nurse sees Patients, Appointments, OPD Queue, Vitals, and Nurse Roster', () => {
@@ -123,7 +123,7 @@ describe('navConfig RBAC filtering', () => {
   it('hides groups and subsections with no visible children', () => {
     // Billing officer has no clinical/lab/administration access at all.
     const tree = filterNavTree(NAV_TREE, ctx({ role: 'billing_officer' }))
-    expect(domainLabels(tree)).toEqual(['Billing', 'Requests'])
+    expect(domainLabels(tree)).toEqual(['Front Desk', 'Billing', 'Requests'])
   })
 
   it('hides Pharmacy Dashboard without the required P34 permission', () => {

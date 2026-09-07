@@ -41,6 +41,14 @@ Queue priorities are `normal`, `senior_citizen`, `pregnant`, `disabled`, `urgent
 
 ## Webhooks and WebSockets
 
+### PF-1 compatibility
+
+`POST /api/v1/visits/{visit_id}/dispatch` is deprecated. It is retained for
+verified legacy clients only and delegates to the PF-1 routing domain. `close`
+is idempotent for an already-closed Visit; `pharmacy`, `lab`, and `billing`
+record patient presentation only. It does not create or reset operational
+queues and does not change the Visit clinical state.
+
 - Razorpay webhook: `POST /api/v1/billing/razorpay/webhook`; raw-body HMAC verification and tenant resolution are mandatory.
 - WebSocket: `/ws/{tenant_schema}/{channel}`; JWT tenant must equal the URL tenant for private channels.
 - Public channels are limited to queue display and payment kiosk use cases.

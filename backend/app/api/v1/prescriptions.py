@@ -3,6 +3,7 @@ Prescriptions API — build and retrieve prescriptions for a visit.
 """
 import uuid
 import re
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,7 +17,8 @@ from app.core.dependencies import require_role
 from app.core.prescription_pdf_service import build_prescription_pdf, canonical_prescription_snapshot
 from app.db.engine import get_session
 from app.models.tenant.doctor import Doctor
-from app.models.tenant.document import DOCUMENT_TYPE_PRESCRIPTION
+from app.models.tenant.document import DOCUMENT_TYPE_PRESCRIPTION, DocumentVersion
+from app.models.tenant.document_request import PrescriptionDocumentRequest
 from app.models.tenant.lab_order import LabOrder
 from app.models.tenant.patient import Patient
 from app.models.tenant.prescription import Prescription, PrescriptionItem
@@ -38,7 +40,6 @@ from app.services.document_service import (
 )
 from app.services.document_storage import LocalFileDocumentStorage
 from app.services.clinical_visit_access import authorized_clinical_visit
-from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 from app.services.audit_service import record_audit
 from app.websocket.manager import ws_manager
 
@@ -287,19 +288,6 @@ async def create_prescription(
             )
             session.add(lab_order)
 
-    # Prescription sign-off closes the doctor workflow stage.
-    if visit.status == VisitStatus.IN_CONSULTATION.value:
-        try:
-            await VisitWorkflowService.transition(
-                session,
-                visit,
-                VisitStatus.CONSULTATION_COMPLETED,
-                current_user.get("sub"),
-                VisitTransitionSource.DOCTOR,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=f"Cannot complete consultation via prescription: {str(exc)}") from exc
-
     record_audit(
         session,
         current_user=current_user,
@@ -385,7 +373,7 @@ async def update_prescription(
 async def get_prescription(
     visit_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_role("doctor", "nurse", "pharmacist", "hospital_admin")),
+    _: dict = Depends(require_role("doctor", "nurse", "pharmacist", "receptionist", "hospital_admin")),
 ):
     rx = (await session.execute(
         select(Prescription).options(selectinload(Prescription.items)).where(Prescription.visit_id == visit_id)
@@ -425,7 +413,7 @@ def _prescription_to_snapshot(rx: Prescription, patient: Patient | None, doctor:
 async def finalize_prescription_document(
     visit_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_role("doctor", "hospital_admin")),
+    current_user: dict = Depends(require_role("doctor", "receptionist", "hospital_admin")),
 ):
     rx = (await session.execute(
         select(Prescription).where(Prescription.visit_id == visit_id)
@@ -435,10 +423,26 @@ async def finalize_prescription_document(
     if rx.status != "finalized":
         raise HTTPException(status_code=400, detail="Prescription document can be finalized only once the prescription is finalized")
 
+    request = (await session.execute(
+        select(PrescriptionDocumentRequest)
+        .where(PrescriptionDocumentRequest.prescription_id == rx.id)
+        .with_for_update()
+    )).scalar_one_or_none()
+    if request and request.document_version_id:
+        existing_document = await session.get(DocumentVersion, request.document_version_id)
+        if existing_document:
+            return existing_document
+
     visit = await session.get(Visit, rx.visit_id)
     patient = await session.get(Patient, visit.patient_id) if visit else None
     doctor = await session.get(Doctor, rx.doctor_id) if rx.doctor_id else None
-    snapshot = _prescription_to_snapshot(rx, patient, doctor)
+    snapshot = request.snapshot_json if request else _prescription_to_snapshot(rx, patient, doctor)
+    if not request:
+        request = PrescriptionDocumentRequest(
+            id=uuid.uuid4(), prescription_id=rx.id, visit_id=rx.visit_id,
+            snapshot_json=snapshot, status="PENDING_GENERATION",
+        )
+        session.add(request)
 
     generated_by_user_id = None
     sub = current_user.get("sub")
@@ -458,8 +462,11 @@ async def finalize_prescription_document(
             storage=_prescription_document_storage,
             generated_by_user_id=generated_by_user_id,
         )
-    except DocumentFinalizationError as exc:
-        raise HTTPException(status_code=409, detail="Could not finalize prescription document, please retry") from exc
+    except (DocumentFinalizationError, DocumentIntegrityError, OSError) as exc:
+        request.status = "GENERATION_FAILED"
+        request.failure_reason = str(exc)[:1000]
+        await session.commit()
+        raise HTTPException(status_code=503, detail="Prescription document generation failed; retry is available") from exc
 
     record_audit(
         session,
@@ -476,6 +483,9 @@ async def finalize_prescription_document(
             "storage_key": document.storage_key,
         },
     )
+    request.status = "GENERATED"
+    request.document_version_id = document.id
+    request.generated_at = datetime.now(timezone.utc)
     await session.commit()
     await session.refresh(document)
     return document
@@ -485,7 +495,7 @@ async def finalize_prescription_document(
 async def list_prescription_documents(
     visit_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_role("doctor", "nurse", "pharmacist", "hospital_admin")),
+    _: dict = Depends(require_role("doctor", "nurse", "pharmacist", "receptionist", "hospital_admin")),
 ):
     rx = (await session.execute(
         select(Prescription).where(Prescription.visit_id == visit_id)
@@ -500,7 +510,7 @@ async def download_prescription_document(
     visit_id: uuid.UUID,
     version: int,
     session: AsyncSession = Depends(get_session),
-    _: dict = Depends(require_role("doctor", "nurse", "pharmacist", "hospital_admin")),
+    _: dict = Depends(require_role("doctor", "nurse", "pharmacist", "receptionist", "hospital_admin")),
 ):
     rx = (await session.execute(
         select(Prescription).where(Prescription.visit_id == visit_id)
