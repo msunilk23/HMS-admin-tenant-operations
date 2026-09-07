@@ -220,6 +220,7 @@ export interface MedicineItem {
 export interface Consultation {
   id: UUID
   visit_id: UUID
+  status?: 'draft' | 'in_progress' | 'completed' | 'amended'
   chief_complaint?: string
   history?: string
   examination?: string

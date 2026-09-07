@@ -31,6 +31,7 @@ export interface VitalsCreate {
 
 export interface ConsultationCreate {
   visit_id: string
+  status?: 'draft' | 'in_progress' | 'completed' | 'amended'
   chief_complaint?: string
   history?: string
   examination?: string

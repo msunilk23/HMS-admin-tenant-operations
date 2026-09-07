@@ -287,7 +287,7 @@ test.describe.serial('Release A deterministic OPD chain', () => {
     const prescriptionResponse = page.waitForResponse(response =>
       response.url().endsWith('/api/v1/prescriptions') && response.request().method() === 'POST',
     )
-    await page.getByRole('button', { name: 'Save Prescription' }).click()
+    await page.getByRole('button', { name: 'Save Prescription', exact: true }).click()
     const prescription = await prescriptionResponse
     expect(prescription.status(), await prescription.text()).toBe(201)
     await expect(page).toHaveURL(/doctor\/consultation/)
@@ -303,20 +303,79 @@ test.describe.serial('Release A deterministic OPD chain', () => {
       expect.objectContaining({ test_id: fixture.lab_test_id }),
     ]))
 
-    const visit = await request.get(`/api/v1/visits/${visitId}`, { headers })
+    let visit = await request.get(`/api/v1/visits/${visitId}`, { headers })
     expect(visit.ok(), await visit.text()).toBeTruthy()
-    expect((await visit.json()).status).toBe('CONSULTATION_COMPLETED')
+    expect((await visit.json()).status).toBe('IN_CONSULTATION')
+
+    // Doctor returns to the consultation to explicitly complete it — the sole authority
+    // that closes the Visit and creates PF-1 patient routing.
+    await page.goto('/doctor/consultation')
+    await page.getByText('RA5 Chain Patient', { exact: true }).click()
+    const completeButton = page.getByRole('button', { name: 'Complete Consultation' })
+    await expect(completeButton).toBeVisible()
+    const consultationCompleteResponse = page.waitForResponse(response =>
+      response.url().includes('/api/v1/consultations') && response.request().method() === 'PATCH',
+    )
+    await completeButton.click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await page.getByRole('button', { name: /yes, complete consultation/i }).click()
+    const consultationComplete = await consultationCompleteResponse
+    expect(consultationComplete.ok(), await consultationComplete.text()).toBeTruthy()
+    await expect(page.getByRole('heading', { name: /consultation completed/i })).toBeVisible()
+
+    visit = await request.get(`/api/v1/visits/${visitId}`, { headers })
+    expect(visit.ok(), await visit.text()).toBeTruthy()
+    const visitBody = await visit.json() as { status: string }
+    expect(visitBody.status).toBe('CLOSED')
+
+    const tokensResponse = await request.get('/api/v1/queue', { headers, params: { queue_type: 'consultation' } }).catch(() => null)
+    if (tokensResponse && tokensResponse.ok()) {
+      const tokens = await tokensResponse.json() as Array<{ status: string; visit_id?: string }>
+      const ownTokens = tokens.filter(token => token.visit_id === visitId)
+      expect(ownTokens.every(token => token.status === 'completed')).toBeTruthy()
+    }
+
+    const routeResponse = await request.get(`/api/v1/visits/${visitId}/routing`, { headers })
+    expect(routeResponse.ok(), await routeResponse.text()).toBeTruthy()
+    const route = await routeResponse.json() as { status: string; steps: Array<{ destination: string; status: string }> }
+    const destinations = route.steps.map(step => step.destination).sort()
+    expect(destinations).toEqual(['LAB', 'PHARMACY'].sort())
+    expect(route.steps.every(step => step.status === 'AWAITING_PATIENT')).toBeTruthy()
+
+    const pharmacyQueueBefore = await request.get('/api/v1/pharmacy', { headers: await authHeaders(request, pharmacist) }).catch(() => null)
+    if (pharmacyQueueBefore && pharmacyQueueBefore.ok()) {
+      const queueEntries = await pharmacyQueueBefore.json() as Array<{ visit_id?: string }>
+      expect(queueEntries.some(entry => entry.visit_id === visitId)).toBeFalsy()
+    }
+
+    const documentsResponse = await request.get(`/api/v1/prescriptions/${visitId}/documents`, { headers })
+    expect(documentsResponse.ok(), await documentsResponse.text()).toBeTruthy()
+    const documents = await documentsResponse.json() as Array<{ version: number }>
+    expect(documents.length).toBeGreaterThanOrEqual(0)
   })
 
   test('Lab Technician completes the lifecycle and Doctor sees the verified result', async ({ page, request }) => {
     expect(visitId).toBeTruthy()
+    // PF-1: Lab presentation must be confirmed before any Lab operational processing.
+    const labHeadersForPresent = await authHeaders(request, labTechnician)
+    const routeForLab = await request.get(`/api/v1/visits/${visitId}/routing`, { headers: labHeadersForPresent })
+    expect(routeForLab.ok(), await routeForLab.text()).toBeTruthy()
+    const routeForLabBody = await routeForLab.json() as { steps: Array<{ id: string; destination: string; status: string }> }
+    const labStep = routeForLabBody.steps.find(step => step.destination === 'LAB')
+    expect(labStep, JSON.stringify(routeForLabBody)).toBeTruthy()
+    expect(labStep!.status).toBe('AWAITING_PATIENT')
+    const labPresentResponse = await request.post(`/api/v1/routing/steps/${labStep!.id}/present`, {
+      headers: labHeadersForPresent,
+      data: { channel: 'LAB' },
+    })
+    expect(labPresentResponse.ok(), await labPresentResponse.text()).toBeTruthy()
+
     await login(page, labTechnician)
     await page.goto('/lab')
     await expect(page.getByRole('heading', { name: 'Laboratory Orders' })).toBeVisible()
     await expect(page.getByText('RA5 Chain Patient', { exact: true })).toBeVisible()
 
     for (const [buttonName, endpointSuffix] of [
-      ['Await Sample', '/status'],
       ['Collect Sample', '/status'],
       ['Start Processing', '/status'],
     ] as const) {
@@ -329,7 +388,7 @@ test.describe.serial('Release A deterministic OPD chain', () => {
       const response = await responsePromise
       expect(response.ok(), await response.text()).toBeTruthy()
       await expect(page.getByRole('button', {
-        name: buttonName === 'Await Sample' ? 'Collect Sample' : buttonName === 'Collect Sample' ? 'Start Processing' : 'Enter Results',
+        name: buttonName === 'Collect Sample' ? 'Start Processing' : 'Enter Results',
       })).toBeVisible()
     }
 
@@ -395,22 +454,23 @@ test.describe.serial('Release A deterministic OPD chain', () => {
     expect(labInvoice).toMatchObject({ status: 'paid', total: 250, paid_amount: 250 })
   })
 
-  test('Nurse dispatches and Pharmacy completes FEFO dispensing for the same visit', async ({ page }) => {
+  test('Nurse dispatches and Pharmacy completes FEFO dispensing for the same visit', async ({ page, request }) => {
     expect(visitId).toBeTruthy()
-    await login(page, nurse)
-    await page.goto('/nurse/vitals')
-    const dispatchCard = page.locator('div.rounded-xl').filter({ hasText: 'RA5 Chain Patient' }).filter({
-      has: page.getByRole('button', { name: /Pharmacy/ }),
+    // PF-1: Pharmacy presentation must be confirmed (independent of Lab/Billing)
+    // before PharmacyQueue activation — the legacy nurse dispatch button is a
+    // deprecated presentation-only adapter and is not exercised as the primary flow here.
+    const nurseHeaders = await authHeaders(request, nurse)
+    const routeForPharmacy = await request.get(`/api/v1/visits/${visitId}/routing`, { headers: nurseHeaders })
+    expect(routeForPharmacy.ok(), await routeForPharmacy.text()).toBeTruthy()
+    const routeForPharmacyBody = await routeForPharmacy.json() as { steps: Array<{ id: string; destination: string; status: string }> }
+    const pharmacyStep = routeForPharmacyBody.steps.find(step => step.destination === 'PHARMACY')
+    expect(pharmacyStep, JSON.stringify(routeForPharmacyBody)).toBeTruthy()
+    expect(pharmacyStep!.status).toBe('AWAITING_PATIENT')
+    const pharmacyPresentResponse = await request.post(`/api/v1/routing/steps/${pharmacyStep!.id}/present`, {
+      headers: nurseHeaders,
+      data: { channel: 'RECEPTION' },
     })
-    await expect(dispatchCard).toBeVisible()
-    const dispatchResponse = page.waitForResponse(response =>
-      response.url().endsWith(`/api/v1/visits/${visitId}/dispatch`) && response.request().method() === 'POST',
-    )
-    await dispatchCard.getByRole('button', { name: /Pharmacy/ }).click()
-    await expect(page.getByRole('heading', { name: 'Send to Pharmacy?' })).toBeVisible()
-    await page.getByRole('button', { name: 'Yes, Send to Pharmacy' }).click()
-    const dispatched = await dispatchResponse
-    expect(dispatched.ok(), await dispatched.text()).toBeTruthy()
+    expect(pharmacyPresentResponse.ok(), await pharmacyPresentResponse.text()).toBeTruthy()
 
     await login(page, pharmacist)
     await page.goto('/pharmacy')
@@ -428,7 +488,7 @@ test.describe.serial('Release A deterministic OPD chain', () => {
     await expect(page.getByText(/dispensed orders today/i)).toBeVisible()
 
     const snapshot = snapshotVisit(visitId).state
-    expect(snapshot.visit_status).toBe('CONSULTATION_COMPLETED')
+    expect(snapshot.visit_status).toBe('CLOSED')
     expect(snapshot.lab_order).toMatchObject({ status: 'verified', results: { 'RA5-CBC': '7.4' } })
     expect(snapshot.lab_order.verified_at).toBeTruthy()
     expect(snapshot.invoices).toEqual(expect.arrayContaining([

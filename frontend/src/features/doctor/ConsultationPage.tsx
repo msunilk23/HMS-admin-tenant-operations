@@ -17,6 +17,7 @@ import { useWebSocket } from '@/hooks/useWebSocket'
 import type { Visit, Vitals, PatientHistoryItem, Consultation } from '@/types/common'
 import ClinicalAlertBanner from '@/components/shared/ClinicalAlertBanner'
 import { masterDataService, type ICD10Code } from '@/services/masterDataService'
+import CompleteConsultationDialog from '@/components/shared/CompleteConsultationDialog'
 
 function PriorityBadge({ priority }: { priority?: string }) {
   if (!priority || priority === 'normal') return null
@@ -73,6 +74,18 @@ function consultationErrorMessage(error: unknown): string {
     return `${message}${requestId ? ` Reference: ${requestId}` : ''}`
   }
   return response?.status ? `${message} (HTTP ${response.status})` : message
+}
+
+/**
+ * A completed consultation cannot be re-completed; the backend rejects the
+ * replay with 400. Treat this specific case as an idempotent success so a
+ * client-side retry (e.g. after a dropped response) never surfaces as an error.
+ */
+function isAlreadyCompletedReplay(error: unknown): boolean {
+  const response = (error as { response?: { status?: number; data?: { detail?: unknown } } })?.response
+  if (response?.status !== 400) return false
+  const detail = response?.data?.detail
+  return typeof detail === 'string' && /cannot be silently overwritten|already completed/i.test(detail)
 }
 
 function DiagnosisSelector({ index, value, setValue }: { index: number; value: string; setValue: (name: `diagnoses.${number}.${'code' | 'description' | 'master_id' | 'free_text'}`, value: string | boolean) => void }) {
@@ -135,6 +148,8 @@ export default function ConsultationPage() {
   const [vitals, setVitals] = useState<Vitals | null>(null)
   const [completedOpen, setCompletedOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'consultation' | 'history'>('consultation')
+  const [showCompleteDialog, setShowCompleteDialog] = useState(false)
+  const [completionSummary, setCompletionSummary] = useState<{ patientName: string } | null>(null)
   const qc = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
@@ -298,6 +313,53 @@ export default function ConsultationPage() {
     },
   })
 
+  // Path B: complete the consultation directly from this page (no prescription/Lab order required).
+  const { mutate: completeConsultation, isPending: isCompleting, error: completeError, reset: resetCompleteError } = useMutation({
+    mutationFn: (data: ConsultForm) => {
+      const cleanedDiagnoses = (data.diagnoses ?? [])
+        .filter(d => d.code?.trim() || d.description.trim())
+        .map(d => d.free_text
+          ? { description: d.description.trim(), free_text: true }
+          : { code: d.code?.trim() ?? '', description: d.description.trim(), master_id: d.master_id, free_text: false })
+      const payload = {
+        visit_id: selectedVisit!.id,
+        chief_complaint: data.chief_complaint,
+        history: data.history,
+        examination: data.examination,
+        notes: data.notes,
+        follow_up_date: data.follow_up_date || undefined,
+        diagnosis_icd10: cleanedDiagnoses.length > 0 ? cleanedDiagnoses : undefined,
+        free_text_diagnosis_reason: data.free_text_diagnosis_reason,
+        status: 'completed' as const,
+      }
+      return existingConsultation
+        ? consultationService.update(selectedVisit!.id, payload)
+        : consultationService.create(payload)
+    },
+    onSuccess: () => {
+      const patientName = selectedVisit?.patient_name ?? 'Patient'
+      qc.invalidateQueries({ queryKey: ['visits'] })
+      setShowCompleteDialog(false)
+      setCompletionSummary({ patientName })
+      setSelectedVisit(null)
+      setExistingConsultation(null)
+      reset()
+    },
+    onError: (error) => {
+      if (isAlreadyCompletedReplay(error)) {
+        const patientName = selectedVisit?.patient_name ?? 'Patient'
+        qc.invalidateQueries({ queryKey: ['visits'] })
+        setShowCompleteDialog(false)
+        setCompletionSummary({ patientName })
+        setSelectedVisit(null)
+        setExistingConsultation(null)
+        reset()
+      }
+    },
+  })
+
+  const isConsultationCompleted = existingConsultation?.status === 'completed'
+
   return (
     <div className="p-6 space-y-6 flex gap-6">
       {/* Left: patient queue */}
@@ -453,7 +515,24 @@ export default function ConsultationPage() {
           )}
         </div>
 
-        {!selectedVisit ? (
+        {!selectedVisit && completionSummary ? (
+          <div role="status" className="bg-emerald-50 border border-emerald-200 rounded-xl p-8 space-y-3">
+            <h2 className="text-lg font-semibold text-emerald-800">Consultation completed</h2>
+            <ul className="text-sm text-emerald-800 space-y-1 list-disc pl-5">
+              <li>Consultation completed for {completionSummary.patientName}.</li>
+              <li>OPD visit closed.</li>
+              <li>Patient routing created.</li>
+              <li>Document generation pending — available for reception printing when generated.</li>
+            </ul>
+            <button
+              type="button"
+              onClick={() => setCompletionSummary(null)}
+              className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90"
+            >
+              Back to Doctor queue
+            </button>
+          </div>
+        ) : !selectedVisit ? (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center text-gray-400">
             Select a patient from the list to begin consultation
           </div>
@@ -462,6 +541,11 @@ export default function ConsultationPage() {
         ) : (
           <>
             <ClinicalAlertBanner patientId={selectedVisit.patient_id} />
+            {isConsultationCompleted && (
+              <div role="status" className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-800">
+                This consultation is completed and the Visit is closed. Further clinical changes require the controlled amendment workflow.
+              </div>
+            )}
             {/* Vitals summary */}
             {vitals && (
               <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-xl p-4">
@@ -487,6 +571,7 @@ export default function ConsultationPage() {
 
             {/* SOAP form */}
             <form onSubmit={handleSubmit(d => saveConsultation(d))} className="space-y-5 bg-white rounded-xl border border-gray-200 p-6">
+              <fieldset disabled={isConsultationCompleted} className="space-y-5">
               {saveError && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{consultationErrorMessage(saveError)}</p>}
               <SoapField label="Chief Complaint *" error={errors.chief_complaint?.message}>
                 <textarea {...register('chief_complaint')} rows={2}
@@ -552,12 +637,28 @@ export default function ConsultationPage() {
                   className="border border-gray-300 text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50">
                   Cancel
                 </button>
-                <button type="submit" disabled={isPending}
+                <button type="submit" disabled={isPending || isCompleting}
                   className="bg-primary text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-60">
                   {isPending ? 'Saving…' : 'Save & Write Prescription →'}
                 </button>
+                <button
+                  type="button"
+                  disabled={isPending || isCompleting}
+                  onClick={handleSubmit(() => { resetCompleteError(); setShowCompleteDialog(true) })}
+                  className="bg-emerald-700 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-emerald-800 disabled:opacity-60"
+                >
+                  Complete Consultation
+                </button>
               </div>
+              </fieldset>
             </form>
+            <CompleteConsultationDialog
+              open={showCompleteDialog}
+              isSubmitting={isCompleting}
+              errorMessage={completeError ? consultationErrorMessage(completeError) : undefined}
+              onCancel={() => { if (!isCompleting) setShowCompleteDialog(false) }}
+              onConfirm={handleSubmit(d => completeConsultation(d))}
+            />
           </>
         )}
       </div>

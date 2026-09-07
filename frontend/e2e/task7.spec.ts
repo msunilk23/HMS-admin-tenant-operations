@@ -215,7 +215,7 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     await page.getByPlaceholder(/e\.g\. 500mg/i).nth(1).fill('1')
     await page.locator('select').nth(2).selectOption({ label: '3 days' })
     await page.getByPlaceholder(/e\.g\. 10/i).nth(1).fill('6')
-    await page.getByRole('button', { name: /save prescription|complete/i }).click()
+    await page.getByRole('button', { name: 'Save Prescription', exact: true }).click()
     await expect(page).toHaveURL(/doctor\/consultation/)
 
     await page.goto(`/doctor/prescription/${doctor.visitId}`)
@@ -223,17 +223,11 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     await expect(page.getByText(/500/).first()).toBeVisible()
 
     const headers = await authRequest(page.request)
-    const completeConsultation = await page.request.patch(`/api/v1/consultations/${doctor.visitId}`, {
-      headers,
-      data: { status: 'completed' },
-    })
-    const completeStatus = completeConsultation.status()
-    const completeBody = await completeConsultation.text()
-    expect([200, 404, 409], `PATCH /api/v1/consultations/${doctor.visitId} returned ${completeStatus}: ${completeBody}`).toContain(completeStatus)
-
     const after = fixtureSnapshot()
     expect(after.state.prescription_count).toBeGreaterThanOrEqual(before.state.prescription_count)
-    expect(after.state.visit_status).toBe('CONSULTATION_COMPLETED')
+    // PF-1: saving/finalizing a prescription alone must never complete the consultation
+    // or close the Visit — only the explicit Complete Consultation action does that.
+    expect(after.state.visit_status).toBe('IN_CONSULTATION')
 
     // Phase 1 has no dispense/inventory mutation in doctor prescription flow.
     expect(after.state.inventory_quantity).toBe(before.state.inventory_quantity)
@@ -251,18 +245,14 @@ test.describe.serial('Task 7 controlled clinical data', () => {
     expect(audits.length).toBeGreaterThan(0)
 
     const consultationAudits = audits.filter((entry) => entry.resource_type === 'consultation' && ['CREATE', 'UPDATE', 'AMEND'].includes(entry.action))
-    const consultationCompletionAudits = consultationAudits.filter(
-      (entry) => String((entry.new_value as Record<string, unknown> | undefined)?.status ?? '') === 'completed',
-    )
     const prescriptionAudits = audits.filter((entry) => entry.resource_type === 'prescription' && ['CREATE', 'UPDATE'].includes(entry.action))
     const visitTransitionAudits = audits.filter((entry) => entry.resource_type === 'visit_state' && entry.action === 'UPDATE')
 
-    if (completeStatus === 200) {
-      expect(consultationAudits.length).toBeGreaterThan(0)
-      expect(consultationCompletionAudits.length).toBeGreaterThan(0)
-    }
+    expect(consultationAudits.length).toBeGreaterThan(0)
     expect(prescriptionAudits.length).toBeGreaterThan(0)
-    expect(visitTransitionAudits.some((entry) => String((entry.new_value as Record<string, unknown> | undefined)?.status ?? '') === 'CONSULTATION_COMPLETED')).toBeTruthy()
+    // Prescription saving alone must not transition the Visit at all.
+    expect(visitTransitionAudits.some((entry) => String((entry.new_value as Record<string, unknown> | undefined)?.status ?? '') === 'CONSULTATION_COMPLETED')).toBeFalsy()
+    expect(visitTransitionAudits.some((entry) => String((entry.new_value as Record<string, unknown> | undefined)?.status ?? '') === 'CLOSED')).toBeFalsy()
 
     // This flow validates persisted prescription content in audit logs.
     expect(

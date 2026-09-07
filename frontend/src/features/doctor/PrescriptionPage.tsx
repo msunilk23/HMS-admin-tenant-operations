@@ -11,9 +11,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { visitService } from '@/services/visitService'
+import { visitService, consultationService } from '@/services/visitService'
 import { prescriptionService } from '@/services/clinicalService'
 import { masterDataService, type FormularyMedicineSearchResult, type LabTestMaster } from '@/services/masterDataService'
+import CompleteConsultationDialog from '@/components/shared/CompleteConsultationDialog'
+
+function completionErrorMessage(error: unknown): string {
+  const response = (error as { response?: { status?: number; data?: { detail?: unknown } } })?.response
+  const detail = response?.data?.detail
+  const message = typeof detail === 'string' ? detail : 'Consultation could not be completed.'
+  return response?.status ? `${message} (HTTP ${response.status})` : message
+}
 
 const PRESET_FREQUENCIES: { value: string; label: string }[] = [
   { value: 'OD',  label: 'OD — Once Daily' },
@@ -196,6 +204,8 @@ export default function PrescriptionPage() {
   // When the doctor comes back from here, we want to resume editing that consultation
   const backToConsultation = () => navigate('/doctor/consultation', { state: { resumeVisitId: visitId } })
   const qc = useQueryClient()
+  const [showCompleteDialog, setShowCompleteDialog] = useState(false)
+  const [completionSummary, setCompletionSummary] = useState(false)
 
   const { data: visit } = useQuery({
     queryKey: ['visit', visitId],
@@ -284,7 +294,50 @@ export default function PrescriptionPage() {
     },
   })
 
+  // Path A: after medicines/Lab orders are finalized, the doctor explicitly completes
+  // the consultation. This is the only action that closes the Visit and creates routing.
+  const { mutate: completeConsultation, isPending: isCompleting, error: completeError, reset: resetCompleteError } = useMutation({
+    mutationFn: () => consultationService.update(visitId!, { status: 'completed' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['visits'] })
+      qc.invalidateQueries({ queryKey: ['visit', visitId] })
+      setShowCompleteDialog(false)
+      setCompletionSummary(true)
+    },
+    onError: (error) => {
+      const response = (error as { response?: { status?: number; data?: { detail?: unknown } } })?.response
+      const detail = response?.data?.detail
+      // Idempotent replay of an already-completed consultation is treated as success.
+      if (response?.status === 400 && typeof detail === 'string' && /cannot be silently overwritten|already completed/i.test(detail)) {
+        qc.invalidateQueries({ queryKey: ['visits'] })
+        qc.invalidateQueries({ queryKey: ['visit', visitId] })
+        setShowCompleteDialog(false)
+        setCompletionSummary(true)
+      }
+    },
+  })
+
   return (
+    completionSummary ? (
+      <div className="p-6 max-w-4xl space-y-6">
+        <div role="status" className="bg-emerald-50 border border-emerald-200 rounded-xl p-8 space-y-3">
+          <h2 className="text-lg font-semibold text-emerald-800">Consultation completed</h2>
+          <ul className="text-sm text-emerald-800 space-y-1 list-disc pl-5">
+            <li>Consultation completed{visit ? ` for ${visit.patient_name}` : ''}.</li>
+            <li>OPD Visit closed.</li>
+            <li>Patient routing created.</li>
+            <li>Prescription finalized — document generation pending; available for reception printing when generated.</li>
+          </ul>
+          <button
+            type="button"
+            onClick={() => navigate('/doctor/consultation')}
+            className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90"
+          >
+            Back to Doctor queue
+          </button>
+        </div>
+      </div>
+    ) : (
     <div className="p-6 max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -499,13 +552,29 @@ export default function PrescriptionPage() {
             className="border border-gray-300 text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50">
             Back
           </button>
-          <button type="submit" disabled={isPending}
+          <button type="submit" disabled={isPending || isCompleting}
             className="bg-primary text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-60">
             {isPending ? 'Saving…' : 'Save Prescription'}
           </button>
+          <button
+            type="button"
+            disabled={isPending || isCompleting}
+            onClick={() => { resetCompleteError(); setShowCompleteDialog(true) }}
+            className="bg-emerald-700 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-emerald-800 disabled:opacity-60"
+          >
+            Complete Consultation
+          </button>
         </div>
       </form>
+      <CompleteConsultationDialog
+        open={showCompleteDialog}
+        isSubmitting={isCompleting}
+        errorMessage={completeError ? completionErrorMessage(completeError) : undefined}
+        onCancel={() => { if (!isCompleting) setShowCompleteDialog(false) }}
+        onConfirm={() => completeConsultation()}
+      />
     </div>
+    )
   )
 }
 
