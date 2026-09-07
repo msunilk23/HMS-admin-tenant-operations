@@ -26,7 +26,6 @@ from app.schemas.visit import VisitCreate, VisitDispatch, VisitRead, VisitStatus
 from app.schemas.tat import VisitTATRead
 from app.services.tat import build_visit_tat
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
-from app.services.consultation_completion import complete_consultation
 from app.services.patient_routing import present_step
 from app.websocket.manager import ws_manager
 
@@ -328,6 +327,7 @@ async def dispatch_visit(
     payload: VisitDispatch,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("nurse", "receptionist", "hospital_admin")),
+    facility_id: uuid.UUID = Depends(get_facility_id),
 ):
     """
     Nurse dispatch after prescription_done:
@@ -338,14 +338,14 @@ async def dispatch_visit(
     pharmacy and lab are independent — both can be dispatched for the same visit.
     """
     visit = await session.get(Visit, visit_id)
-    if not visit:
+    if not visit or visit.facility_id != facility_id:
         raise HTTPException(status_code=404, detail="Visit not found")
 
     if payload.action == "close":
         if visit.status != VisitStatus.CLOSED.value:
-            await complete_consultation(session, visit.id, current_user)
+            raise HTTPException(status_code=409, detail="Open consultations must be completed by the assigned doctor")
     else:
-        route = (await session.execute(select(PatientRoute).where(PatientRoute.visit_id == visit.id))).scalar_one_or_none()
+        route = (await session.execute(select(PatientRoute).where(PatientRoute.visit_id == visit.id, PatientRoute.facility_id == facility_id))).scalar_one_or_none()
         if not route:
             raise HTTPException(status_code=409, detail="No PF-1 routing journey exists for this visit")
         destination = {"pharmacy": "PHARMACY", "lab": "LAB", "billing": "BILLING"}[payload.action]

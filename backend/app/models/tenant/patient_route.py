@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,7 +18,7 @@ DESTINATIONS = {"PHARMACY", "LAB", "BILLING", "EXIT"}
 
 class PatientRouteConfiguration(Base, TimestampMixin):
     __tablename__ = "patient_route_configurations"
-    __table_args__ = (UniqueConstraint("tenant_id", "facility_id", name="uq_patient_route_config_scope"),)
+    __table_args__ = (CheckConstraint("presentation_window_minutes > 0", name="ck_patient_route_config_positive_window"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
@@ -31,6 +31,7 @@ class PatientRoute(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("visit_id", name="uq_patient_routes_visit"),
         Index("ix_patient_routes_patient_status", "patient_id", "status"),
+        CheckConstraint("status IN ('AWAITING_PATIENT','IN_PROGRESS','COMPLETED','TERMINAL')", name="ck_patient_routes_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -38,7 +39,7 @@ class PatientRoute(Base, TimestampMixin):
     consultation_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("consultations.id"), nullable=True, index=True)
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"), nullable=False, index=True)
     uhid: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    facility_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True, index=True)
+    facility_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="AWAITING_PATIENT")
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -49,6 +50,8 @@ class PatientRouteStep(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("route_id", "destination", name="uq_patient_route_steps_destination"),
         Index("ix_patient_route_steps_lookup", "destination", "status", "presentation_deadline_at"),
+        CheckConstraint("destination IN ('PHARMACY','LAB','BILLING','EXIT')", name="ck_patient_route_steps_destination"),
+        CheckConstraint("status IN ('AWAITING_PATIENT','PRESENTED','PRESENTED_LATE','IN_SERVICE','COMPLETED','NOT_PRESENTED','DECLINED','EXTERNAL_PURCHASE_CONFIRMED','EXTERNAL_LAB_CONFIRMED','CANCELLED')", name="ck_patient_route_steps_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -57,6 +60,7 @@ class PatientRouteStep(Base, TimestampMixin):
     destination: Mapped[str] = mapped_column(String(20), nullable=False)
     source_type: Mapped[Optional[str]] = mapped_column(String(40))
     source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column()
+    source_record_ids: Mapped[Optional[list]] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(40), nullable=False, default="AWAITING_PATIENT")
     presentation_deadline_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
     presented_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

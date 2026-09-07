@@ -80,6 +80,29 @@ def _load_migration_module(filename: str):
     return module
 
 
+def _apply_0093(sync_conn, schema: str):
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+
+    sync_conn.execute(text(f'SET search_path TO "{schema}", public'))
+    migration = _load_migration_module("0093_post_consultation_patient_routing.py")
+    context = MigrationContext.configure(sync_conn)
+    with Operations.context(context):
+        migration.upgrade()
+
+
+async def _create_pf1_dependencies(engine, schema: str):
+    async with engine.begin() as conn:
+        await conn.execute(text(f'SET search_path TO "{schema}", public'))
+        for table in ("patients", "visits", "consultations", "prescriptions"):
+            await conn.execute(text(f'CREATE TABLE IF NOT EXISTS "{schema}"."{table}" (id UUID PRIMARY KEY)'))
+
+
+async def _drop_schema(engine, schema: str):
+    async with engine.begin() as conn:
+        await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+
+
 TEST_TENANT_SCHEMA = f"test_mig_taskg_{uuid.uuid4().hex[:8]}"
 
 
@@ -167,7 +190,7 @@ def test_downgrade_and_reupgrade_of_release_a_migrations_is_safe(registered_tena
     assert reupgrade.returncode == 0, reupgrade.stderr
     current = _run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0092" in current.stdout
+    assert "0093" in current.stdout
 
 
 def test_0089_downgrade_rejects_tenant_independent_users(monkeypatch):

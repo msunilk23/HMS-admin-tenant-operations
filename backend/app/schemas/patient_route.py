@@ -12,6 +12,7 @@ class PatientRouteStepRead(BaseModel):
     destination: str
     source_type: Optional[str] = None
     source_record_id: Optional[uuid.UUID] = None
+    source_record_ids: Optional[list[uuid.UUID]] = None
     status: str
     presentation_deadline_at: Optional[datetime] = None
     presented_at: Optional[datetime] = None

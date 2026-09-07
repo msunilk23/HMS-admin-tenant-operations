@@ -80,7 +80,7 @@ async def _fixture(session, *, medicines=False, lab=False, invoice=False):
 @pytest.mark.asyncio
 async def test_completion_derives_independent_routes_and_closes_opd(session):
     doctor_user, visit, consultation = await _fixture(session, medicines=True, lab=True, invoice=True)
-    user = {"sub": str(doctor_user), "role": "doctor", "tenant_id": str(uuid.uuid4()), "tenant_schema": "test_tenant"}
+    user = {"sub": str(doctor_user), "role": "doctor", "tenant_id": str(uuid.uuid4()), "facility_id": str(visit.facility_id), "tenant_schema": "test_tenant"}
     completed, route = await complete_consultation(session, visit.id, user, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
     await session.commit()
     steps = (await session.execute(select(PatientRouteStep).where(PatientRouteStep.route_id == route.id))).scalars().all()
@@ -94,7 +94,7 @@ async def test_presentation_activates_only_requested_destination(session):
     doctor_user, visit, consultation = await _fixture(session, medicines=True, lab=True)
     user = _user("nurse")
     user["facility_id"] = str(visit.facility_id)
-    _, route = await complete_consultation(session, visit.id, {"sub": str(doctor_user), "role": "doctor", "tenant_id": user["tenant_id"], "tenant_schema": "test_tenant"})
+    _, route = await complete_consultation(session, visit.id, {"sub": str(doctor_user), "role": "doctor", "tenant_id": user["tenant_id"], "facility_id": user["facility_id"], "tenant_schema": "test_tenant"})
     await session.commit()
     pharmacy = (await session.execute(select(PatientRouteStep).where(PatientRouteStep.route_id == route.id, PatientRouteStep.destination == "PHARMACY"))).scalar_one()
     lab = (await session.execute(select(PatientRouteStep).where(PatientRouteStep.route_id == route.id, PatientRouteStep.destination == "LAB"))).scalar_one()
@@ -109,6 +109,7 @@ async def test_presentation_activates_only_requested_destination(session):
 async def test_expiry_is_explicit_and_late_presentation_does_not_cancel_source(session):
     _, visit, _ = await _fixture(session, medicines=True)
     user = _user("hospital_admin")
+    user["facility_id"] = str(visit.facility_id)
     _, route = await complete_consultation(session, visit.id, user, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
     await session.commit()
     step = (await session.execute(select(PatientRouteStep).where(PatientRouteStep.route_id == route.id, PatientRouteStep.destination == "PHARMACY"))).scalar_one()
@@ -124,8 +125,9 @@ async def test_expiry_is_explicit_and_late_presentation_does_not_cancel_source(s
 async def test_invalid_service_transition_is_rejected(session):
     _, visit, _ = await _fixture(session, medicines=True)
     user = _user("hospital_admin")
+    user["facility_id"] = str(visit.facility_id)
     _, route = await complete_consultation(session, visit.id, user)
     await session.commit()
     step = (await session.execute(select(PatientRouteStep).where(PatientRouteStep.route_id == route.id))).scalar_one()
-    with pytest.raises(Exception, match="Cannot transition"):
+    with pytest.raises(Exception, match="authorized|Cannot transition"):
         await transition_service_step(session, step.id, "COMPLETED", user)

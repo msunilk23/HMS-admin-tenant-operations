@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.tenant.consultation import Consultation
 from app.models.tenant.doctor import Doctor
@@ -15,22 +16,41 @@ from app.models.tenant.patient_route import PatientRoute
 from app.models.tenant.prescription import Prescription
 from app.models.tenant.queue_token import QueueToken
 from app.models.tenant.visit import Visit, VisitStatus
+from app.core.prescription_pdf_service import canonical_prescription_snapshot
 from app.services.audit_service import record_audit
 from app.services.patient_routing import ensure_route
 from app.services.visit_workflow import VisitTransitionSource, VisitWorkflowService
 
 
 def _document_snapshot(prescription: Prescription, visit: Visit, patient: Patient | None, doctor: Doctor | None) -> dict:
-    return {
-        "prescription": {
-            "id": str(prescription.id), "visit_id": str(visit.id), "uhid": prescription.uhid,
-            "status": prescription.status, "instructions": prescription.instructions,
-            "medicines": prescription.medicines or [],
-            "created_at": prescription.created_at.isoformat() if prescription.created_at else None,
-        },
-        "patient": {"id": str(patient.id) if patient else None, "name": f"{patient.first_name} {patient.last_name}" if patient else None},
-        "doctor": {"id": str(doctor.id) if doctor else None, "name": doctor.full_name if doctor else None},
-    }
+    medicines = [{
+        "medicine": item.medicine,
+        "name_snapshot": item.medicine,
+        "medicine_product_id": str(item.medicine_product_id) if item.medicine_product_id else None,
+        "generic_name_snapshot": item.generic_name_snapshot,
+        "brand_name_snapshot": item.brand_name_snapshot,
+        "strength": item.strength,
+        "strength_snapshot": item.strength_snapshot,
+        "dosage_form": item.dosage_form,
+        "dosage_form_snapshot": item.dosage_form_snapshot,
+        "route": item.route,
+        "route_snapshot": item.route_snapshot,
+        "dose": item.dose,
+        "frequency": item.frequency,
+        "duration": item.duration,
+        "quantity": item.quantity,
+        "instructions": item.instructions,
+    } for item in prescription.items]
+    return canonical_prescription_snapshot({
+        "id": prescription.id, "visit_id": visit.id, "uhid": prescription.uhid,
+        "status": prescription.status, "instructions": prescription.instructions,
+        "medicines": medicines, "created_at": prescription.created_at,
+        "patient_id": patient.id if patient else None,
+        "patient_name": f"{patient.first_name} {patient.last_name}" if patient else None,
+        "doctor_id": doctor.id if doctor else prescription.doctor_id,
+        "doctor_name": doctor.full_name if doctor else None,
+        "version": prescription.version,
+    })
 
 
 async def complete_consultation(session: AsyncSession, visit_id: uuid.UUID, current_user: dict, *, now: datetime | None = None) -> tuple[Visit, PatientRoute]:
@@ -48,7 +68,7 @@ async def complete_consultation(session: AsyncSession, visit_id: uuid.UUID, curr
         raise HTTPException(status_code=422, detail="Consultation is required before completion")
     if consultation.status not in {"completed", "amended"}:
         raise HTTPException(status_code=422, detail="Consultation must be finalized before completion")
-    prescription = (await session.execute(select(Prescription).where(Prescription.visit_id == visit.id).with_for_update())).scalar_one_or_none()
+    prescription = (await session.execute(select(Prescription).options(selectinload(Prescription.items)).where(Prescription.visit_id == visit.id).with_for_update())).scalar_one_or_none()
     if prescription and prescription.status != "finalized":
         raise HTTPException(status_code=422, detail="Prescription must be finalized before completion")
 

@@ -133,7 +133,7 @@ async def test_consultation_can_be_saved_as_draft_in_doctor_queue(session):
             status="draft",
         ),
         session=session,
-        current_user={"sub": str(doctor_user_id), "role": "doctor", "tenant_schema": "test_tenant"},
+        current_user={"sub": str(doctor_user_id), "role": "doctor", "tenant_id": str(uuid.uuid4()), "facility_id": str(visit.facility_id), "tenant_schema": "test_tenant"},
     )
 
     await session.refresh(visit)
@@ -153,6 +153,7 @@ async def test_consultation_completion_closes_visit_and_creates_exit_route(sessi
         doctor_id=doctor.id,
         department_id=uuid.uuid4(),
         status=VisitStatus.IN_CONSULTATION.value,
+        facility_id=uuid.uuid4(),
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
@@ -168,7 +169,7 @@ async def test_consultation_completion_closes_visit_and_creates_exit_route(sessi
             status="completed",
         ),
         session=session,
-        current_user={"sub": str(doctor_user_id), "role": "doctor", "tenant_schema": "test_tenant"},
+        current_user={"sub": str(doctor_user_id), "role": "doctor", "tenant_id": str(uuid.uuid4()), "facility_id": str(visit.facility_id), "tenant_schema": "test_tenant"},
     )
 
     await session.refresh(visit)
@@ -191,6 +192,7 @@ async def test_completed_consultations_require_explicit_amendment(session):
         doctor_id=doctor.id,
         department_id=uuid.uuid4(),
         status=VisitStatus.IN_CONSULTATION.value,
+        facility_id=uuid.uuid4(),
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
@@ -204,7 +206,7 @@ async def test_completed_consultations_require_explicit_amendment(session):
             status="completed",
         ),
         session=session,
-        current_user={"sub": str(doctor_user_id), "role": "doctor", "tenant_schema": "test_tenant"},
+        current_user={"sub": str(doctor_user_id), "role": "doctor", "tenant_id": str(uuid.uuid4()), "facility_id": str(visit.facility_id), "tenant_schema": "test_tenant"},
     )
 
     with pytest.raises(Exception):
@@ -212,7 +214,7 @@ async def test_completed_consultations_require_explicit_amendment(session):
             visit.id,
             ConsultationUpdate(notes="silent overwrite"),
             session=session,
-            current_user={"sub": str(doctor_user_id), "role": "doctor", "tenant_schema": "test_tenant"},
+            current_user={"sub": str(doctor_user_id), "role": "doctor", "tenant_id": str(uuid.uuid4()), "facility_id": str(visit.facility_id), "tenant_schema": "test_tenant"},
         )
 
     assert completed.status == "completed"

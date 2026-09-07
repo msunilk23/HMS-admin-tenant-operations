@@ -13,6 +13,7 @@ from app.middleware.audit import AuditLogMiddleware
 from app.websocket.manager import ws_manager
 from app.websocket.redis_bridge import start_redis_subscriber, stop_redis_subscriber
 from app.api.v1.router import api_router
+from app.services.routing_expiry_worker import routing_expiry_loop
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,11 @@ async def lifespan(app: FastAPI):
     
     await init_db()
     await start_redis_subscriber(ws_manager)
+    expiry_stop = __import__("asyncio").Event()
+    expiry_task = __import__("asyncio").create_task(routing_expiry_loop(expiry_stop))
     yield
+    expiry_stop.set()
+    await expiry_task
     await stop_redis_subscriber()
 
 
