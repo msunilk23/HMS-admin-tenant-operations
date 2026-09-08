@@ -85,7 +85,7 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
             "hospital_name": "",
             "full_name": user.full_name,
             "features": [],
-            "must_change_password": False,
+            "must_change_password": user.must_change_password,
             "session_version": getattr(user, "session_version", 0),
         }
     else:
@@ -124,7 +124,7 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
-        must_change_password=bool(user.must_change_password) if user.role != "super_admin" else False,
+            must_change_password=bool(user.must_change_password),
         logo_url=extra_claims.get("logo_url"),
         primary_color=extra_claims.get("primary_color"),
         secondary_color=extra_claims.get("secondary_color"),
@@ -190,7 +190,7 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
             "hospital_name": "",
             "full_name": user.full_name,
             "features": [],
-            "must_change_password": False,
+                "must_change_password": user.must_change_password,
             "session_version": getattr(user, "session_version", 0),
         }
     else:
@@ -222,7 +222,7 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
     return TokenResponse(
         access_token=access_token,
         refresh_token=new_refresh,
-        must_change_password=bool(user.must_change_password) if user.role != "super_admin" else False,
+            must_change_password=bool(user.must_change_password),
         logo_url=extra_claims.get("logo_url"),
         primary_color=extra_claims.get("primary_color"),
         secondary_color=extra_claims.get("secondary_color"),
