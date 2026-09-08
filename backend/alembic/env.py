@@ -31,6 +31,7 @@ import app.models.public.tenant_feature  # noqa: F401, E402
 import app.models.public.audit_log  # noqa: F401, E402
 import app.models.public.platform_audit_log  # noqa: F401, E402
 import app.models.public.permission  # noqa: F401, E402
+import app.models.public.tenant_integration  # noqa: F401, E402
 import app.models.tenant  # noqa: F401, E402
 
 config = context.config

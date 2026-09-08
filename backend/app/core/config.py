@@ -30,22 +30,11 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
 
-    # Razorpay (optional — for online payments)
-    RAZORPAY_KEY_ID: str = ""               # rzp_test_... or rzp_live_...
-    RAZORPAY_KEY_SECRET: str = ""
-    RAZORPAY_WEBHOOK_SECRET: str = ""       # set in Razorpay dashboard webhook settings
-
-    # Cloudinary (optional — for lab report file storage)
-    CLOUDINARY_CLOUD_NAME: str = ""
-    CLOUDINARY_API_KEY: str = ""
-    CLOUDINARY_API_SECRET: str = ""
-
-    # Notifications (optional)
-    # Twilio (optional — used for SMS / WhatsApp notifications)
-    TWILIO_ACCOUNT_SID: str = ""
-    TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_SMS_FROM_NUMBER: str = ""
-    TWILIO_WHATSAPP_FROM: str = ""          # e.g. whatsapp:+14155238886
+    # Tenant-scoped provider integrations are stored encrypted and resolved by
+    # tenant context rather than a single global credential set.
+    INTEGRATION_MASTER_KEY_FILE: str | None = None
+    INTEGRATION_MASTER_KEY: str | None = None
+    INTEGRATION_MASTER_KEY_TEST_ONLY: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

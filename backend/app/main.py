@@ -26,8 +26,7 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 80)
     logger.info("Environment: %s", settings.ENVIRONMENT)
     logger.info("Debug: %s", settings.DEBUG)
-    logger.info("RAZORPAY_KEY_ID: %s", settings.RAZORPAY_KEY_ID[:20] + "..." if settings.RAZORPAY_KEY_ID else "❌ NOT SET")
-    logger.info("RAZORPAY_WEBHOOK_SECRET: %s", "✓ SET" if settings.RAZORPAY_WEBHOOK_SECRET else "❌ NOT SET")
+    logger.info("Integration secret store: %s", "configured" if settings.INTEGRATION_MASTER_KEY_FILE or settings.INTEGRATION_MASTER_KEY else "not configured")
     logger.info("=" * 80)
     
     await init_db()

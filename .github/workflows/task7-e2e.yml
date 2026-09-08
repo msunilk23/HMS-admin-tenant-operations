@@ -39,18 +39,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Generate ephemeral CI secrets
+      - name: Generate ephemeral CI secret material
         shell: bash
         run: |
           set -euo pipefail
           ci_secret_key="$(openssl rand -hex 32)"
-          ci_webhook_secret="$(openssl rand -hex 32)"
+          ci_master_key_path="$RUNNER_TEMP/integration-master-key"
+          printf '%s' "$ci_secret_key" > "$ci_master_key_path"
           echo "::add-mask::$ci_secret_key"
-          echo "::add-mask::$ci_webhook_secret"
-          {
-            echo "SECRET_KEY=$ci_secret_key"
-            echo "RAZORPAY_WEBHOOK_SECRET=$ci_webhook_secret"
-          } >> "$GITHUB_ENV"
+          echo "SECRET_KEY=$ci_secret_key" >> "$GITHUB_ENV"
+          echo "INTEGRATION_MASTER_KEY_FILE=$ci_master_key_path" >> "$GITHUB_ENV"
+      - name: Clean up ephemeral CI secrets
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${INTEGRATION_MASTER_KEY_FILE:-}" ] && [ -f "$INTEGRATION_MASTER_KEY_FILE" ]; then
+            rm -f "$INTEGRATION_MASTER_KEY_FILE"
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -183,7 +189,7 @@ jobs:
             "PGADMIN_DEFAULT_EMAIL=$PGADMIN_DEFAULT_EMAIL" \
             "PGADMIN_DEFAULT_PASSWORD=$compose_pgadmin_password" \
             "REDIS_URL=redis://redis:6379" \
-            "RAZORPAY_WEBHOOK_SECRET=$RAZORPAY_WEBHOOK_SECRET" > .env
+            "INTEGRATION_MASTER_KEY_FILE=$INTEGRATION_MASTER_KEY_FILE" > .env
           docker compose --env-file .env -f infra/docker-compose.yml config --quiet
           docker compose --env-file .env -f infra/docker-compose.yml build backend frontend
           docker compose --env-file .env -f infra/docker-compose.yml up -d --wait postgres redis backend frontend
