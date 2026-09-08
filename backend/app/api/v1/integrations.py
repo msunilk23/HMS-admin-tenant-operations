@@ -1,22 +1,28 @@
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_role
-from app.db.engine import get_session
+from app.core.razorpay_service import verify_webhook_signature
+from app.db.engine import AsyncSessionLocal, get_session, tenant_schema_var
 from app.integrations.providers import public_provider_catalogue
-from app.models.public.tenant_integration import TenantProviderConnection, TenantProviderCredentialVersion, TenantProviderAuditEvent
+from app.models.public.tenant_integration import TenantProviderAuditEvent, TenantProviderConnection, TenantProviderCredentialVersion, TenantProviderWebhookRoute
+from app.models.public.user import Tenant
+from app.models.tenant.invoice import Invoice
 from app.services.tenant_integration_service import (
     create_connection,
     disable_connection,
     enable_connection,
     get_audit_history,
+    get_razorpay_credentials,
     list_connections,
     rotate_secret,
     submit_secret,
@@ -25,6 +31,8 @@ from app.services.tenant_integration_service import (
 )
 
 router = APIRouter()
+webhook_router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class IntegrationCreateRequest(BaseModel):
@@ -156,9 +164,71 @@ async def get_integration_audit_history(
     return await get_audit_history(session=session, tenant_id=tenant_id)
 
 
-@router.get("/webhooks/razorpay/{integration_endpoint_id}")
-async def razorpay_webhook_placeholder(integration_endpoint_id: str):
-    raise HTTPException(status_code=404, detail="Razorpay webhook integration not implemented in this scaffold")
+@webhook_router.post("/webhooks/razorpay/{integration_endpoint_id}")
+async def razorpay_webhook(integration_endpoint_id: str, request: Request):
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature")
+    async with AsyncSessionLocal() as public_session:
+        route = await public_session.scalar(
+            select(TenantProviderWebhookRoute).join(
+                TenantProviderConnection, TenantProviderWebhookRoute.connection_id == TenantProviderConnection.id
+            ).where(
+                TenantProviderConnection.endpoint_id == integration_endpoint_id,
+                TenantProviderWebhookRoute.provider == "razorpay",
+                TenantProviderWebhookRoute.is_active.is_(True),
+                TenantProviderConnection.status == "LIVE",
+            )
+        )
+        if route is None:
+            raise HTTPException(status_code=404, detail="Integration endpoint not found")
+        connection = await public_session.get(TenantProviderConnection, route.connection_id)
+        try:
+            _, secrets, _ = await get_razorpay_credentials(
+                session=public_session, tenant_id=route.tenant_id, environment=route.environment
+            )
+        except (KeyError, ValueError):
+            raise HTTPException(status_code=400, detail="Webhook integration is not configured") from None
+        if not verify_webhook_signature(body, signature, secrets.get("webhook_secret")):
+            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+        try:
+            event_data = json.loads(body)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON") from None
+        payment = event_data.get("payload", {}).get("payment", {}).get("entity", {})
+        order = event_data.get("payload", {}).get("order", {}).get("entity", {})
+        order_id = payment.get("order_id") or order.get("id")
+        payment_id = payment.get("id")
+        if event_data.get("event") not in {"payment.captured", "payment.authorized"}:
+            return {"status": "ignored"}
+        if not order_id or not payment_id:
+            raise HTTPException(status_code=400, detail="Webhook payment identity is missing")
+        tenant = await public_session.get(Tenant, route.tenant_id)
+        if tenant is None or not tenant.is_active:
+            raise HTTPException(status_code=400, detail="Webhook tenant is inactive")
+        await public_session.commit()
+
+    token = tenant_schema_var.set(tenant.schema_name)
+    try:
+        async with AsyncSessionLocal() as tenant_session:
+            await tenant_session.execute(__import__("sqlalchemy").text(f'SET search_path TO "{tenant.schema_name}", public'))
+            invoice = await tenant_session.scalar(select(Invoice).where(Invoice.razorpay_order_id == order_id).with_for_update())
+            if invoice is None:
+                raise HTTPException(status_code=400, detail="Webhook order is not linked to an invoice")
+            if invoice.razorpay_payment_id == payment_id or invoice.status == "paid":
+                return {"status": "idempotent"}
+            if invoice.status in {"cancelled", "refunded"}:
+                raise HTTPException(status_code=409, detail="Invoice cannot accept webhook payment")
+            invoice.razorpay_payment_id = payment_id
+            invoice.payment_method = str(payment.get("method") or "razorpay")
+            invoice.status = "paid"
+            from datetime import datetime, timezone
+            invoice.paid_at = datetime.now(timezone.utc)
+            tenant_session.add(TenantProviderAuditEvent(tenant_id=route.tenant_id, provider="razorpay", capability=connection.capability, environment=connection.environment, event_type="webhook_payment_processed", result="SUCCESS", event_metadata={"order_id": str(order_id), "payment_id": str(payment_id), "event": str(event_data.get("event"))}))
+            await tenant_session.commit()
+            logger.info("Processed Razorpay webhook endpoint=%s event=%s", integration_endpoint_id, event_data.get("event"))
+            return {"status": "processed"}
+    finally:
+        tenant_schema_var.reset(token)
 
 
 @router.get("/webhooks/twilio/{integration_endpoint_id}")

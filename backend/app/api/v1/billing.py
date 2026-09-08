@@ -741,12 +741,17 @@ async def razorpay_webhook(request: Request):
     The tenant schema is embedded in the Razorpay order notes at order creation time
     (key: 'tenant_schema'), so this endpoint works for all tenants without JWT.
     """
+    raise HTTPException(
+        status_code=410,
+        detail="Use the tenant integration webhook endpoint configured for this provider connection",
+    )
+
     body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature", "")
     
     logger.info("Webhook: Received Razorpay webhook. Signature header present: %s", bool(signature))
 
-    if not verify_webhook_signature(body, signature):
+    if not verify_webhook_signature(body, signature, None):
         logger.warning("Razorpay webhook: invalid signature")
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 

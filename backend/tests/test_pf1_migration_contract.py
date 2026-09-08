@@ -151,11 +151,11 @@ async def test_existing_invalid_window_is_rejected_before_constraint(engine):
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_0092_to_0093_to_0092_to_0093(engine):
-    result = _run_alembic("upgrade", "head")
+    result = _run_alembic("upgrade", "0093")
     assert result.returncode == 0, result.stderr
     result = _run_alembic("downgrade", "0092")
     assert result.returncode == 0, result.stderr
-    result = _run_alembic("upgrade", "head")
+    result = _run_alembic("upgrade", "0093")
     assert result.returncode == 0, result.stderr
     current = _run_alembic("current")
-    assert current.returncode == 0 and "0093" in current.stdout
+    assert current.returncode == 0 and "0093" in current.stdout and "0094" not in current.stdout

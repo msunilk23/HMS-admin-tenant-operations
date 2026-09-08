@@ -8,7 +8,7 @@ from app.api.v1.feedback import router as feedback_router
 from app.api.v1.consultations import router as consultations_router
 from app.api.v1.clinical_alerts import router as clinical_alerts_router
 from app.api.v1.departments import router as departments_router
-from app.api.v1.integrations import router as integrations_router
+from app.api.v1.integrations import router as integrations_router, webhook_router as integrations_webhook_router
 from app.api.v1.doctors import router as doctors_router
 from app.api.v1.doctor_schedules import router as doctor_schedules_router
 from app.api.v1.lab import router as lab_router
@@ -51,6 +51,7 @@ api_router.include_router(departments_router, prefix="/departments", tags=["depa
 api_router.include_router(doctors_router, prefix="/doctors", tags=["doctors"], **_tenant_guard)
 api_router.include_router(doctor_schedules_router, prefix="/doctor-schedules", tags=["doctor-schedules"], **_tenant_guard)
 api_router.include_router(integrations_router, prefix="/integrations", tags=["integrations"], **_tenant_guard)
+api_router.include_router(integrations_webhook_router, prefix="/integrations", tags=["integrations"])
 api_router.include_router(appointments_router, prefix="/appointments", tags=["appointments"], **_tenant_guard)
 api_router.include_router(queue_router, prefix="/queue", tags=["queue"], **_tenant_guard)
 api_router.include_router(visits_router, prefix="/visits", tags=["visits"], **_tenant_guard)

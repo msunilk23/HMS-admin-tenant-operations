@@ -16,6 +16,8 @@ def create_razorpay_order(
     *,
     amount_rupees: float,
     receipt: str,
+    key_id: str | None = None,
+    key_secret: str | None = None,
     notes: dict | None = None,
 ) -> dict | None:
     """
@@ -25,14 +27,9 @@ def create_razorpay_order(
     Returns None if Razorpay is not configured or on any error.
     All errors are logged and swallowed — callers must handle None gracefully.
     """
-    from app.core.config import settings  # lazy to avoid circular imports at startup
-
-    key_id = settings.RAZORPAY_KEY_ID
-    key_secret = settings.RAZORPAY_KEY_SECRET
     if not (key_id and key_secret):
         logger.warning("Razorpay not configured — skipping order creation.")
         return None
-
     try:
         import razorpay  # lazy — package optional
 
@@ -52,17 +49,13 @@ def create_razorpay_order(
         return None
 
 
-def fetch_order_payments(order_id: str) -> dict | None:
+def fetch_order_payments(*, order_id: str, key_id: str | None = None, key_secret: str | None = None) -> dict | None:
     """
     Fetch the captured/authorized payments for a Razorpay order via the Razorpay API.
 
     Returns the first successful payment entity dict, or None if not found / not configured.
     Used as a fallback when the webhook was missed (ngrok down, URL stale, etc.).
     """
-    from app.core.config import settings
-
-    key_id = settings.RAZORPAY_KEY_ID
-    key_secret = settings.RAZORPAY_KEY_SECRET
     if not (key_id and key_secret):
         return None
 
@@ -80,19 +73,15 @@ def fetch_order_payments(order_id: str) -> dict | None:
         return None
 
 
-def verify_webhook_signature(body: bytes, signature: str) -> bool:
+def verify_webhook_signature(body: bytes, signature: str | None, webhook_secret: str | None) -> bool:
     """
     Verify the X-Razorpay-Signature HMAC-SHA256 header.
 
     Returns True if the signature is valid.
-    A configured webhook secret is mandatory. Unsigned webhooks are rejected.
+    The tenant-resolved webhook secret and signature are mandatory.
     """
-    from app.core.config import settings
-
-    secret = settings.RAZORPAY_WEBHOOK_SECRET
-    if not secret:
-        logger.error("RAZORPAY_WEBHOOK_SECRET not set — rejecting webhook")
+    if not webhook_secret or not signature:
         return False
 
-    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    expected = hmac.new(webhook_secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)

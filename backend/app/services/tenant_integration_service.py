@@ -237,6 +237,34 @@ async def get_persisted_secret(*, session: AsyncSession, tenant_id: uuid.UUID, p
     )
 
 
+async def get_razorpay_credentials(*, session: AsyncSession, tenant_id: uuid.UUID, environment: str = "LIVE") -> tuple[str, dict[str, str], TenantProviderConnection]:
+    connection = await session.scalar(
+        select(TenantProviderConnection).where(
+            TenantProviderConnection.tenant_id == tenant_id,
+            TenantProviderConnection.provider == "razorpay",
+            TenantProviderConnection.capability == "payment",
+            TenantProviderConnection.environment == environment.upper(),
+            TenantProviderConnection.status == "LIVE",
+        )
+    )
+    if connection is None:
+        raise ValueError("Active Razorpay integration is not configured")
+    key_id = str(connection.public_configuration.get("key_id", ""))
+    if not key_id:
+        raise ValueError("Razorpay key ID is not configured")
+    decrypted = await get_persisted_secret(
+        session=session, tenant_id=tenant_id, provider="razorpay", capability="payment",
+        environment=connection.environment, credential_version=connection.credential_version,
+    )
+    try:
+        secrets = json.loads(decrypted)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Razorpay credential record is invalid") from exc
+    if not isinstance(secrets, dict):
+        raise ValueError("Razorpay credential record is invalid")
+    return key_id, {str(key): str(value) for key, value in secrets.items()}, connection
+
+
 async def test_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, credential_type: str, secret: str | None) -> dict[str, Any]:
     provider_key = provider.lower()
     if provider_key not in PROVIDER_CONFIGS:
