@@ -56,8 +56,10 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_DB_URL_PASSWORD:?Set POSTGRES_DB_URL_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
       REDIS_URL: redis://redis:6379
+      INTEGRATION_MASTER_KEY_FILE: /run/secrets/hms_integration_master_key
     volumes:
       - ../backend:/app
+      - ${INTEGRATION_MASTER_KEY_HOST_FILE:?Set INTEGRATION_MASTER_KEY_HOST_FILE in .env}:/run/secrets/hms_integration_master_key:ro
     ports:
       - "${BACKEND_HOST_PORT:-8000}:8000"
     depends_on:

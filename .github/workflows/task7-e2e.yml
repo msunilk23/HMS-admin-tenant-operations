@@ -49,14 +49,6 @@ jobs:
           echo "::add-mask::$ci_secret_key"
           echo "SECRET_KEY=$ci_secret_key" >> "$GITHUB_ENV"
           echo "INTEGRATION_MASTER_KEY_FILE=$ci_master_key_path" >> "$GITHUB_ENV"
-      - name: Clean up ephemeral CI secrets
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -n "${INTEGRATION_MASTER_KEY_FILE:-}" ] && [ -f "$INTEGRATION_MASTER_KEY_FILE" ]; then
-            rm -f "$INTEGRATION_MASTER_KEY_FILE"
-          fi
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -189,7 +181,7 @@ jobs:
             "PGADMIN_DEFAULT_EMAIL=$PGADMIN_DEFAULT_EMAIL" \
             "PGADMIN_DEFAULT_PASSWORD=$compose_pgadmin_password" \
             "REDIS_URL=redis://redis:6379" \
-            "INTEGRATION_MASTER_KEY_FILE=$INTEGRATION_MASTER_KEY_FILE" > .env
+            "INTEGRATION_MASTER_KEY_HOST_FILE=$INTEGRATION_MASTER_KEY_FILE" > .env
           docker compose --env-file .env -f infra/docker-compose.yml config --quiet
           docker compose --env-file .env -f infra/docker-compose.yml build backend frontend
           docker compose --env-file .env -f infra/docker-compose.yml up -d --wait postgres redis backend frontend
@@ -345,3 +337,12 @@ jobs:
             frontend/playwright-report/
             frontend/test-results/
           if-no-files-found: ignore
+      - name: Clean up ephemeral CI secrets
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .env
+          if [ -n "${INTEGRATION_MASTER_KEY_FILE:-}" ] && [ -f "$INTEGRATION_MASTER_KEY_FILE" ]; then
+            rm -f "$INTEGRATION_MASTER_KEY_FILE"
+          fi

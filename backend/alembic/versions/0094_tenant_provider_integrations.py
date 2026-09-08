@@ -5,8 +5,6 @@ install, upgrade from 0093, replay of a compatible schema, and downgrade back to
 """
 from __future__ import annotations
 
-import re
-
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import text
@@ -18,6 +16,7 @@ branch_labels = None
 depends_on = None
 
 _MARKER = "hms_0094_provider_integrations"
+_SCHEMA = "public"
 
 
 def _is_tenant(bind) -> bool:
@@ -29,19 +28,19 @@ def _inspect(bind):
 
 
 def _has_table(bind, table: str) -> bool:
-    return _inspect(bind).has_table(table)
+    return _inspect(bind).has_table(table, schema=_SCHEMA)
 
 
 def _columns(bind, table: str) -> dict:
-    return {item["name"]: item for item in _inspect(bind).get_columns(table)}
+    return {item["name"]: item for item in _inspect(bind).get_columns(table, schema=_SCHEMA)}
 
 
 def _indexes(bind, table: str) -> list[dict]:
-    return _inspect(bind).get_indexes(table)
+    return _inspect(bind).get_indexes(table, schema=_SCHEMA)
 
 
 def _unique_constraints(bind, table: str) -> list[dict]:
-    return _inspect(bind).get_unique_constraints(table)
+    return _inspect(bind).get_unique_constraints(table, schema=_SCHEMA)
 
 
 def _checks(bind, table: str) -> list[dict]:
@@ -53,19 +52,20 @@ def _foreign_keys(bind, table: str) -> list[dict]:
 
 
 def _count(bind, table: str) -> int:
-    return int(bind.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar_one())
+    return int(bind.execute(text(f'SELECT COUNT(*) FROM "public"."{table}"')).scalar_one())
 
 
-def _expected_type(column: sa.Column):
-    t = column.type
-    if isinstance(t, postgresql.UUID):
+def _expected_type(value):
+    t = value.type if isinstance(value, sa.Column) else value
+
+    if isinstance(t, (postgresql.UUID, sa.Uuid)):
         return ("uuid", None)
     if isinstance(t, postgresql.JSONB):
         return ("jsonb", None)
-    if isinstance(t, sa.String):
-        return ("varchar", t.length)
     if isinstance(t, sa.Text):
         return ("text", None)
+    if isinstance(t, sa.String):
+        return ("varchar", t.length)
     if isinstance(t, sa.Integer):
         return ("integer", None)
     if isinstance(t, sa.Boolean):
@@ -81,15 +81,15 @@ def _compatible_column(bind, table: str, expected: sa.Column) -> None:
         existing_rows = _count(bind, table)
         if not expected.nullable and expected.server_default is None and existing_rows:
             raise RuntimeError(f"0094 incompatible {table}.{expected.name}: required column missing on non-empty table")
-        op.add_column(table, expected.copy())
+        op.add_column(table, expected.copy(), schema=_SCHEMA)
         return
     if _expected_type(actual["type"]) != _expected_type(expected):
         raise RuntimeError(f"0094 incompatible {table}.{expected.name}: expected {_expected_type(expected)}, found {_expected_type(actual['type'])}")
     if expected.nullable is False and actual["nullable"]:
-        nulls = bind.execute(text(f'SELECT COUNT(*) FROM "{table}" WHERE "{expected.name}" IS NULL')).scalar_one()
+        nulls = bind.execute(text(f'SELECT COUNT(*) FROM "public"."{table}" WHERE "{expected.name}" IS NULL')).scalar_one()
         if nulls:
             raise RuntimeError(f"0094 incompatible {table}.{expected.name}: NULL values violate NOT NULL")
-        op.alter_column(table, expected.name, nullable=False)
+        op.alter_column(table, expected.name, nullable=False, schema=_SCHEMA)
 
 
 def _ensure_unique(bind, table: str, name: str, columns: list[str]) -> None:
@@ -103,31 +103,33 @@ def _ensure_unique(bind, table: str, name: str, columns: list[str]) -> None:
             return
     if any(item.get("column_names") == columns and item.get("unique") for item in _indexes(bind, table)):
         return
-    if len(columns) == 1:
-        duplicates = bind.execute(text(f'SELECT COUNT(*) FROM (SELECT "{columns[0]}", COUNT(*) FROM "{table}" GROUP BY "{columns[0]}" HAVING COUNT(*) > 1) d')).scalar_one()
-    else:
-        duplicates = bind.execute(text(f'SELECT COUNT(*) FROM (SELECT "{columns[0]}", "{columns[1]}", COUNT(*) FROM "{table}" GROUP BY "{columns[0]}", "{columns[1]}" HAVING COUNT(*) > 1) d')).scalar_one()
+    quoted_columns = ", ".join(f'"{column}"' for column in columns)
+    duplicates = bind.execute(text(f'SELECT COUNT(*) FROM (SELECT {quoted_columns}, COUNT(*) FROM "public"."{table}" GROUP BY {quoted_columns} HAVING COUNT(*) > 1) d')).scalar_one()
     if duplicates:
         raise RuntimeError(f"0094 data violates unique contract {table}.{name}")
-    op.create_unique_constraint(name, table, columns)
+    op.create_unique_constraint(name, table, columns, schema=_SCHEMA)
 
 
 def upgrade() -> None:
     bind = op.get_bind()
-    if _is_tenant(bind):
-        tenant_schema = bind.execute(text("SELECT current_schema()" )).scalar_one()
-        _ = tenant_schema
-        # Tenant schemas only persist tenant-scoped integration metadata through the
-        # public schema once the tenant context is established, so the migration is
-        # intentionally additive in the public schema while tenant schemas remain untouched.
 
-    public_tables = {"tenant_provider_connections", "tenant_provider_credential_versions", "tenant_provider_audit_events"}
+    # 0094 objects are public-scoped. Tenant invocations only advance their
+    # own Alembic version table.
+    if _is_tenant(bind):
+        return
+
+    public_tables = [
+        "tenant_provider_connections",
+        "tenant_provider_credential_versions",
+        "tenant_provider_webhook_routes",
+        "tenant_provider_audit_events",
+    ]
     for table in public_tables:
         if not _has_table(bind, table):
             if table == "tenant_provider_connections":
                 op.create_table(
                     table,
-                    sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False, default=sa.text("gen_random_uuid()")),
+                    sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False, server_default=sa.text("gen_random_uuid()")),
                     sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
                     sa.Column("provider", sa.String(64), nullable=False),
                     sa.Column("capability", sa.String(64), nullable=False),
@@ -154,7 +156,7 @@ def upgrade() -> None:
             elif table == "tenant_provider_credential_versions":
                 op.create_table(
                     table,
-                    sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False, default=sa.text("gen_random_uuid()")),
+                    sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False, server_default=sa.text("gen_random_uuid()")),
                     sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
                     sa.Column("provider", sa.String(64), nullable=False),
                     sa.Column("capability", sa.String(64), nullable=False),
@@ -171,10 +173,27 @@ def upgrade() -> None:
                     sa.UniqueConstraint("tenant_id", "provider", "environment", "credential_version", name="uq_provider_credentials_tenant_provider_env_version"),
                     schema="public",
                 )
+            elif table == "tenant_provider_webhook_routes":
+                op.create_table(
+                    table,
+                    sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False, server_default=sa.text("gen_random_uuid()")),
+                    sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
+                    sa.Column("provider", sa.String(64), nullable=False),
+                    sa.Column("capability", sa.String(64), nullable=False),
+                    sa.Column("environment", sa.String(32), nullable=False),
+                    sa.Column("connection_id", postgresql.UUID(as_uuid=True), nullable=False),
+                    sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+                    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+                    sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+                    sa.ForeignKeyConstraint(["tenant_id"], ["public.tenants.id"], name="fk_provider_webhook_routes_tenant_id", ondelete="CASCADE"),
+                    sa.ForeignKeyConstraint(["connection_id"], ["public.tenant_provider_connections.id"], name="fk_provider_webhook_routes_connection_id", ondelete="CASCADE"),
+                    sa.UniqueConstraint("connection_id", name="uq_provider_webhook_routes_connection_id"),
+                    schema="public",
+                )
             elif table == "tenant_provider_audit_events":
                 op.create_table(
                     table,
-                    sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False, default=sa.text("gen_random_uuid()")),
+                    sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False, server_default=sa.text("gen_random_uuid()")),
                     sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=False),
                     sa.Column("provider", sa.String(64), nullable=False),
                     sa.Column("capability", sa.String(64), nullable=False),
@@ -244,6 +263,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    for table in ["tenant_provider_audit_events", "tenant_provider_credential_versions", "tenant_provider_connections"]:
+    if _is_tenant(bind):
+        return
+    for table in ["tenant_provider_audit_events", "tenant_provider_webhook_routes", "tenant_provider_credential_versions", "tenant_provider_connections"]:
         if _has_table(bind, table):
-            op.drop_table(table)
+            op.drop_table(table, schema=_SCHEMA)

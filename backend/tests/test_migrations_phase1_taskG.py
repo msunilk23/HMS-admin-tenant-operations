@@ -190,7 +190,7 @@ def test_downgrade_and_reupgrade_of_release_a_migrations_is_safe(registered_tena
     assert reupgrade.returncode == 0, reupgrade.stderr
     current = _run_alembic("current")
     assert current.returncode == 0, current.stderr
-    assert "0093" in current.stdout
+    assert "0094 (head)" in current.stdout
 
 
 def test_0089_downgrade_rejects_tenant_independent_users(monkeypatch):
