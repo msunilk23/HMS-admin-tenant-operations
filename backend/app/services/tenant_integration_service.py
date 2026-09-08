@@ -81,6 +81,7 @@ async def create_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
         updated_by="system",
     )
     session.add(record)
+    await session.flush()
     session.add(TenantProviderWebhookRoute(
         tenant_id=tenant_id,
         provider=provider_key,
@@ -115,7 +116,7 @@ async def create_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
     }
 
 
-async def update_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str | None = None, status: str | None = None, connection_name: str | None = None) -> dict[str, Any]:
+async def update_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str | None = None, status: str | None = None, connection_name: str | None = None, public_configuration: dict[str, str] | None = None) -> dict[str, Any]:
     stmt = select(TenantProviderConnection).where(
         TenantProviderConnection.tenant_id == tenant_id,
         TenantProviderConnection.provider == provider.lower(),
@@ -131,6 +132,15 @@ async def update_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
         record.updated_by = "system"
     if connection_name is not None:
         record.connection_name = connection_name.strip() or None
+    if public_configuration is not None:
+        validate_provider_configuration(
+            provider_code=record.provider,
+            capability=record.capability,
+            environment=record.environment,
+            public_configuration=public_configuration,
+            secrets={field.field_code: "configured" for field in PROVIDER_CONFIGS[record.provider].secret_fields},
+        )
+        record.public_configuration = public_configuration
     await _audit_event(session=session, tenant_id=tenant_id, provider=record.provider, capability=record.capability, environment=record.environment, event_type="connection_updated", result="SUCCESS", metadata={"previous_status": previous_status, "new_status": record.status})
     await session.commit()
     return {"id": str(record.id), "provider": record.provider, "environment": record.environment, "connection_name": record.connection_name, "status": record.status}
@@ -184,13 +194,37 @@ async def rotate_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
         raise ValueError(f"No connection found for provider {provider}")
     next_version = (existing.credential_version or 0) + 1
     store = secret_store or get_secret_store()
+    secret_payload: str = secret
+    if provider_key == "razorpay":
+        current = await session.scalar(select(TenantProviderCredentialVersion).where(
+            TenantProviderCredentialVersion.tenant_id == tenant_id,
+            TenantProviderCredentialVersion.provider == provider_key,
+            TenantProviderCredentialVersion.capability == existing.capability,
+            TenantProviderCredentialVersion.environment == environment.upper(),
+            TenantProviderCredentialVersion.credential_version == existing.credential_version,
+        ))
+        current_values: dict[str, str] = {}
+        if current is not None:
+            try:
+                decrypted = await store.decrypt_secret(
+                    tenant_id=tenant_id, provider=provider_key, capability=existing.capability,
+                    environment=environment.upper(), credential_version=existing.credential_version,
+                    ciphertext=current.secret_ciphertext, nonce=current.secret_nonce,
+                )
+                parsed = json.loads(decrypted)
+                if isinstance(parsed, dict):
+                    current_values = {str(key): str(value) for key, value in parsed.items()}
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                current_values = {}
+        current_values[credential_type] = secret
+        secret_payload = json.dumps(current_values, sort_keys=True)
     ciphertext, nonce, algorithm, key_version = await store.store_secret(
         tenant_id=tenant_id,
         provider=provider_key,
         capability=credential_type or existing.capability,
         environment=environment.upper(),
         credential_version=next_version,
-        secret=secret,
+        secret=secret_payload,
     )
     version_record = TenantProviderCredentialVersion(
         tenant_id=tenant_id,
@@ -285,10 +319,6 @@ async def enable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
     record = await session.scalar(select(TenantProviderConnection).where(TenantProviderConnection.tenant_id == tenant_id, TenantProviderConnection.provider == provider.lower()))
     if record is None:
         raise ValueError(f"No connection found for provider {provider}")
-    if record.environment != "LIVE":
-        raise ValueError("Only LIVE-environment connections can be enabled")
-    if record.connection_tested_at is None or record.last_success_at is None or record.status != "TEST":
-        raise ValueError("LIVE activation requires a successful provider connection test")
     credential = await session.scalar(
         select(TenantProviderCredentialVersion).where(
             TenantProviderCredentialVersion.tenant_id == tenant_id,
@@ -299,12 +329,16 @@ async def enable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
         )
     )
     if credential is None:
-        raise ValueError("LIVE activation requires the current credential version")
+        raise ValueError("Activation requires the current credential version")
+    if record.environment == "LIVE" and (record.connection_tested_at is None or record.last_success_at is None or record.status != "TEST"):
+        raise ValueError("LIVE activation requires a successful provider connection test")
+    if record.environment not in {"TEST", "LIVE"}:
+        raise ValueError("Unsupported integration environment")
     previous_status = record.status
-    record.status = "LIVE"
+    record.status = record.environment
     await _audit_event(session=session, tenant_id=tenant_id, provider=record.provider, capability=record.capability, environment=record.environment, event_type="connection_enabled", result="SUCCESS", metadata={"previous_status": previous_status, "new_status": record.status})
     await session.commit()
-    return {"provider": provider.lower(), "status": "LIVE"}
+    return {"provider": provider.lower(), "status": record.status}
 
 
 async def disable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str) -> dict[str, Any]:

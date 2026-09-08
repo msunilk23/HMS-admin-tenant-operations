@@ -50,6 +50,7 @@ class IntegrationUpdateRequest(BaseModel):
     environment: str | None = None
     status: str | None = None
     connection_name: str | None = None
+    public_configuration: dict[str, str] | None = None
 
 
 class SecretSubmitRequest(BaseModel):
@@ -97,7 +98,7 @@ async def update_integration_connection(
     current_user: dict = Depends(require_role("hospital_admin")),
 ):
     tenant_id = uuid.UUID(str(current_user["tenant_id"]))
-    return await update_connection(session=session, tenant_id=tenant_id, provider=provider, environment=payload.environment, status=payload.status, connection_name=payload.connection_name)
+    return await update_connection(session=session, tenant_id=tenant_id, provider=provider, environment=payload.environment, status=payload.status, connection_name=payload.connection_name, public_configuration=payload.public_configuration)
 
 
 @router.post("/connections/{provider}/secret")
@@ -144,7 +145,10 @@ async def enable_integration_connection(
     current_user: dict = Depends(require_role("hospital_admin")),
 ):
     tenant_id = uuid.UUID(str(current_user["tenant_id"]))
-    return await enable_connection(session=session, tenant_id=tenant_id, provider=provider)
+    try:
+        return await enable_connection(session=session, tenant_id=tenant_id, provider=provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/connections/{provider}/disable")
@@ -154,7 +158,10 @@ async def disable_integration_connection(
     current_user: dict = Depends(require_role("hospital_admin")),
 ):
     tenant_id = uuid.UUID(str(current_user["tenant_id"]))
-    return await disable_connection(session=session, tenant_id=tenant_id, provider=provider)
+    try:
+        return await disable_connection(session=session, tenant_id=tenant_id, provider=provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/audit")

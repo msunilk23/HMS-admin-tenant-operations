@@ -14,12 +14,16 @@ export interface SupportedProvider {
 
 export interface IntegrationConnection {
   id: string; provider: string; capability: string; environment: string; status: string
-  connection_name: string | null; public_configuration: Record<string, string>
+  connection_name: string | null; public_configuration: Record<string, string>; credential_version?: number
 }
 
 export const integrationService = {
   providers: () => apiClient.get<{ providers: SupportedProvider[] }>('/integrations/providers').then(response => response.data.providers),
   connections: () => apiClient.get<IntegrationConnection[]>('/integrations/connections').then(response => response.data),
   create: (payload: { provider_code: string; capability: string; environment: string; connection_name?: string; public_configuration: Record<string, string>; secrets: Record<string, string> }) => apiClient.post<IntegrationConnection>('/integrations/connections', payload).then(response => response.data),
+  update: (provider: string, payload: { environment: string; connection_name?: string; public_configuration?: Record<string, string> }) => apiClient.patch<IntegrationConnection>(`/integrations/connections/${provider}`, payload).then(response => response.data),
+  rotateSecret: (provider: string, payload: { environment: string; credential_type: string; secret: string }) => apiClient.post(`/integrations/connections/${provider}/rotate`, payload).then(response => response.data),
+  enable: (provider: string) => apiClient.post(`/integrations/connections/${provider}/enable`).then(response => response.data),
+  disable: (provider: string) => apiClient.post(`/integrations/connections/${provider}/disable`).then(response => response.data),
   test: (provider: string, payload: { environment: string; credential_type: string }) => apiClient.post(`/integrations/connections/${provider}/test`, payload).then(response => response.data),
 }
