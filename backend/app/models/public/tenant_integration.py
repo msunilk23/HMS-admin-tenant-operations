@@ -44,6 +44,8 @@ class TenantProviderConnection(Base, TimestampMixin):
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     credential_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    connection_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    public_configuration: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     endpoint_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     updated_by: Mapped[str | None] = mapped_column(String(128), nullable=True)

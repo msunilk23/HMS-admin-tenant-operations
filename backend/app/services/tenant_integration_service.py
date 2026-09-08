@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -8,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.secret_store import SecretStore, get_secret_store
-from app.integrations.providers import PROVIDER_CONFIGS, get_provider_adapter
+from app.integrations.providers import PROVIDER_CONFIGS, get_provider_adapter, validate_provider_configuration
 from app.models.public.tenant_integration import (
     TenantProviderAuditEvent,
     TenantProviderConnection,
@@ -41,6 +42,8 @@ async def list_connections(*, session: AsyncSession, tenant_id: uuid.UUID) -> li
         "provider": item.provider,
         "capability": item.capability,
         "environment": item.environment,
+        "connection_name": item.connection_name,
+        "public_configuration": item.public_configuration,
         "status": item.status,
         "credential_version": item.credential_version,
         "endpoint_id": item.endpoint_id,
@@ -50,12 +53,12 @@ async def list_connections(*, session: AsyncSession, tenant_id: uuid.UUID) -> li
     } for item in connections]
 
 
-async def create_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, capability: str | None = None) -> dict[str, Any]:
+async def create_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, capability: str | None = None, connection_name: str | None = None, public_configuration: dict[str, str] | None = None, secrets: dict[str, str] | None = None, secret_store: SecretStore | None = None) -> dict[str, Any]:
     provider_key = provider.lower()
-    config = PROVIDER_CONFIGS.get(provider_key)
-    if not config:
-        raise ValueError(f"Unsupported provider: {provider}")
-    capability_name = capability or config.capability
+    public_configuration = public_configuration or {}
+    secrets = secrets or {}
+    config = validate_provider_configuration(provider_code=provider_key, capability=capability or "", environment=environment, public_configuration=public_configuration, secrets=secrets)
+    capability_name = config.capability
     record = await session.scalar(
         select(TenantProviderConnection).where(
             TenantProviderConnection.tenant_id == tenant_id,
@@ -71,6 +74,8 @@ async def create_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
         capability=capability_name,
         environment=environment.upper(),
         status="DISABLED",
+        connection_name=connection_name.strip() if connection_name else None,
+        public_configuration=public_configuration,
         endpoint_id=f"{provider_key}-{uuid.uuid4().hex[:12]}",
         created_by="system",
         updated_by="system",
@@ -83,6 +88,18 @@ async def create_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
         environment=environment.upper(),
         connection_id=record.id,
     ))
+    if secrets:
+        ciphertext, nonce, algorithm, key_version = await (secret_store or get_secret_store()).store_secret(
+            tenant_id=tenant_id, provider=provider_key, capability=capability_name,
+            environment=environment.upper(), credential_version=record.credential_version,
+            secret=json.dumps(secrets, sort_keys=True),
+        )
+        session.add(TenantProviderCredentialVersion(
+            tenant_id=tenant_id, provider=provider_key, capability=capability_name,
+            environment=environment.upper(), credential_version=record.credential_version,
+            secret_ciphertext=ciphertext, secret_nonce=nonce, algorithm=algorithm,
+            key_version=key_version, versioned_by="system",
+        ))
     await _audit_event(session=session, tenant_id=tenant_id, provider=provider_key, capability=capability_name, environment=environment.upper(), event_type="connection_created", result="SUCCESS", metadata={"endpoint_id": record.endpoint_id})
     await session.commit()
     await session.refresh(record)
@@ -91,12 +108,14 @@ async def create_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
         "provider": record.provider,
         "capability": record.capability,
         "environment": record.environment,
+        "connection_name": record.connection_name,
+        "public_configuration": record.public_configuration,
         "status": record.status,
         "endpoint_id": record.endpoint_id,
     }
 
 
-async def update_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str | None = None, status: str | None = None) -> dict[str, Any]:
+async def update_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str | None = None, status: str | None = None, connection_name: str | None = None) -> dict[str, Any]:
     stmt = select(TenantProviderConnection).where(
         TenantProviderConnection.tenant_id == tenant_id,
         TenantProviderConnection.provider == provider.lower(),
@@ -110,9 +129,11 @@ async def update_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
     if status:
         record.status = status.upper()
         record.updated_by = "system"
+    if connection_name is not None:
+        record.connection_name = connection_name.strip() or None
     await _audit_event(session=session, tenant_id=tenant_id, provider=record.provider, capability=record.capability, environment=record.environment, event_type="connection_updated", result="SUCCESS", metadata={"previous_status": previous_status, "new_status": record.status})
     await session.commit()
-    return {"id": str(record.id), "provider": record.provider, "environment": record.environment, "status": record.status}
+    return {"id": str(record.id), "provider": record.provider, "environment": record.environment, "connection_name": record.connection_name, "status": record.status}
 
 
 async def submit_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, credential_type: str, secret: str | None, credential_version: int | None, secret_store: SecretStore | None = None) -> dict[str, Any]:

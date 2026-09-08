@@ -265,6 +265,7 @@ export const NAV_TREE: NavEntry[] = [
         label: 'Hospital Branding',
         items: [
           { kind: 'link', id: 'branding', label: 'Logo & Colors', to: '/admin/branding', icon: Palette, roles: ADMIN },
+          { kind: 'link', id: 'integrations', label: 'Integrations', to: '/admin/integrations', icon: Settings2, roles: ADMIN },
         ],
       },
     ],

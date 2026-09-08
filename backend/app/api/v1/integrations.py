@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_role
 from app.db.engine import get_session
-from app.integrations.providers import PROVIDER_CONFIGS, get_provider_adapter
+from app.integrations.providers import public_provider_catalogue
 from app.models.public.tenant_integration import TenantProviderConnection, TenantProviderCredentialVersion, TenantProviderAuditEvent
 from app.services.tenant_integration_service import (
     create_connection,
@@ -28,9 +28,12 @@ router = APIRouter()
 
 
 class IntegrationCreateRequest(BaseModel):
-    provider: str
+    provider_code: str
     environment: str = Field(default="TEST")
-    capability: str | None = None
+    capability: str
+    connection_name: str | None = Field(default=None, max_length=128)
+    public_configuration: dict[str, str] = Field(default_factory=dict)
+    secrets: dict[str, str] = Field(default_factory=dict)
 
 
 class IntegrationUpdateRequest(BaseModel):
@@ -40,10 +43,9 @@ class IntegrationUpdateRequest(BaseModel):
 
 
 class SecretSubmitRequest(BaseModel):
-    provider: str
     environment: str = Field(default="TEST")
     credential_type: str
-    secret: str | None = None
+    secret: str | None = Field(default=None, exclude=True)
     credential_version: int | None = None
 
 
@@ -52,12 +54,7 @@ async def list_supported_providers(
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("hospital_admin")),
 ):
-    return {"providers": [{
-        "provider": config.key,
-        "capability": config.capability,
-        "label": config.label,
-        "fields": config.fields,
-    } for config in PROVIDER_CONFIGS.values()]}
+    return {"providers": public_provider_catalogue()}
 
 
 @router.get("/connections")
@@ -76,7 +73,10 @@ async def create_integration_connection(
     current_user: dict = Depends(require_role("hospital_admin")),
 ):
     tenant_id = uuid.UUID(str(current_user["tenant_id"]))
-    return await create_connection(session=session, tenant_id=tenant_id, provider=payload.provider, environment=payload.environment, capability=payload.capability)
+    try:
+        return await create_connection(session=session, tenant_id=tenant_id, provider=payload.provider_code, environment=payload.environment, capability=payload.capability, connection_name=payload.connection_name, public_configuration=payload.public_configuration, secrets=payload.secrets)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.patch("/connections/{provider}")
@@ -87,7 +87,7 @@ async def update_integration_connection(
     current_user: dict = Depends(require_role("hospital_admin")),
 ):
     tenant_id = uuid.UUID(str(current_user["tenant_id"]))
-    return await update_connection(session=session, tenant_id=tenant_id, provider=provider, environment=payload.environment, status=payload.status)
+    return await update_connection(session=session, tenant_id=tenant_id, provider=provider, environment=payload.environment, status=payload.status, connection_name=payload.connection_name)
 
 
 @router.post("/connections/{provider}/secret")
