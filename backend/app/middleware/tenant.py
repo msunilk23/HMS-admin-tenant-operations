@@ -43,6 +43,7 @@ _PUBLIC_PATHS = {
     "/api/redoc",
     "/api/openapi.json",
     "/api/v1/billing/razorpay/webhook",  # Razorpay webhook — no JWT, tenant in payload
+    "/api/v1/integrations/webhooks/razorpay/",  # Opaque tenant integration webhook endpoint
 }
 
 

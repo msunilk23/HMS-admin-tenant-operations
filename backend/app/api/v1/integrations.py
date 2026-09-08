@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_role
@@ -16,7 +18,7 @@ from app.db.engine import AsyncSessionLocal, get_session, tenant_schema_var
 from app.integrations.providers import public_provider_catalogue
 from app.models.public.tenant_integration import TenantProviderAuditEvent, TenantProviderConnection, TenantProviderCredentialVersion, TenantProviderWebhookRoute
 from app.models.public.user import Tenant
-from app.models.tenant.invoice import Invoice
+from app.models.tenant.invoice import Invoice, Payment, invoice_status_for_payment
 from app.services.tenant_integration_service import (
     create_connection,
     disable_connection,
@@ -198,7 +200,8 @@ async def razorpay_webhook(integration_endpoint_id: str, request: Request):
         order = event_data.get("payload", {}).get("order", {}).get("entity", {})
         order_id = payment.get("order_id") or order.get("id")
         payment_id = payment.get("id")
-        if event_data.get("event") not in {"payment.captured", "payment.authorized"}:
+        event_name = event_data.get("event")
+        if event_name not in {"payment.captured", "payment.authorized"}:
             return {"status": "ignored"}
         if not order_id or not payment_id:
             raise HTTPException(status_code=400, detail="Webhook payment identity is missing")
@@ -210,19 +213,44 @@ async def razorpay_webhook(integration_endpoint_id: str, request: Request):
     token = tenant_schema_var.set(tenant.schema_name)
     try:
         async with AsyncSessionLocal() as tenant_session:
-            await tenant_session.execute(__import__("sqlalchemy").text(f'SET search_path TO "{tenant.schema_name}", public'))
+            await tenant_session.execute(text(f'SET search_path TO "{tenant.schema_name}", public'))
             invoice = await tenant_session.scalar(select(Invoice).where(Invoice.razorpay_order_id == order_id).with_for_update())
             if invoice is None:
                 raise HTTPException(status_code=400, detail="Webhook order is not linked to an invoice")
-            if invoice.razorpay_payment_id == payment_id or invoice.status == "paid":
+            if invoice.razorpay_payment_id == payment_id:
                 return {"status": "idempotent"}
             if invoice.status in {"cancelled", "refunded"}:
                 raise HTTPException(status_code=409, detail="Invoice cannot accept webhook payment")
+            if invoice.status == "paid":
+                raise HTTPException(status_code=409, detail="Invoice was already paid by a different payment")
+            if payment.get("order_id") and payment["order_id"] != invoice.razorpay_order_id:
+                raise HTTPException(status_code=400, detail="Webhook order does not match invoice")
+            expected_amount = int(Decimal(str(invoice.total)) * 100)
+            if payment.get("amount") != expected_amount:
+                raise HTTPException(status_code=400, detail="Webhook payment amount does not match invoice")
+            if payment.get("currency") != "INR":
+                raise HTTPException(status_code=400, detail="Webhook payment currency does not match invoice")
+            expected_status = "captured" if event_name == "payment.captured" else "authorized"
+            if payment.get("status") != expected_status:
+                raise HTTPException(status_code=400, detail="Webhook payment status does not match event")
+            notes = (order.get("notes") or payment.get("notes") or {})
+            if notes.get("invoice_id") and str(notes["invoice_id"]) != str(invoice.id):
+                raise HTTPException(status_code=400, detail="Webhook invoice identity does not match")
             invoice.razorpay_payment_id = payment_id
             invoice.payment_method = str(payment.get("method") or "razorpay")
-            invoice.status = "paid"
-            from datetime import datetime, timezone
             invoice.paid_at = datetime.now(timezone.utc)
+            invoice.paid_amount = invoice.total
+            invoice.status = invoice_status_for_payment(float(invoice.total), float(invoice.paid_amount))
+            invoice.receipt_number = invoice.receipt_number or f"RCT-{invoice.paid_at:%Y%m%d}-{str(invoice.id)[:8].upper()}"
+            existing_payment = await tenant_session.scalar(select(Payment).where(Payment.transaction_reference == payment_id))
+            if existing_payment is None:
+                tenant_session.add(Payment(
+                    id=uuid.uuid4(), invoice_id=invoice.id, amount=invoice.total,
+                    payment_method=invoice.payment_method, transaction_reference=payment_id,
+                    gateway="razorpay", paid_at=invoice.paid_at,
+                ))
+            from app.api.v1.billing import _authorize_linked_pharmacy_dispense
+            await _authorize_linked_pharmacy_dispense(invoice, tenant_session)
             tenant_session.add(TenantProviderAuditEvent(tenant_id=route.tenant_id, provider="razorpay", capability=connection.capability, environment=connection.environment, event_type="webhook_payment_processed", result="SUCCESS", event_metadata={"order_id": str(order_id), "payment_id": str(payment_id), "event": str(event_data.get("event"))}))
             await tenant_session.commit()
             logger.info("Processed Razorpay webhook endpoint=%s event=%s", integration_endpoint_id, event_data.get("event"))

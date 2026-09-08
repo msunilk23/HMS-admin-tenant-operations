@@ -15,8 +15,10 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.security import hash_password
+from app.core.secret_store import EncryptedDatabaseSecretStore
 from app.db.base import Base
 from app.models.public.tenant_feature import TenantFeature
+from app.models.public.tenant_integration import TenantProviderConnection, TenantProviderCredentialVersion, TenantProviderWebhookRoute
 from app.models.public.user import Tenant, User
 from app.models.tenant import *  # noqa: F401,F403
 from app.models.tenant.doctor_schedule import DoctorSchedule
@@ -169,6 +171,12 @@ RA5_NURSE_DEPARTMENT_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-ra5-nurse-depa
 RA5_LAB_TEST_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-ra5-lab-test")
 RA5_WEBHOOK_INVOICE_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-ra5-webhook-invoice")
 RA5_WEBHOOK_ORDER_ID = "order_ra5_webhook_250"
+RA5_RAZORPAY_CONNECTION_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-ra5-razorpay-connection")
+RA5_RAZORPAY_CREDENTIAL_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-ra5-razorpay-credential")
+RA5_RAZORPAY_ROUTE_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-ra5-razorpay-route")
+RA5_RAZORPAY_ENDPOINT_ID = "rzp-ra5-webhook-endpoint"
+RA5_RAZORPAY_KEY_ID = "rzp_test_ra5_fixture"
+RA5_RAZORPAY_WEBHOOK_SECRET = "ra5-synthetic-webhook-secret"
 
 
 def _assert_destructive_reset_allowed(database_url: str, command: str) -> None:
@@ -600,6 +608,10 @@ async def seed_ra5_scenario():
     await seed_ra4_scenario()
     from app.core.config import settings
 
+    if not settings.INTEGRATION_MASTER_KEY_FILE:
+        raise SystemExit("RA-5 seed requires INTEGRATION_MASTER_KEY_FILE")
+    secret_store = EncryptedDatabaseSecretStore(key_path=settings.INTEGRATION_MASTER_KEY_FILE)
+
     engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
     maker = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
     async with maker() as session:
@@ -636,6 +648,33 @@ async def seed_ra5_scenario():
         for feature in ("appointments", "vitals", "lab"):
             if feature not in existing_features:
                 session.add(TenantFeature(id=uuid.uuid4(), tenant_id=TENANT_A_ID, feature=feature, enabled=True))
+        await session.execute(delete(TenantProviderWebhookRoute).where(TenantProviderWebhookRoute.connection_id == RA5_RAZORPAY_CONNECTION_ID))
+        await session.execute(delete(TenantProviderCredentialVersion).where(TenantProviderCredentialVersion.id == RA5_RAZORPAY_CREDENTIAL_ID))
+        await session.execute(delete(TenantProviderConnection).where(TenantProviderConnection.id == RA5_RAZORPAY_CONNECTION_ID))
+        ciphertext, nonce, algorithm, key_version = await secret_store.store_secret(
+            tenant_id=TENANT_A_ID,
+            provider="razorpay",
+            capability="payment",
+            environment="LIVE",
+            credential_version=1,
+            secret=json.dumps({"key_secret": "ra5-synthetic-key-secret", "webhook_secret": RA5_RAZORPAY_WEBHOOK_SECRET}, sort_keys=True),
+        )
+        session.add_all([
+            TenantProviderConnection(
+                id=RA5_RAZORPAY_CONNECTION_ID, tenant_id=TENANT_A_ID, provider="razorpay", capability="payment",
+                environment="LIVE", status="LIVE", credential_version=1, endpoint_id=RA5_RAZORPAY_ENDPOINT_ID,
+                public_configuration={"key_id": RA5_RAZORPAY_KEY_ID}, connection_name="RA-5 Razorpay",
+            ),
+            TenantProviderCredentialVersion(
+                id=RA5_RAZORPAY_CREDENTIAL_ID, tenant_id=TENANT_A_ID, provider="razorpay", capability="payment",
+                environment="LIVE", credential_version=1, secret_ciphertext=ciphertext, secret_nonce=nonce,
+                algorithm=algorithm, key_version=key_version,
+            ),
+            TenantProviderWebhookRoute(
+                id=RA5_RAZORPAY_ROUTE_ID, tenant_id=TENANT_A_ID, provider="razorpay", capability="payment",
+                environment="LIVE", connection_id=RA5_RAZORPAY_CONNECTION_ID, is_active=True,
+            ),
+        ])
         await session.commit()
 
         await session.execute(text(f'SET search_path TO "{SCHEMA_A}", public'))
@@ -698,6 +737,7 @@ async def seed_ra5_scenario():
         "hospital_b_visit_id": str(HOSPITAL_B_VISIT_ID),
         "webhook_invoice_id": str(RA5_WEBHOOK_INVOICE_ID),
         "webhook_order_id": RA5_WEBHOOK_ORDER_ID,
+        "integration_endpoint_id": RA5_RAZORPAY_ENDPOINT_ID,
         "pharmacy_location_id": str(RA4_LOCATION_ID),
         "retail_product_id": str(PRODUCT_A_ID),
         "slot_date": slot_date.isoformat(),

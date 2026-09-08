@@ -18,6 +18,7 @@ type Ra5Fixture = {
   hospital_b_visit_id: string
   webhook_invoice_id: string
   webhook_order_id: string
+  integration_endpoint_id: string
   pharmacy_location_id: string
   retail_product_id: string
   slot_date: string
@@ -32,7 +33,7 @@ const pharmacist = { username: 'e2e_pharmacist_task7', password: 'E2ePharmacist@
 const superAdmin = { username: 'e2e_super_admin_task7', password: 'E2eSuperAdmin@123' }
 const hospitalBDoctor = { username: 'e2e_doctor_task7_b', password: 'E2eDoctorB@123' }
 const task7VisitId = 'a5a85a47-7a23-5587-97de-56daaf8b7822'
-const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET ?? 'e2e-webhook-secret'
+const webhookSecret = 'ra5-synthetic-webhook-secret'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 test.setTimeout(180_000)
@@ -132,7 +133,7 @@ function webhookBody(fixture: Ra5Fixture, paymentId: string, amount = 25_000) {
 }
 
 async function postWebhook(request: APIRequestContext, body: string, signature?: string) {
-  return request.post('/api/v1/billing/razorpay/webhook', {
+  return request.post(`/api/v1/integrations/webhooks/razorpay/${fixture.integration_endpoint_id}`, {
     data: body,
     headers: {
       'Content-Type': 'application/json',
@@ -562,6 +563,8 @@ test.describe.serial('Release A deterministic OPD chain', () => {
   })
 
   test('Razorpay webhook rejects tampering and processes one payment idempotently', async ({ request }) => {
+    const legacy = await request.post('/api/v1/billing/razorpay/webhook')
+    expect(legacy.status()).toBe(410)
     const validBody = webhookBody(fixture, 'pay_ra5_captured_250')
     const invalidSignature = await postWebhook(request, validBody, 'tampered-signature')
     expect(invalidSignature.status()).toBe(400)

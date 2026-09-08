@@ -167,6 +167,7 @@ def upgrade() -> None:
                     sa.Column("key_version", sa.String(64), nullable=False),
                     sa.Column("algorithm", sa.String(32), nullable=False),
                     sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+                    sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
                     sa.Column("versioned_by", sa.String(128), nullable=True),
                     sa.ForeignKeyConstraint(["tenant_id"], ["public.tenants.id"], name="fk_provider_credential_versions_tenant_id", ondelete="CASCADE"),
                     sa.CheckConstraint("credential_version > 0", name="ck_provider_credential_versions_version"),
@@ -242,6 +243,8 @@ def upgrade() -> None:
             "secret_nonce": sa.Column("secret_nonce", sa.String(128), nullable=False),
             "key_version": sa.Column("key_version", sa.String(64), nullable=False),
             "algorithm": sa.Column("algorithm", sa.String(32), nullable=False),
+            "created_at": sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+            "updated_at": sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         }
         for name, column in required.items():
             _compatible_column(bind, "tenant_provider_credential_versions", column)
