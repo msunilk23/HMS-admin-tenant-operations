@@ -70,7 +70,7 @@ type FixtureSnapshot = {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 function fixtureSnapshot(visitId: string = doctor.visitId): FixtureSnapshot {
-  const output = execFileSync(process.env.PYTHON ?? 'python', [
+  const output = execFileSync(process.env.E2E_PYTHON ?? process.env.PYTHON ?? 'python', [
     path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'),
     'snapshot',
     visitId,
@@ -87,7 +87,7 @@ function fixtureSnapshot(visitId: string = doctor.visitId): FixtureSnapshot {
 }
 
 function resetTask7Fixture() {
-  execFileSync(process.env.PYTHON ?? 'python', [
+  execFileSync(process.env.E2E_PYTHON ?? process.env.PYTHON ?? 'python', [
     path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'),
     'reset_task7_scenario',
   ], {

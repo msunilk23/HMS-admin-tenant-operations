@@ -12,7 +12,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const basePharmacyLocationId = '9cb201ea-b1b8-5857-8f7a-764967d21f17'
 
 function resetFixture() {
-  execFileSync(process.env.PYTHON ?? 'python', [
+  execFileSync(process.env.E2E_PYTHON ?? process.env.PYTHON ?? 'python', [
     path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'),
     'reset_procurement_scenario',
   ], {

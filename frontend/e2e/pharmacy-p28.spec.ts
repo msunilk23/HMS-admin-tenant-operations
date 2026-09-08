@@ -10,7 +10,7 @@ const locationId = '9cb201ea-b1b8-5857-8f7a-764967d21f17'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 function seedP28() {
-  execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed_p28_scenario'], {
+  execFileSync(process.env.E2E_PYTHON ?? process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed_p28_scenario'], {
     cwd: path.join(repoRoot, 'backend'),
     stdio: 'inherit',
     env: {
@@ -61,7 +61,7 @@ test.describe.serial('P28 pharmacy dispensing workflow', () => {
     await page.reload()
     await expect(page.getByText(/dispensed orders today/i)).toBeVisible()
 
-    const snapshot = JSON.parse(execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'snapshot_p28'], {
+    const snapshot = JSON.parse(execFileSync(process.env.E2E_PYTHON ?? process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'snapshot_p28'], {
       cwd: path.join(repoRoot, 'backend'),
       encoding: 'utf8',
       env: {

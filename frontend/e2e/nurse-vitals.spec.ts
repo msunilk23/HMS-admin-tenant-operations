@@ -34,7 +34,7 @@ function fixtureEnv() {
 }
 
 function runFixture(command: 'seed' | 'cleanup', input?: string): string {
-  return execFileSync(process.env.PYTHON ?? 'python', [fixtureScript, command], {
+  return execFileSync(process.env.E2E_PYTHON ?? process.env.PYTHON ?? 'python', [fixtureScript, command], {
     cwd: path.join(repoRoot, 'backend'),
     env: fixtureEnv(),
     input,

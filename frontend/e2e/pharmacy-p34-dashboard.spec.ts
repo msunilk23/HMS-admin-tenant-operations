@@ -11,10 +11,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const env = { ...process.env, E2E_ENVIRONMENT: 'E2E', E2E_ALLOW_DESTRUCTIVE_RESET: 'true', DATABASE_URL: process.env.E2E_DATABASE_URL ?? 'postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital', SECRET_KEY: process.env.SECRET_KEY ?? 'test-secret-key' }
 
 function seedP34() {
-  execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed_p34_scenario'], { cwd: path.join(repoRoot, 'backend'), stdio: 'inherit', env })
+  execFileSync(process.env.E2E_PYTHON ?? process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed_p34_scenario'], { cwd: path.join(repoRoot, 'backend'), stdio: 'inherit', env })
 }
 function snapshotP34() {
-  return JSON.parse(execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'snapshot_p34'], { cwd: path.join(repoRoot, 'backend'), encoding: 'utf8', env }))
+  return JSON.parse(execFileSync(process.env.E2E_PYTHON ?? process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'snapshot_p34'], { cwd: path.join(repoRoot, 'backend'), encoding: 'utf8', env }))
 }
 async function login(page: Page, user: typeof pharmacist) {
   await page.goto('/login')

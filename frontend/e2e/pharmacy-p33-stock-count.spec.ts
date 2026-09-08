@@ -1,8 +1,8 @@
 import { expect, test, type Page } from '@playwright/test'
-import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPageDiagnostics, type PageDiagnosticsCollector } from './support/pageDiagnostics'
+import { runPythonFixture } from './support/pythonFixture'
 
 const pharmacist = { username: 'e2e_pharmacist_task7', password: 'E2ePharmacist@123' }
 const manager = { username: 'e2e_store_manager_task7', password: 'E2eManager@123' }
@@ -12,11 +12,11 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const env = { ...process.env, E2E_ENVIRONMENT: 'E2E', E2E_ALLOW_DESTRUCTIVE_RESET: 'true', DATABASE_URL: process.env.E2E_DATABASE_URL ?? 'postgresql+asyncpg://hospital_user:hospital_pass@localhost:5433/hospital', SECRET_KEY: process.env.SECRET_KEY ?? 'test-secret-key' }
 
 function seedP33() {
-  execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed_p33_scenario'], { cwd: path.join(repoRoot, 'backend'), stdio: 'inherit', env })
+  runPythonFixture([path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'seed_p33_scenario'], { cwd: path.join(repoRoot, 'backend'), encoding: 'utf8', env })
 }
 
 function snapshotP33() {
-  return JSON.parse(execFileSync(process.env.PYTHON ?? 'python', [path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'snapshot_p33'], { cwd: path.join(repoRoot, 'backend'), encoding: 'utf8', env }))
+  return JSON.parse(runPythonFixture([path.join(repoRoot, 'backend', 'tests', 'e2e_seed_task7.py'), 'snapshot_p33'], { cwd: path.join(repoRoot, 'backend'), encoding: 'utf8', env }))
 }
 
 async function login(page: Page, user: typeof pharmacist) {
