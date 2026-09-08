@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "type-check": "tsc --noEmit",
+    "type-check:e2e": "tsc -p e2e/tsconfig.json --noEmit",
     "test:unit": "vitest run",
     "e2e": "playwright test"
   },

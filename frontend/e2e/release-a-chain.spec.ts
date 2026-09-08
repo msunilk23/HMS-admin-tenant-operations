@@ -132,8 +132,13 @@ function webhookBody(fixture: Ra5Fixture, paymentId: string, amount = 25_000) {
   })
 }
 
-async function postWebhook(request: APIRequestContext, body: string, signature?: string) {
-  return request.post(`/api/v1/integrations/webhooks/razorpay/${fixture.integration_endpoint_id}`, {
+async function postWebhook(
+  request: APIRequestContext,
+  integrationEndpointId: string,
+  body: string,
+  signature?: string,
+) {
+  return request.post(`/api/v1/integrations/webhooks/razorpay/${integrationEndpointId}`, {
     data: body,
     headers: {
       'Content-Type': 'application/json',
@@ -566,22 +571,22 @@ test.describe.serial('Release A deterministic OPD chain', () => {
     const legacy = await request.post('/api/v1/billing/razorpay/webhook')
     expect(legacy.status()).toBe(410)
     const validBody = webhookBody(fixture, 'pay_ra5_captured_250')
-    const invalidSignature = await postWebhook(request, validBody, 'tampered-signature')
+    const invalidSignature = await postWebhook(request, fixture.integration_endpoint_id, validBody, 'tampered-signature')
     expect(invalidSignature.status()).toBe(400)
 
     const wrongAmountBody = webhookBody(fixture, 'pay_ra5_wrong_amount', 24_999)
-    const wrongAmount = await postWebhook(request, wrongAmountBody)
+    const wrongAmount = await postWebhook(request, fixture.integration_endpoint_id, wrongAmountBody)
     expect(wrongAmount.status()).toBe(400)
     expect(await wrongAmount.json()).toMatchObject({ detail: /amount or currency does not match/i })
 
-    const captured = await postWebhook(request, validBody)
+    const captured = await postWebhook(request, fixture.integration_endpoint_id, validBody)
     expect(captured.status(), await captured.text()).toBe(200)
-    expect(await captured.json()).toEqual({ status: 'ok' })
+    expect(await captured.json()).toEqual({ status: 'processed' })
 
-    const retry = await postWebhook(request, validBody)
+    const retry = await postWebhook(request, fixture.integration_endpoint_id, validBody)
     expect(retry.status(), await retry.text()).toBe(200)
 
-    const replay = await postWebhook(request, webhookBody(fixture, 'pay_ra5_replay_other'))
+    const replay = await postWebhook(request, fixture.integration_endpoint_id, webhookBody(fixture, 'pay_ra5_replay_other'))
     expect(replay.status()).toBe(409)
     expect(await replay.json()).toMatchObject({ detail: /already paid by a different payment/i })
 
