@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
+from app.core.secret_store import initialize_secret_store
 from app.core.uploads import get_uploads_dir
 from app.db.engine import init_db
 from app.middleware.tenant import TenantMiddleware
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    initialize_secret_store()
     logger.info("=" * 80)
     logger.info("🚀 HOSPITAL API STARTING UP")
     logger.info("=" * 80)

@@ -30,7 +30,7 @@ class SecretStore(Protocol):
         associated_data: dict[str, Any] | None = None,
     ) -> tuple[str, str, str, str]: ...
 
-    async def get_secret(
+    async def decrypt_secret(
         self,
         *,
         tenant_id: str | uuid.UUID,
@@ -38,20 +38,10 @@ class SecretStore(Protocol):
         capability: str,
         environment: str,
         credential_version: int,
+        ciphertext: str,
+        nonce: str,
         associated_data: dict[str, Any] | None = None,
     ) -> str: ...
-
-    async def rotate_secret(
-        self,
-        *,
-        tenant_id: str | uuid.UUID,
-        provider: str,
-        capability: str,
-        environment: str,
-        current_version: int,
-        new_secret: str,
-        associated_data: dict[str, Any] | None = None,
-    ) -> int: ...
 
     def invalidate_cache(self, *, tenant_id: str | uuid.UUID | None = None, provider: str | None = None, environment: str | None = None) -> None: ...
 
@@ -87,7 +77,7 @@ class EncryptedDatabaseSecretStore:
                 raise ValueError(f"Integration master key file is too short: {key_path}")
             return hashlib.sha256(value).digest()
         if test_mode:
-            return hashlib.sha256(b"ephemeral-test-secret-store-key").digest()
+            raise RuntimeError("test secret store requires an explicit ephemeral master key or key file")
         raise RuntimeError("Integration master key is not configured; startup fails closed")
 
     @staticmethod
@@ -177,7 +167,7 @@ class EncryptedDatabaseSecretStore:
                 del self._cache[old_key]
         return ciphertext, nonce, self.ALGORITHM, self.KEY_VERSION
 
-    async def get_secret(
+    async def decrypt_secret(
         self,
         *,
         tenant_id: str | uuid.UUID,
@@ -185,29 +175,26 @@ class EncryptedDatabaseSecretStore:
         capability: str,
         environment: str,
         credential_version: int,
+        ciphertext: str,
+        nonce: str,
         associated_data: dict[str, Any] | None = None,
     ) -> str:
         key = (str(tenant_id), provider, capability, environment, credential_version)
         cached = self._cache.get(key)
         if cached and cached[1] > datetime.now(timezone.utc):
             return cached[0]
-        raise KeyError("Secret not available for tenant/provider/version")
-
-    async def rotate_secret(
-        self,
-        *,
-        tenant_id: str | uuid.UUID,
-        provider: str,
-        capability: str,
-        environment: str,
-        current_version: int,
-        new_secret: str,
-        associated_data: dict[str, Any] | None = None,
-    ) -> int:
-        next_version = (current_version or 0) + 1
-        self.invalidate_cache(tenant_id=tenant_id, provider=provider, environment=environment)
-        self._cache[(str(tenant_id), provider, capability, environment, next_version)] = (new_secret, datetime.now(timezone.utc) + timedelta(minutes=5))
-        return next_version
+        plaintext = self._decrypt(
+            ciphertext_b64=ciphertext,
+            nonce_b64=nonce,
+            tenant_id=tenant_id,
+            provider=provider,
+            capability=capability,
+            environment=environment,
+            credential_version=credential_version,
+            associated_data=associated_data,
+        )
+        self._cache[key] = (plaintext, datetime.now(timezone.utc) + timedelta(minutes=5))
+        return plaintext
 
 
 _secret_store_singleton: SecretStore | None = None
@@ -216,25 +203,26 @@ _secret_store_singleton: SecretStore | None = None
 def get_secret_store(*, master_key: str | None = None, key_path: str | None = None, test_mode: bool = False) -> SecretStore:
     global _secret_store_singleton
     if _secret_store_singleton is None:
-        _secret_store_singleton = EncryptedDatabaseSecretStore(master_key=master_key, key_path=key_path, test_mode=test_mode)
+        if master_key is not None or key_path is not None:
+            _secret_store_singleton = EncryptedDatabaseSecretStore(master_key=master_key, key_path=key_path, test_mode=test_mode)
+        else:
+            _secret_store_singleton = initialize_secret_store()
     return _secret_store_singleton
 
 
 def initialize_secret_store() -> SecretStore:
     from app.core.config import settings
 
+    global _secret_store_singleton
+
     key_path = getattr(settings, "INTEGRATION_MASTER_KEY_FILE", None) or None
     master_key = getattr(settings, "INTEGRATION_MASTER_KEY", None) or None
     test_mode = str(getattr(settings, "ENVIRONMENT", "production")).lower() in {"development", "test", "e2e"}
 
     if master_key is not None:
-        return EncryptedDatabaseSecretStore(master_key=master_key)
-    if key_path is not None:
-        return EncryptedDatabaseSecretStore(key_path=key_path)
-    if test_mode:
-        return EncryptedDatabaseSecretStore(test_mode=True)
-    raise RuntimeError("Integration master key is not configured; startup fails closed")
-    return store
-
-
-secret_store = initialize_secret_store()
+        _secret_store_singleton = EncryptedDatabaseSecretStore(master_key=master_key)
+    elif key_path is not None:
+        _secret_store_singleton = EncryptedDatabaseSecretStore(key_path=key_path)
+    else:
+        raise RuntimeError("Integration master key is not configured; startup fails closed")
+    return _secret_store_singleton

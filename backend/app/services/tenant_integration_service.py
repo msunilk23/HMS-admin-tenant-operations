@@ -7,12 +7,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.secret_store import get_secret_store
+from app.core.secret_store import SecretStore, get_secret_store
 from app.integrations.providers import PROVIDER_CONFIGS, get_provider_adapter
 from app.models.public.tenant_integration import (
     TenantProviderAuditEvent,
     TenantProviderConnection,
     TenantProviderCredentialVersion,
+    TenantProviderWebhookRoute,
 )
 
 
@@ -75,6 +76,13 @@ async def create_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
         updated_by="system",
     )
     session.add(record)
+    session.add(TenantProviderWebhookRoute(
+        tenant_id=tenant_id,
+        provider=provider_key,
+        capability=capability_name,
+        environment=environment.upper(),
+        connection_id=record.id,
+    ))
     await _audit_event(session=session, tenant_id=tenant_id, provider=provider_key, capability=capability_name, environment=environment.upper(), event_type="connection_created", result="SUCCESS", metadata={"endpoint_id": record.endpoint_id})
     await session.commit()
     await session.refresh(record)
@@ -107,7 +115,7 @@ async def update_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
     return {"id": str(record.id), "provider": record.provider, "environment": record.environment, "status": record.status}
 
 
-async def submit_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, credential_type: str, secret: str | None, credential_version: int | None) -> dict[str, Any]:
+async def submit_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, credential_type: str, secret: str | None, credential_version: int | None, secret_store: SecretStore | None = None) -> dict[str, Any]:
     provider_key = provider.lower()
     config = PROVIDER_CONFIGS.get(provider_key)
     if config is None:
@@ -115,7 +123,7 @@ async def submit_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
     if secret is None:
         raise ValueError("Secret payload is required")
     version = credential_version or 1
-    store = get_secret_store(test_mode=True)
+    store = secret_store or get_secret_store()
     ciphertext, nonce, algorithm, key_version = await store.store_secret(
         tenant_id=tenant_id,
         provider=provider_key,
@@ -148,13 +156,13 @@ async def submit_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
     }
 
 
-async def rotate_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, credential_type: str, secret: str) -> dict[str, Any]:
+async def rotate_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, credential_type: str, secret: str, secret_store: SecretStore | None = None) -> dict[str, Any]:
     provider_key = provider.lower()
     existing = await session.scalar(select(TenantProviderConnection).where(TenantProviderConnection.tenant_id == tenant_id, TenantProviderConnection.provider == provider_key, TenantProviderConnection.environment == environment.upper()))
     if existing is None:
         raise ValueError(f"No connection found for provider {provider}")
     next_version = (existing.credential_version or 0) + 1
-    store = get_secret_store(test_mode=True)
+    store = secret_store or get_secret_store()
     ciphertext, nonce, algorithm, key_version = await store.store_secret(
         tenant_id=tenant_id,
         provider=provider_key,
@@ -177,10 +185,35 @@ async def rotate_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
     )
     session.add(version_record)
     existing.credential_version = next_version
-    existing.status = "TEST"
+    store.invalidate_cache(tenant_id=tenant_id, provider=provider_key, environment=environment.upper())
     await _audit_event(session=session, tenant_id=tenant_id, provider=provider_key, capability=credential_type or existing.capability, environment=environment.upper(), event_type="secret_rotated", result="SUCCESS", metadata={"previous_version": next_version - 1, "new_version": next_version})
     await session.commit()
     return {"provider": provider_key, "credential_version": next_version, "status": existing.status}
+
+
+async def get_persisted_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, capability: str, environment: str, credential_version: int, secret_store: SecretStore | None = None) -> str:
+    provider_key = provider.lower()
+    environment_key = environment.upper()
+    version = await session.scalar(
+        select(TenantProviderCredentialVersion).where(
+            TenantProviderCredentialVersion.tenant_id == tenant_id,
+            TenantProviderCredentialVersion.provider == provider_key,
+            TenantProviderCredentialVersion.capability == capability,
+            TenantProviderCredentialVersion.environment == environment_key,
+            TenantProviderCredentialVersion.credential_version == credential_version,
+        )
+    )
+    if version is None:
+        raise KeyError("Credential version does not exist for this tenant integration")
+    return await (secret_store or get_secret_store()).decrypt_secret(
+        tenant_id=tenant_id,
+        provider=provider_key,
+        capability=capability,
+        environment=environment_key,
+        credential_version=credential_version,
+        ciphertext=version.secret_ciphertext,
+        nonce=version.secret_nonce,
+    )
 
 
 async def test_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, credential_type: str, secret: str | None) -> dict[str, Any]:
@@ -193,19 +226,31 @@ async def test_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provid
     record = await session.scalar(select(TenantProviderConnection).where(TenantProviderConnection.tenant_id == tenant_id, TenantProviderConnection.provider == provider_key, TenantProviderConnection.environment == environment.upper()))
     if record is None:
         record = await create_connection(session=session, tenant_id=tenant_id, provider=provider_key, environment=environment, capability=credential_type)
-    record.connection_tested_at = datetime.utcnow()
-    record.last_success_at = datetime.utcnow()
-    record.last_error = None
-    record.status = "TEST"
-    await _audit_event(session=session, tenant_id=tenant_id, provider=provider_key, capability=credential_type, environment=environment.upper(), event_type="connection_test", result="SUCCESS", metadata={"provider": provider_key, "result": "success"})
+    record.last_error = "Provider connection testing is not implemented"
+    await _audit_event(session=session, tenant_id=tenant_id, provider=provider_key, capability=credential_type, environment=environment.upper(), event_type="connection_test", result="NOT_IMPLEMENTED", metadata={"provider": provider_key})
     await session.commit()
-    return {"provider": provider_key, "environment": environment.upper(), "status": "TEST", "success": True}
+    return {"provider": provider_key, "environment": environment.upper(), "status": record.status, "success": False, "state": "NOT_IMPLEMENTED"}
 
 
 async def enable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str) -> dict[str, Any]:
     record = await session.scalar(select(TenantProviderConnection).where(TenantProviderConnection.tenant_id == tenant_id, TenantProviderConnection.provider == provider.lower()))
     if record is None:
         raise ValueError(f"No connection found for provider {provider}")
+    if record.environment != "LIVE":
+        raise ValueError("Only LIVE-environment connections can be enabled")
+    if record.connection_tested_at is None or record.last_success_at is None or record.status != "TEST":
+        raise ValueError("LIVE activation requires a successful provider connection test")
+    credential = await session.scalar(
+        select(TenantProviderCredentialVersion).where(
+            TenantProviderCredentialVersion.tenant_id == tenant_id,
+            TenantProviderCredentialVersion.provider == record.provider,
+            TenantProviderCredentialVersion.capability == record.capability,
+            TenantProviderCredentialVersion.environment == record.environment,
+            TenantProviderCredentialVersion.credential_version == record.credential_version,
+        )
+    )
+    if credential is None:
+        raise ValueError("LIVE activation requires the current credential version")
     previous_status = record.status
     record.status = "LIVE"
     await _audit_event(session=session, tenant_id=tenant_id, provider=record.provider, capability=record.capability, environment=record.environment, event_type="connection_enabled", result="SUCCESS", metadata={"previous_status": previous_status, "new_status": record.status})
@@ -219,6 +264,7 @@ async def disable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, pro
         raise ValueError(f"No connection found for provider {provider}")
     previous_status = record.status
     record.status = "DISABLED"
+    get_secret_store().invalidate_cache(tenant_id=tenant_id, provider=record.provider, environment=record.environment)
     await _audit_event(session=session, tenant_id=tenant_id, provider=record.provider, capability=record.capability, environment=record.environment, event_type="connection_disabled", result="SUCCESS", metadata={"previous_status": previous_status, "new_status": record.status})
     await session.commit()
     return {"provider": provider.lower(), "status": "DISABLED"}

@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +24,11 @@ class TenantProviderConnection(Base, TimestampMixin):
         UniqueConstraint("endpoint_id", name="uq_provider_connections_endpoint_id"),
         Index("ix_provider_connections_tenant_provider", "tenant_id", "provider"),
         Index("ix_provider_connections_status", "status"),
+        CheckConstraint("provider IN ('twilio', 'razorpay', 'cloudinary')", name="ck_provider_connections_provider"),
+        CheckConstraint("capability IN ('communication', 'payment', 'document_storage')", name="ck_provider_connections_capability"),
+        CheckConstraint("environment IN ('TEST', 'LIVE')", name="ck_provider_connections_environment"),
+        CheckConstraint("status IN ('DISABLED', 'TEST', 'LIVE')", name="ck_provider_connections_status"),
+        CheckConstraint("credential_version > 0", name="ck_provider_connections_credential_version"),
         {"schema": "public"},
     )
 
@@ -55,6 +60,10 @@ class TenantProviderCredentialVersion(Base, TimestampMixin):
             name="uq_provider_credentials_tenant_provider_env_version",
         ),
         Index("ix_provider_credentials_tenant_provider", "tenant_id", "provider"),
+        CheckConstraint("provider IN ('twilio', 'razorpay', 'cloudinary')", name="ck_provider_credentials_provider"),
+        CheckConstraint("capability IN ('communication', 'payment', 'document_storage')", name="ck_provider_credentials_capability"),
+        CheckConstraint("environment IN ('TEST', 'LIVE')", name="ck_provider_credentials_environment"),
+        CheckConstraint("credential_version > 0", name="ck_provider_credentials_version"),
         {"schema": "public"},
     )
 
@@ -76,8 +85,10 @@ class TenantProviderCredentialVersion(Base, TimestampMixin):
 class TenantProviderWebhookRoute(Base):
     __tablename__ = "tenant_provider_webhook_routes"
     __table_args__ = (
-        UniqueConstraint("integration_endpoint_id", name="uq_provider_webhook_routes_endpoint"),
         Index("ix_provider_webhook_routes_tenant_provider", "tenant_id", "provider"),
+        CheckConstraint("provider IN ('twilio', 'razorpay', 'cloudinary')", name="ck_provider_webhook_routes_provider"),
+        CheckConstraint("capability IN ('communication', 'payment', 'document_storage')", name="ck_provider_webhook_routes_capability"),
+        CheckConstraint("environment IN ('TEST', 'LIVE')", name="ck_provider_webhook_routes_environment"),
         {"schema": "public"},
     )
 
@@ -88,8 +99,12 @@ class TenantProviderWebhookRoute(Base):
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     capability: Mapped[str] = mapped_column(String(64), nullable=False)
     environment: Mapped[str] = mapped_column(String(32), nullable=False)
-    connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    integration_endpoint_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("public.tenant_provider_connections.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -99,6 +114,9 @@ class TenantProviderAuditEvent(Base):
     __tablename__ = "tenant_provider_audit_events"
     __table_args__ = (
         Index("ix_provider_audit_events_tenant_time", "tenant_id", "created_at"),
+        CheckConstraint("provider IN ('twilio', 'razorpay', 'cloudinary')", name="ck_provider_audit_events_provider"),
+        CheckConstraint("capability IN ('communication', 'payment', 'document_storage')", name="ck_provider_audit_events_capability"),
+        CheckConstraint("environment IN ('TEST', 'LIVE')", name="ck_provider_audit_events_environment"),
         {"schema": "public"},
     )
 
