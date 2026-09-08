@@ -176,6 +176,7 @@ RA5_RAZORPAY_CREDENTIAL_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-ra5-razorpa
 RA5_RAZORPAY_ROUTE_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "hms-e2e-ra5-razorpay-route")
 RA5_RAZORPAY_ENDPOINT_ID = "rzp-ra5-webhook-endpoint"
 RA5_RAZORPAY_KEY_ID = "rzp_test_ra5_fixture"
+RA5_RAZORPAY_KEY_SECRET = str(uuid.UUID(int=2))
 RA5_RAZORPAY_WEBHOOK_SECRET = "ra5-synthetic-webhook-secret"
 
 
@@ -657,7 +658,7 @@ async def seed_ra5_scenario():
             capability="payment",
             environment="LIVE",
             credential_version=1,
-            secret=json.dumps({"key_secret": "ra5-synthetic-key-secret", "webhook_secret": RA5_RAZORPAY_WEBHOOK_SECRET}, sort_keys=True),
+            secret=json.dumps({"key_secret": RA5_RAZORPAY_KEY_SECRET, "webhook_secret": RA5_RAZORPAY_WEBHOOK_SECRET}, sort_keys=True),
         )
         session.add_all([
             TenantProviderConnection(

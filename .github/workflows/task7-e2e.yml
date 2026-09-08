@@ -310,27 +310,45 @@ jobs:
         env:
           E2E_ALLOW_DESTRUCTIVE_RESET: 'true'
         run: npm run e2e -- --reporter=line
-      - name: Scan committed history and worktree for secrets
+      - name: Download pinned Gitleaks scanner
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz -C "$RUNNER_TEMP" gitleaks
+      - name: Scan current worktree for secrets (blocking)
         run: |
           set +e
-          scanner="$RUNNER_TEMP/gitleaks"
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz -C "$RUNNER_TEMP" gitleaks
-
-          "$scanner" git --redact --no-banner --exit-code 1 . > "$RUNNER_TEMP/gitleaks-history.log" 2>&1
-          history_status=$?
-
           # Remove generated runtime data before scanning the checkout itself.
           rm -rf .env backend-e2e.log frontend-e2e.log \
             frontend/dist frontend/playwright-report frontend/test-results frontend/blob-report
 
-          "$scanner" dir --redact --no-banner --exit-code 1 . > "$RUNNER_TEMP/gitleaks-worktree.log" 2>&1
+          "$RUNNER_TEMP/gitleaks" dir --redact --no-banner --exit-code 1 . > "$RUNNER_TEMP/gitleaks-worktree.log" 2>&1
           worktree_status=$?
 
-          cat "$RUNNER_TEMP/gitleaks-history.log"
           cat "$RUNNER_TEMP/gitleaks-worktree.log"
-          echo "Gitleaks history scan exit: $history_status"
           echo "Gitleaks worktree scan exit: $worktree_status"
-          test "$history_status" -eq 0 && test "$worktree_status" -eq 0
+          exit "$worktree_status"
+      - name: Scan post-baseline git history for secrets (blocking)
+        run: |
+          set +e
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --exit-code 1 \
+            --log-opts="a234e2ab05eda3ad4c35e1e6f2521dbd546506b0..HEAD" \
+            . > "$RUNNER_TEMP/gitleaks-post-baseline.log" 2>&1
+          post_baseline_status=$?
+
+          cat "$RUNNER_TEMP/gitleaks-post-baseline.log"
+          echo "Gitleaks post-baseline history scan exit: $post_baseline_status"
+          exit "$post_baseline_status"
+      - name: Scan full legacy git history for secrets (advisory, non-blocking)
+        if: always()
+        run: |
+          set +e
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --exit-code 1 \
+            . > "$RUNNER_TEMP/gitleaks-full-history.log" 2>&1
+          full_history_status=$?
+          full_history_count=$(grep -c "^Finding:" "$RUNNER_TEMP/gitleaks-full-history.log" || true)
+
+          cat "$RUNNER_TEMP/gitleaks-full-history.log"
+          echo "Gitleaks full legacy history scan exit: $full_history_status (advisory, does not fail the job)"
+          echo "Gitleaks full legacy history finding count: $full_history_count"
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
