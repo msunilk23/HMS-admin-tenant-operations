@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { Eye, EyeOff } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import apiClient from '@/services/apiClient'
 import { useAuthStore } from '@/features/auth/authStore'
@@ -29,6 +30,11 @@ export default function ChangePasswordPage() {
   const navigate = useNavigate()
   const [success, setSuccess] = useState(false)
   const [serverError, setServerError] = useState<string | null>(null)
+  const [visibleFields, setVisibleFields] = useState<Record<keyof FormValues, boolean>>({
+    current_password: false,
+    new_password: false,
+    confirm_password: false,
+  })
 
   const {
     register,
@@ -114,13 +120,18 @@ export default function ChangePasswordPage() {
                   <label className="block text-sm font-medium text-gray-700">
                     Current Password
                   </label>
-                  <input
-                    {...register('current_password')}
-                    type="password"
-                    autoComplete="current-password"
-                    className={inputCls}
-                    placeholder="Your current password"
-                  />
+                  <div className="relative">
+                    <input
+                      {...register('current_password')}
+                      type={visibleFields.current_password ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      className={`${inputCls} pr-11`}
+                      placeholder="Your current password"
+                    />
+                    <button type="button" onClick={() => setVisibleFields(fields => ({ ...fields, current_password: !fields.current_password }))} aria-label={visibleFields.current_password ? 'Hide current password' : 'Show current password'} title={visibleFields.current_password ? 'Hide current password' : 'Show current password'} className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary">
+                      {visibleFields.current_password ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                   {errors.current_password && (
                     <p className="text-xs text-red-500">{errors.current_password.message}</p>
                   )}
@@ -131,13 +142,18 @@ export default function ChangePasswordPage() {
                 {/* New password */}
                 <div className="space-y-1">
                   <label className="block text-sm font-medium text-gray-700">New Password</label>
-                  <input
-                    {...register('new_password')}
-                    type="password"
-                    autoComplete="new-password"
-                    className={inputCls}
-                    placeholder="At least 8 characters"
-                  />
+                  <div className="relative">
+                    <input
+                      {...register('new_password')}
+                      type={visibleFields.new_password ? 'text' : 'password'}
+                      autoComplete="new-password"
+                      className={`${inputCls} pr-11`}
+                      placeholder="At least 8 characters"
+                    />
+                    <button type="button" onClick={() => setVisibleFields(fields => ({ ...fields, new_password: !fields.new_password }))} aria-label={visibleFields.new_password ? 'Hide new password' : 'Show new password'} title={visibleFields.new_password ? 'Hide new password' : 'Show new password'} className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary">
+                      {visibleFields.new_password ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                   {errors.new_password && (
                     <p className="text-xs text-red-500">{errors.new_password.message}</p>
                   )}
@@ -148,13 +164,18 @@ export default function ChangePasswordPage() {
                   <label className="block text-sm font-medium text-gray-700">
                     Confirm New Password
                   </label>
-                  <input
-                    {...register('confirm_password')}
-                    type="password"
-                    autoComplete="new-password"
-                    className={inputCls}
-                    placeholder="Repeat new password"
-                  />
+                  <div className="relative">
+                    <input
+                      {...register('confirm_password')}
+                      type={visibleFields.confirm_password ? 'text' : 'password'}
+                      autoComplete="new-password"
+                      className={`${inputCls} pr-11`}
+                      placeholder="Repeat new password"
+                    />
+                    <button type="button" onClick={() => setVisibleFields(fields => ({ ...fields, confirm_password: !fields.confirm_password }))} aria-label={visibleFields.confirm_password ? 'Hide confirmed password' : 'Show confirmed password'} title={visibleFields.confirm_password ? 'Hide confirmed password' : 'Show confirmed password'} className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary">
+                      {visibleFields.confirm_password ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                   {errors.confirm_password && (
                     <p className="text-xs text-red-500">{errors.confirm_password.message}</p>
                   )}
