@@ -1,10 +1,12 @@
 import uuid
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.models.public.tenant_integration import TenantCommunicationRoute
 from app.services.tenant_integration_service import (
+    get_msg91_sms_provider,
     list_communication_routes,
     rotate_secret,
     set_communication_route,
@@ -200,3 +202,66 @@ async def test_msg91_submitted_auth_key_uses_communication_credential_scope():
     assert credential.capability == "communication"
     assert audit.capability == "communication"
     assert store.stored[0]["tenant_id"] == tenant_id
+
+
+@pytest.mark.asyncio
+async def test_msg91_provider_resolution_uses_only_the_tenant_sms_route_and_credentials(monkeypatch):
+    tenant_id = uuid.uuid4()
+    route = SimpleNamespace(provider="msg91", channel="SMS", environment="TEST")
+    connection = SimpleNamespace(
+        provider="msg91",
+        capability="communication",
+        environment="TEST",
+        credential_version=3,
+        status="TEST",
+        public_configuration={
+            "otp_template_id": "tenant-otp-template",
+            "sms_template_id": "tenant-sms-template",
+        },
+    )
+    session = Session(scalar_values=[route, connection])
+    monkeypatch.setattr(
+        "app.services.tenant_integration_service.get_persisted_secret",
+        lambda **kwargs: _async_secret(kwargs, tenant_id),
+    )
+    captured = {}
+
+    def handler(request):
+        captured["request"] = request
+        return httpx.Response(200, json={"type": "success"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = await get_msg91_sms_provider(
+            session=session,
+            tenant_id=tenant_id,
+            http_client=client,
+        )
+        await provider.send_sms(to="9876543210")
+
+    assert captured["request"].headers["authkey"] == "tenant-msg91-key"
+    assert captured["request"].read() == (
+        b'{"template_id":"tenant-sms-template","recipients":'
+        b'[{"mobiles":"+919876543210"}]}'
+    )
+    assert all(tenant_id in statement.compile().params.values() for statement in session.statements)
+
+
+@pytest.mark.asyncio
+async def test_msg91_provider_resolution_rejects_other_tenant_route():
+    tenant_id = uuid.uuid4()
+    session = Session(scalar_values=[None])
+
+    with pytest.raises(ValueError, match="not configured for this tenant"):
+        await get_msg91_sms_provider(session=session, tenant_id=tenant_id)
+    assert tenant_id in session.statements[0].compile().params.values()
+
+
+def _async_secret(kwargs, tenant_id):
+    async def result():
+        assert kwargs["tenant_id"] == tenant_id
+        assert kwargs["provider"] == "msg91"
+        assert kwargs["capability"] == "communication"
+        assert kwargs["credential_version"] == 3
+        return '{"auth_key": "tenant-msg91-key"}'
+
+    return result()

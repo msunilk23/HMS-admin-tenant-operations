@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.integrations.msg91 import MSG91Provider
+
 
 class CommunicationProvider(Protocol):
     provider_name: str
@@ -142,21 +144,14 @@ def public_provider_catalogue() -> list[dict[str, Any]]:
     } for config in PROVIDER_CONFIGS.values() if config.enabled_for_tenant_selection]
 
 
-def get_provider_adapter(provider: str) -> Any:
+def get_provider_adapter(provider: str, **configuration: Any) -> Any:
     normalized = get_provider_config(provider).adapter_key
     if normalized == "twilio":
         return TwilioProvider()
     if normalized == "msg91":
-        return MSG91Provider()
+        return MSG91Provider(**configuration)
     if normalized == "razorpay":
         return RazorpayProvider()
     if normalized == "cloudinary":
         return CloudinaryProvider()
     raise ValueError(f"Unsupported provider: {provider}")
-
-
-class MSG91Provider:
-    provider_name = "msg91"
-
-    async def send_message(self, *, to: str, body: str, **kwargs: Any) -> dict[str, Any]:
-        raise NotImplementedError("MSG91 delivery is not available before the SMS provider phase")

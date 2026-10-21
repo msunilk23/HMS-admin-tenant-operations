@@ -40,7 +40,9 @@ Hospital administrators manage provider connections through `/api/v1/integration
 - `PUT /api/v1/integrations/communication-routes/{channel}` selects an enabled communication connection for one channel. The provider connection must belong to the authenticated tenant and support that channel.
 - `DELETE /api/v1/integrations/communication-routes/{channel}` clears the channel selection.
 
-MSG91 is currently configurable for SMS. Twilio remains available for SMS and WhatsApp. These settings do not retarget existing transactional notification call sites; OTP and account-lifecycle messaging will consume the selected route in the later SMS phase.
+MSG91 is currently configurable for SMS. Twilio remains available for SMS and WhatsApp. These settings do not retarget existing transactional notification call sites. The MSG91 adapter resolves its credentials through the tenant's selected SMS connection; activation and password-reset flows will be added in later phases.
+
+The backend MSG91 adapter implements OTP send/verify/retry and SMS Flow requests with the tenant's selected SMS connection. Activation and password-reset endpoints are not part of this provider phase. See the [MSG91 SMS manual test procedure](./MSG91_SMS_MANUAL_TEST.md) for controlled development testing.
 
 ## TAT
 

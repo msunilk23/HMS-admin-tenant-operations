@@ -5,10 +5,12 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.secret_store import SecretStore, get_secret_store
+from app.integrations.msg91 import MSG91Provider
 from app.integrations.providers import PROVIDER_CONFIGS, get_provider_adapter, get_provider_config, validate_provider_configuration
 from app.models.public.tenant_integration import (
     TenantProviderAuditEvent,
@@ -394,6 +396,66 @@ async def get_persisted_secret(*, session: AsyncSession, tenant_id: uuid.UUID, p
     )
 
 
+async def get_msg91_sms_provider(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    http_client: httpx.AsyncClient | None = None,
+) -> MSG91Provider:
+    """Resolve the authenticated tenant's active SMS route and build its MSG91 adapter."""
+    route = await session.scalar(
+        select(TenantCommunicationRoute).where(
+            TenantCommunicationRoute.tenant_id == tenant_id,
+            TenantCommunicationRoute.channel == "SMS",
+        )
+    )
+    if route is None:
+        raise ValueError("SMS provider is not configured for this tenant")
+    if route.provider != "msg91":
+        raise ValueError("The tenant SMS route is not configured for MSG91")
+
+    connection = await session.scalar(
+        select(TenantProviderConnection).where(
+            TenantProviderConnection.tenant_id == tenant_id,
+            TenantProviderConnection.provider == route.provider,
+            TenantProviderConnection.capability == "communication",
+            TenantProviderConnection.environment == route.environment,
+            TenantProviderConnection.status.in_(("TEST", "LIVE")),
+        )
+    )
+    if connection is None:
+        raise ValueError("The tenant MSG91 SMS connection is not enabled")
+
+    secret_payload = await get_persisted_secret(
+        session=session,
+        tenant_id=tenant_id,
+        provider="msg91",
+        capability="communication",
+        environment=connection.environment,
+        credential_version=connection.credential_version,
+    )
+    try:
+        secret_values = json.loads(secret_payload)
+    except json.JSONDecodeError:
+        secret_values = {"auth_key": secret_payload}
+    if not isinstance(secret_values, dict):
+        raise ValueError("The tenant MSG91 credential record is invalid")
+    auth_key = str(secret_values.get("auth_key", "")).strip()
+    public_configuration = connection.public_configuration or {}
+    otp_template_id = str(public_configuration.get("otp_template_id", "")).strip()
+    sms_template_id = str(public_configuration.get("sms_template_id", "")).strip()
+    if not auth_key or not otp_template_id or not sms_template_id:
+        raise ValueError("The tenant MSG91 credentials or SMS templates are not configured")
+
+    return get_provider_adapter(
+        "msg91",
+        auth_key=auth_key,
+        otp_template_id=otp_template_id,
+        sms_template_id=sms_template_id,
+        client=http_client,
+    )
+
+
 async def get_razorpay_credentials(*, session: AsyncSession, tenant_id: uuid.UUID, environment: str = "LIVE") -> tuple[str, dict[str, str], TenantProviderConnection]:
     connection = await session.scalar(
         select(TenantProviderConnection).where(
@@ -424,9 +486,9 @@ async def get_razorpay_credentials(*, session: AsyncSession, tenant_id: uuid.UUI
 
 async def test_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, credential_type: str, secret: str | None) -> dict[str, Any]:
     provider_key = provider.lower()
-    if provider_key not in PROVIDER_CONFIGS:
-        raise ValueError(f"Unsupported provider: {provider}")
-    get_provider_adapter(provider_key)
+    config = get_provider_config(provider_key)
+    if config.supports_connection_test:
+        get_provider_adapter(provider_key)
     if secret:
         await submit_secret(session=session, tenant_id=tenant_id, provider=provider_key, environment=environment, credential_type=credential_type, secret=secret, credential_version=None)
     record = await session.scalar(select(TenantProviderConnection).where(TenantProviderConnection.tenant_id == tenant_id, TenantProviderConnection.provider == provider_key, TenantProviderConnection.environment == environment.upper()))
