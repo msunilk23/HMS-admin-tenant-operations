@@ -48,6 +48,7 @@ class ProviderConfig:
     supports_webhooks: bool
     credential_schema_version: int
     enabled_for_tenant_selection: bool = True
+    supported_channels: tuple[str, ...] = ()
 
     @property
     def key(self) -> str:
@@ -90,7 +91,8 @@ class CloudinaryProvider:
 
 
 PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
-    "twilio": ProviderConfig("twilio", "Twilio", "communication", "twilio", ("TEST", "LIVE"), (_field("account_sid", "Account SID", required=True), _field("api_key_sid", "API Key SID", required=True), _field("sender_phone_number", "Sender Phone Number", required=False), _field("messaging_service_sid", "Messaging Service SID", required=False), _field("region", "Region", required=False)), (_field("api_key_secret", "API Key Secret", required=True), _field("auth_token", "Auth Token", required=False)), True, True, 1),
+    "twilio": ProviderConfig("twilio", "Twilio", "communication", "twilio", ("TEST", "LIVE"), (_field("account_sid", "Account SID", required=True), _field("api_key_sid", "API Key SID", required=True), _field("sender_phone_number", "Sender Phone Number", required=False), _field("messaging_service_sid", "Messaging Service SID", required=False), _field("region", "Region", required=False)), (_field("api_key_secret", "API Key Secret", required=True), _field("auth_token", "Auth Token", required=False)), True, True, 1, supported_channels=("SMS", "WHATSAPP")),
+    "msg91": ProviderConfig("msg91", "MSG91", "communication", "msg91", ("TEST", "LIVE"), (_field("otp_template_id", "OTP Template ID", required=True, masked=False), _field("sms_template_id", "SMS Flow Template ID", required=True, masked=False)), (_field("auth_key", "Auth Key", required=True),), False, False, 1, supported_channels=("SMS",)),
     "razorpay": ProviderConfig("razorpay", "Razorpay", "payment", "razorpay", ("TEST", "LIVE"), (_field("key_id", "Key ID", required=True),), (_field("key_secret", "Key Secret", required=True), _field("webhook_secret", "Webhook Secret", required=True)), True, True, 1),
     "cloudinary": ProviderConfig("cloudinary", "Cloudinary", "document_storage", "cloudinary", ("TEST", "LIVE"), (_field("cloud_name", "Cloud Name", required=True), _field("api_key", "API Key", required=True), _field("tenant_folder", "Tenant Folder", required=True)), (_field("api_secret", "API Secret", required=True),), True, False, 1),
 }
@@ -131,6 +133,7 @@ def public_provider_catalogue() -> list[dict[str, Any]]:
         "provider_code": config.provider_code,
         "display_name": config.display_name,
         "capability": config.capability,
+        "supported_channels": list(config.supported_channels),
         "supported_environments": list(config.supported_environments),
         "public_fields": [{"field_code": field.field_code, "label": field.label, "required": field.required, "masked": field.masked} for field in config.public_fields],
         "secret_fields": [{"field_code": field.field_code, "label": field.label, "required": field.required, "write_only": True, "configured": False} for field in config.secret_fields],
@@ -143,8 +146,17 @@ def get_provider_adapter(provider: str) -> Any:
     normalized = get_provider_config(provider).adapter_key
     if normalized == "twilio":
         return TwilioProvider()
+    if normalized == "msg91":
+        return MSG91Provider()
     if normalized == "razorpay":
         return RazorpayProvider()
     if normalized == "cloudinary":
         return CloudinaryProvider()
     raise ValueError(f"Unsupported provider: {provider}")
+
+
+class MSG91Provider:
+    provider_name = "msg91"
+
+    async def send_message(self, *, to: str, body: str, **kwargs: Any) -> dict[str, Any]:
+        raise NotImplementedError("MSG91 delivery is not available before the SMS provider phase")

@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,7 +24,7 @@ class TenantProviderConnection(Base, TimestampMixin):
         UniqueConstraint("endpoint_id", name="uq_provider_connections_endpoint_id"),
         Index("ix_provider_connections_tenant_provider", "tenant_id", "provider"),
         Index("ix_provider_connections_status", "status"),
-        CheckConstraint("provider IN ('twilio', 'razorpay', 'cloudinary')", name="ck_provider_connections_provider"),
+        CheckConstraint("provider IN ('twilio', 'msg91', 'razorpay', 'cloudinary')", name="ck_provider_connections_provider"),
         CheckConstraint("capability IN ('communication', 'payment', 'document_storage')", name="ck_provider_connections_capability"),
         CheckConstraint("environment IN ('TEST', 'LIVE')", name="ck_provider_connections_environment"),
         CheckConstraint("status IN ('DISABLED', 'TEST', 'LIVE')", name="ck_provider_connections_status"),
@@ -62,7 +62,7 @@ class TenantProviderCredentialVersion(Base, TimestampMixin):
             name="uq_provider_credentials_tenant_provider_env_version",
         ),
         Index("ix_provider_credentials_tenant_provider", "tenant_id", "provider"),
-        CheckConstraint("provider IN ('twilio', 'razorpay', 'cloudinary')", name="ck_provider_credentials_provider"),
+        CheckConstraint("provider IN ('twilio', 'msg91', 'razorpay', 'cloudinary')", name="ck_provider_credentials_provider"),
         CheckConstraint("capability IN ('communication', 'payment', 'document_storage')", name="ck_provider_credentials_capability"),
         CheckConstraint("environment IN ('TEST', 'LIVE')", name="ck_provider_credentials_environment"),
         CheckConstraint("credential_version > 0", name="ck_provider_credentials_version"),
@@ -88,7 +88,7 @@ class TenantProviderWebhookRoute(Base):
     __tablename__ = "tenant_provider_webhook_routes"
     __table_args__ = (
         Index("ix_provider_webhook_routes_tenant_provider", "tenant_id", "provider"),
-        CheckConstraint("provider IN ('twilio', 'razorpay', 'cloudinary')", name="ck_provider_webhook_routes_provider"),
+        CheckConstraint("provider IN ('twilio', 'msg91', 'razorpay', 'cloudinary')", name="ck_provider_webhook_routes_provider"),
         CheckConstraint("capability IN ('communication', 'payment', 'document_storage')", name="ck_provider_webhook_routes_capability"),
         CheckConstraint("environment IN ('TEST', 'LIVE')", name="ck_provider_webhook_routes_environment"),
         {"schema": "public"},
@@ -112,11 +112,38 @@ class TenantProviderWebhookRoute(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class TenantCommunicationRoute(Base):
+    __tablename__ = "tenant_communication_routes"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "channel", name="uq_tenant_communication_routes_channel"),
+        ForeignKeyConstraint(
+            ["tenant_id", "provider", "environment"],
+            [
+                "public.tenant_provider_connections.tenant_id",
+                "public.tenant_provider_connections.provider",
+                "public.tenant_provider_connections.environment",
+            ],
+            name="fk_tenant_communication_routes_connection",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("channel IN ('SMS', 'WHATSAPP')", name="ck_tenant_communication_routes_channel"),
+        {"schema": "public"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("public.tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    environment: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 class TenantProviderAuditEvent(Base):
     __tablename__ = "tenant_provider_audit_events"
     __table_args__ = (
         Index("ix_provider_audit_events_tenant_time", "tenant_id", "created_at"),
-        CheckConstraint("provider IN ('twilio', 'razorpay', 'cloudinary')", name="ck_provider_audit_events_provider"),
+        CheckConstraint("provider IN ('twilio', 'msg91', 'razorpay', 'cloudinary')", name="ck_provider_audit_events_provider"),
         CheckConstraint("capability IN ('communication', 'payment', 'document_storage')", name="ck_provider_audit_events_capability"),
         CheckConstraint("environment IN ('TEST', 'LIVE')", name="ck_provider_audit_events_environment"),
         {"schema": "public"},

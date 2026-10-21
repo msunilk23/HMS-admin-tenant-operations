@@ -29,6 +29,19 @@ Authenticated tenant APIs use `Authorization: Bearer <access-token>`. Tenant ide
 
 `POST /api/v1/feedback` accepts `visit_id`, `rating` from 1 to 5, optional `comments`, and `channel` (`qr`, `sms`, `whatsapp`, `kiosk`, or `staff`). A visit can have one feedback record. Duplicate submissions return `409`.
 
+## Tenant Communication Integrations
+
+Hospital administrators manage provider connections through `/api/v1/integrations`. Provider credentials are write-only and stored using the configured integration secret store.
+
+- `GET /api/v1/integrations/providers` lists supported providers, channels, and configuration fields.
+- `GET /api/v1/integrations/connections` lists this tenant's configured connections without returning secret values.
+- `POST /api/v1/integrations/connections` creates a tenant-scoped provider connection.
+- `GET /api/v1/integrations/communication-routes` returns the tenant's independent `SMS` and `WHATSAPP` provider/environment selections.
+- `PUT /api/v1/integrations/communication-routes/{channel}` selects an enabled communication connection for one channel. The provider connection must belong to the authenticated tenant and support that channel.
+- `DELETE /api/v1/integrations/communication-routes/{channel}` clears the channel selection.
+
+MSG91 is currently configurable for SMS. Twilio remains available for SMS and WhatsApp. These settings do not retarget existing transactional notification call sites; OTP and account-lifecycle messaging will consume the selected route in the later SMS phase.
+
 ## TAT
 
 `GET /api/v1/visits/{visit_id}/tat` returns persisted semantic timestamps and calculated seconds for nurse wait, pre-vitals, doctor wait, consultation, total OPD, lab, pharmacy, and billing stages. Missing timestamps produce `null`, not an inferred duration.

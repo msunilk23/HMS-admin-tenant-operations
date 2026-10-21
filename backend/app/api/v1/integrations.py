@@ -21,12 +21,15 @@ from app.models.public.user import Tenant
 from app.models.tenant.invoice import Invoice, Payment, invoice_status_for_payment
 from app.services.tenant_integration_service import (
     create_connection,
+    clear_communication_route,
     disable_connection,
     enable_connection,
     get_audit_history,
     get_razorpay_credentials,
+    list_communication_routes,
     list_connections,
     rotate_secret,
+    set_communication_route,
     submit_secret,
     test_connection,
     update_connection,
@@ -60,6 +63,11 @@ class SecretSubmitRequest(BaseModel):
     credential_version: int | None = None
 
 
+class CommunicationRouteRequest(BaseModel):
+    provider: str
+    environment: str = Field(default="TEST")
+
+
 @router.get("/providers")
 async def list_supported_providers(
     session: AsyncSession = Depends(get_session),
@@ -75,6 +83,48 @@ async def list_integration_connections(
 ):
     tenant_id = uuid.UUID(str(current_user["tenant_id"]))
     return await list_connections(session=session, tenant_id=tenant_id)
+
+
+@router.get("/communication-routes")
+async def get_communication_routes(
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("hospital_admin")),
+):
+    tenant_id = uuid.UUID(str(current_user["tenant_id"]))
+    return {"routes": await list_communication_routes(session=session, tenant_id=tenant_id)}
+
+
+@router.put("/communication-routes/{channel}")
+async def update_communication_route(
+    channel: str,
+    payload: CommunicationRouteRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("hospital_admin")),
+):
+    tenant_id = uuid.UUID(str(current_user["tenant_id"]))
+    try:
+        return await set_communication_route(
+            session=session,
+            tenant_id=tenant_id,
+            channel=channel,
+            provider=payload.provider,
+            environment=payload.environment,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/communication-routes/{channel}")
+async def remove_communication_route(
+    channel: str,
+    session: AsyncSession = Depends(get_session),
+    current_user: dict = Depends(require_role("hospital_admin")),
+):
+    tenant_id = uuid.UUID(str(current_user["tenant_id"]))
+    try:
+        return await clear_communication_route(session=session, tenant_id=tenant_id, channel=channel)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/connections")
@@ -141,12 +191,13 @@ async def test_integration_connection(
 @router.post("/connections/{provider}/enable")
 async def enable_integration_connection(
     provider: str,
+    environment: str | None = None,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("hospital_admin")),
 ):
     tenant_id = uuid.UUID(str(current_user["tenant_id"]))
     try:
-        return await enable_connection(session=session, tenant_id=tenant_id, provider=provider)
+        return await enable_connection(session=session, tenant_id=tenant_id, provider=provider, environment=environment)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -154,12 +205,13 @@ async def enable_integration_connection(
 @router.post("/connections/{provider}/disable")
 async def disable_integration_connection(
     provider: str,
+    environment: str | None = None,
     session: AsyncSession = Depends(get_session),
     current_user: dict = Depends(require_role("hospital_admin")),
 ):
     tenant_id = uuid.UUID(str(current_user["tenant_id"]))
     try:
-        return await disable_connection(session=session, tenant_id=tenant_id, provider=provider)
+        return await disable_connection(session=session, tenant_id=tenant_id, provider=provider, environment=environment)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

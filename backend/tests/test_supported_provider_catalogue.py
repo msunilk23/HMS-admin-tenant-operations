@@ -17,10 +17,16 @@ def test_catalogue_contains_only_enabled_registered_providers_and_no_secret_valu
     catalogue = public_provider_catalogue()
     assert [(item["capability"], item["provider_code"], item["display_name"]) for item in catalogue] == [
         ("communication", "twilio", "Twilio"),
+        ("communication", "msg91", "MSG91"),
         ("payment", "razorpay", "Razorpay"),
         ("document_storage", "cloudinary", "Cloudinary"),
     ]
     assert all(field["write_only"] and "value" not in field for item in catalogue for field in item["secret_fields"])
+    by_provider = {item["provider_code"]: item for item in catalogue}
+    assert by_provider["twilio"]["supported_channels"] == ["SMS", "WHATSAPP"]
+    assert by_provider["msg91"]["supported_channels"] == ["SMS"]
+    assert by_provider["msg91"]["secret_fields"][0]["field_code"] == "auth_key"
+    assert all(field["field_code"] != "auth_key" for field in by_provider["msg91"]["public_fields"])
 
 
 @pytest.mark.parametrize("change, message", [
@@ -43,3 +49,33 @@ def test_disabled_provider_cannot_be_selected(monkeypatch):
     monkeypatch.setitem(PROVIDER_CONFIGS, "razorpay", type(config)(**{**config.__dict__, "enabled_for_tenant_selection": False}))
     with pytest.raises(ValueError, match="not enabled"):
         validate_provider_configuration(**valid_razorpay_configuration())
+
+
+def test_valid_msg91_configuration_requires_templates_and_keeps_auth_key_secret():
+    config = validate_provider_configuration(
+        provider_code="msg91",
+        capability="communication",
+        environment="TEST",
+        public_configuration={"otp_template_id": "otp-template", "sms_template_id": "sms-template"},
+        secrets={"auth_key": "secret-auth-key"},
+    )
+    assert config.supported_channels == ("SMS",)
+
+
+def test_msg91_configuration_rejects_missing_template_or_secret():
+    with pytest.raises(ValueError, match="otp_template_id"):
+        validate_provider_configuration(
+            provider_code="msg91",
+            capability="communication",
+            environment="TEST",
+            public_configuration={"sms_template_id": "sms-template"},
+            secrets={"auth_key": "secret-auth-key"},
+        )
+    with pytest.raises(ValueError, match="auth_key"):
+        validate_provider_configuration(
+            provider_code="msg91",
+            capability="communication",
+            environment="TEST",
+            public_configuration={"otp_template_id": "otp-template", "sms_template_id": "sms-template"},
+            secrets={},
+        )

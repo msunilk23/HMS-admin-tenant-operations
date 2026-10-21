@@ -9,12 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.secret_store import SecretStore, get_secret_store
-from app.integrations.providers import PROVIDER_CONFIGS, get_provider_adapter, validate_provider_configuration
+from app.integrations.providers import PROVIDER_CONFIGS, get_provider_adapter, get_provider_config, validate_provider_configuration
 from app.models.public.tenant_integration import (
     TenantProviderAuditEvent,
     TenantProviderConnection,
     TenantProviderCredentialVersion,
     TenantProviderWebhookRoute,
+    TenantCommunicationRoute,
 )
 
 
@@ -51,6 +52,128 @@ async def list_connections(*, session: AsyncSession, tenant_id: uuid.UUID) -> li
         "connection_tested_at": item.connection_tested_at.isoformat() if item.connection_tested_at else None,
         "last_success_at": item.last_success_at.isoformat() if item.last_success_at else None,
     } for item in connections]
+
+
+async def list_communication_routes(*, session: AsyncSession, tenant_id: uuid.UUID) -> dict[str, dict[str, str] | None]:
+    result = await session.execute(
+        select(TenantCommunicationRoute).where(TenantCommunicationRoute.tenant_id == tenant_id)
+    )
+    routes: dict[str, dict[str, str] | None] = {"SMS": None, "WHATSAPP": None}
+    for route in result.scalars().all():
+        routes[route.channel] = {"provider": route.provider, "environment": route.environment}
+    return routes
+
+
+async def set_communication_route(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    channel: str,
+    provider: str,
+    environment: str,
+) -> dict[str, str]:
+    channel_key = channel.upper()
+    environment_key = environment.upper()
+    provider_key = provider.lower()
+    if channel_key not in {"SMS", "WHATSAPP"}:
+        raise ValueError("Unsupported communication channel")
+
+    config = get_provider_config(provider_key, selectable=True)
+    validate_provider_configuration(
+        provider_code=provider_key,
+        capability="communication",
+        environment=environment_key,
+        public_configuration={field.field_code: "configured" for field in config.public_fields if field.required},
+        secrets={field.field_code: "configured" for field in config.secret_fields if field.required},
+    )
+    if channel_key not in config.supported_channels:
+        raise ValueError(f"{provider_key} does not support the {channel_key} channel")
+
+    connection = await session.scalar(
+        select(TenantProviderConnection).where(
+            TenantProviderConnection.tenant_id == tenant_id,
+            TenantProviderConnection.provider == provider_key,
+            TenantProviderConnection.capability == "communication",
+            TenantProviderConnection.environment == environment_key,
+            TenantProviderConnection.status.in_(("TEST", "LIVE")),
+        )
+    )
+    if connection is None:
+        raise ValueError("Select an enabled communication provider connection for this tenant")
+
+    credential = await session.scalar(
+        select(TenantProviderCredentialVersion).where(
+            TenantProviderCredentialVersion.tenant_id == tenant_id,
+            TenantProviderCredentialVersion.provider == provider_key,
+            TenantProviderCredentialVersion.capability == "communication",
+            TenantProviderCredentialVersion.environment == environment_key,
+            TenantProviderCredentialVersion.credential_version == connection.credential_version,
+        )
+    )
+    if credential is None:
+        raise ValueError("The selected provider connection has no current credentials")
+
+    route = await session.scalar(
+        select(TenantCommunicationRoute).where(
+            TenantCommunicationRoute.tenant_id == tenant_id,
+            TenantCommunicationRoute.channel == channel_key,
+        )
+    )
+    if route is None:
+        route = TenantCommunicationRoute(
+            tenant_id=tenant_id,
+            channel=channel_key,
+            provider=provider_key,
+            environment=environment_key,
+        )
+        session.add(route)
+    else:
+        route.provider = provider_key
+        route.environment = environment_key
+
+    await _audit_event(
+        session=session,
+        tenant_id=tenant_id,
+        provider=provider_key,
+        capability="communication",
+        environment=environment_key,
+        event_type="communication_route_updated",
+        result="SUCCESS",
+        metadata={"channel": channel_key},
+    )
+    await session.commit()
+    return {"channel": channel_key, "provider": provider_key, "environment": environment_key}
+
+
+async def clear_communication_route(
+    *,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    channel: str,
+) -> dict[str, str | None]:
+    channel_key = channel.upper()
+    if channel_key not in {"SMS", "WHATSAPP"}:
+        raise ValueError("Unsupported communication channel")
+    route = await session.scalar(
+        select(TenantCommunicationRoute).where(
+            TenantCommunicationRoute.tenant_id == tenant_id,
+            TenantCommunicationRoute.channel == channel_key,
+        )
+    )
+    if route is not None:
+        await session.delete(route)
+        await _audit_event(
+            session=session,
+            tenant_id=tenant_id,
+            provider=route.provider,
+            capability="communication",
+            environment=route.environment,
+            event_type="communication_route_cleared",
+            result="SUCCESS",
+            metadata={"channel": channel_key},
+        )
+        await session.commit()
+    return {"channel": channel_key, "provider": None, "environment": None}
 
 
 async def create_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str, capability: str | None = None, connection_name: str | None = None, public_configuration: dict[str, str] | None = None, secrets: dict[str, str] | None = None, secret_store: SecretStore | None = None) -> dict[str, Any]:
@@ -158,7 +281,7 @@ async def submit_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
     ciphertext, nonce, algorithm, key_version = await store.store_secret(
         tenant_id=tenant_id,
         provider=provider_key,
-        capability=credential_type or config.capability,
+        capability=config.capability,
         environment=environment.upper(),
         credential_version=version,
         secret=secret,
@@ -166,7 +289,7 @@ async def submit_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
     record = TenantProviderCredentialVersion(
         tenant_id=tenant_id,
         provider=provider_key,
-        capability=credential_type or config.capability,
+        capability=config.capability,
         environment=environment.upper(),
         credential_version=version,
         secret_ciphertext=ciphertext,
@@ -176,7 +299,7 @@ async def submit_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
         versioned_by="system",
     )
     session.add(record)
-    await _audit_event(session=session, tenant_id=tenant_id, provider=provider_key, capability=credential_type or config.capability, environment=environment.upper(), event_type="secret_updated", result="SUCCESS", metadata={"credential_version": version, "algorithm": algorithm})
+    await _audit_event(session=session, tenant_id=tenant_id, provider=provider_key, capability=config.capability, environment=environment.upper(), event_type="secret_updated", result="SUCCESS", metadata={"credential_version": version, "algorithm": algorithm})
     await session.commit()
     return {
         "provider": provider_key,
@@ -221,7 +344,7 @@ async def rotate_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
     ciphertext, nonce, algorithm, key_version = await store.store_secret(
         tenant_id=tenant_id,
         provider=provider_key,
-        capability=credential_type or existing.capability,
+        capability=existing.capability,
         environment=environment.upper(),
         credential_version=next_version,
         secret=secret_payload,
@@ -229,7 +352,7 @@ async def rotate_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
     version_record = TenantProviderCredentialVersion(
         tenant_id=tenant_id,
         provider=provider_key,
-        capability=credential_type or existing.capability,
+        capability=existing.capability,
         environment=environment.upper(),
         credential_version=next_version,
         secret_ciphertext=ciphertext,
@@ -241,7 +364,7 @@ async def rotate_secret(*, session: AsyncSession, tenant_id: uuid.UUID, provider
     session.add(version_record)
     existing.credential_version = next_version
     store.invalidate_cache(tenant_id=tenant_id, provider=provider_key, environment=environment.upper())
-    await _audit_event(session=session, tenant_id=tenant_id, provider=provider_key, capability=credential_type or existing.capability, environment=environment.upper(), event_type="secret_rotated", result="SUCCESS", metadata={"previous_version": next_version - 1, "new_version": next_version})
+    await _audit_event(session=session, tenant_id=tenant_id, provider=provider_key, capability=existing.capability, environment=environment.upper(), event_type="secret_rotated", result="SUCCESS", metadata={"previous_version": next_version - 1, "new_version": next_version})
     await session.commit()
     return {"provider": provider_key, "credential_version": next_version, "status": existing.status}
 
@@ -315,10 +438,19 @@ async def test_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provid
     return {"provider": provider_key, "environment": environment.upper(), "status": record.status, "success": False, "state": "NOT_IMPLEMENTED"}
 
 
-async def enable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str) -> dict[str, Any]:
-    record = await session.scalar(select(TenantProviderConnection).where(TenantProviderConnection.tenant_id == tenant_id, TenantProviderConnection.provider == provider.lower()))
-    if record is None:
+async def enable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str | None = None) -> dict[str, Any]:
+    stmt = select(TenantProviderConnection).where(
+        TenantProviderConnection.tenant_id == tenant_id,
+        TenantProviderConnection.provider == provider.lower(),
+    )
+    if environment:
+        stmt = stmt.where(TenantProviderConnection.environment == environment.upper())
+    records = (await session.execute(stmt)).scalars().all()
+    if not records:
         raise ValueError(f"No connection found for provider {provider}")
+    if len(records) > 1:
+        raise ValueError("Environment is required when a provider has multiple connections")
+    record = records[0]
     credential = await session.scalar(
         select(TenantProviderCredentialVersion).where(
             TenantProviderCredentialVersion.tenant_id == tenant_id,
@@ -341,10 +473,19 @@ async def enable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, prov
     return {"provider": provider.lower(), "status": record.status}
 
 
-async def disable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str) -> dict[str, Any]:
-    record = await session.scalar(select(TenantProviderConnection).where(TenantProviderConnection.tenant_id == tenant_id, TenantProviderConnection.provider == provider.lower()))
-    if record is None:
+async def disable_connection(*, session: AsyncSession, tenant_id: uuid.UUID, provider: str, environment: str | None = None) -> dict[str, Any]:
+    stmt = select(TenantProviderConnection).where(
+        TenantProviderConnection.tenant_id == tenant_id,
+        TenantProviderConnection.provider == provider.lower(),
+    )
+    if environment:
+        stmt = stmt.where(TenantProviderConnection.environment == environment.upper())
+    records = (await session.execute(stmt)).scalars().all()
+    if not records:
         raise ValueError(f"No connection found for provider {provider}")
+    if len(records) > 1:
+        raise ValueError("Environment is required when a provider has multiple connections")
+    record = records[0]
     previous_status = record.status
     record.status = "DISABLED"
     get_secret_store().invalidate_cache(tenant_id=tenant_id, provider=record.provider, environment=record.environment)
@@ -365,4 +506,3 @@ async def get_audit_history(*, session: AsyncSession, tenant_id: uuid.UUID) -> l
         "result": item.result,
         "created_at": item.created_at.isoformat(),
     } for item in items]
-
